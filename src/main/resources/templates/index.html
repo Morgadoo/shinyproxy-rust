@@ -51,12 +51,12 @@
             <th:block th:if="${app != null}">
                 <div
                         class="list-group-item"
-                        th:classappend="${@thymeleaf.openSwitchInstanceInsteadOfApp(app) ? 'app-link-switch' : 'app-link-open'}"
+                        th:classappend="${openSwitchInstanceInsteadOfApp.get(app) ? 'app-link-switch' : 'app-link-open'}"
                         th:data-app-id="${app.id}"
-                        th:data-app-url="${@thymeleaf.openSwitchInstanceInsteadOfApp(app) ? '' : @thymeleaf.getAppUrl(app)}"
+                        th:data-app-url="${openSwitchInstanceInsteadOfApp.get(app) ? '#' : appUrl.get(app)}"
                 >
-                    <a th:href="${@thymeleaf.openSwitchInstanceInsteadOfApp(app) ? '#' : @thymeleaf.getAppUrl(app)}"
-                       th:remove="${@thymeleaf.openSwitchInstanceInsteadOfApp(app)} ? tag : none">
+                    <a th:href="${openSwitchInstanceInsteadOfApp.get(app) ? '#' : appUrl.get(app)}"
+                       th:remove="${openSwitchInstanceInsteadOfApp.get(app)} ? tag : none">
                         <span class="app-list-title app-list-title-before" th:text="${app.displayName == null} ? ${app.id} : ${app.displayName}"></span>
                         <th:block th:if="${appLogos.get(app) != null}" th:with="logo=${appLogos.get(app)}">
                             <img th:height="${logo.height}" th:src="${logo.src}" th:style="${logo.style}" th:width="${logo.width}">

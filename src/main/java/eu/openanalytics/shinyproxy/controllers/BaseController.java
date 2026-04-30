@@ -114,7 +114,7 @@ public abstract class BaseController {
     @Inject
     private IContainerBackend backend;
     @Inject
-    private Thymeleaf thymeleaf;
+    protected Thymeleaf thymeleaf;
     @Inject
     protected SpecExpressionResolver expressionResolver;
 
