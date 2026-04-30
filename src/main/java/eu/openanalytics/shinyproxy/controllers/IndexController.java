@@ -99,12 +99,15 @@ public class IndexController extends BaseController {
 
         Map<ProxySpec, Boolean> openSwitchInstanceInsteadOfApp = new HashMap<>();
         Map<ProxySpec, String> appUrl = new HashMap<>();
+        Map<ProxySpec, String> cleanDescription = new HashMap<>();
         for (ProxySpec app : apps) {
             openSwitchInstanceInsteadOfApp.put(app, thymeleaf.openSwitchInstanceInsteadOfApp(app));
             appUrl.put(app, thymeleaf.getAppUrl(app));
+            cleanDescription.put(app, thymeleaf.cleanHtml(app.getDescription()));
         }
         map.put("openSwitchInstanceInsteadOfApp", openSwitchInstanceInsteadOfApp);
         map.put("appUrl", appUrl);
+        map.put("cleanDescription", cleanDescription);
 
         // navbar
         map.put("page", "index");

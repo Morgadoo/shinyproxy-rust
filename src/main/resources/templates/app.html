@@ -154,7 +154,7 @@
                                             th:text="${value}"></option>
                                 </select>
                                 <span class="help-block" th:if="${parameterDefinition.getDescription() != null}"
-                                      th:utext="${@thymeleaf.cleanHtml(parameterDefinition.getDescription())}"></span>
+                                      th:utext="${cleanedAppParameterDescriptions.get(parameterDefinition)}"></span>
                             </div>
                         </div>
 

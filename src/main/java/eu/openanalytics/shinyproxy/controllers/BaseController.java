@@ -185,7 +185,7 @@ public abstract class BaseController {
         map.put("pauseSupported", backend.supportsPause());
         map.put("spInstance", identifierService.instanceId);
         map.put("allowTransferApp", allowTransferApp);
-        map.put("notificationMessage", environment.getProperty("proxy.notification-message"));
+        map.put("notificationMessage", thymeleaf.cleanHtml(environment.getProperty("proxy.notification-message")));
         map.put("bodyClasses", bodyClasses);
 
         List<ProxySpec> apps = proxyService.getUserSpecs();
