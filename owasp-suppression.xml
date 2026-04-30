@@ -138,4 +138,10 @@
         <!-- Disputed by developers, not relevant for ShinyProxy  -->
         <cve>CVE-2023-35116</cve>
     </suppress>
+
+    <!-- Fixed in kotlin-stdlib 1.4.21, ShinyProxy uses a newer version-->
+    <suppress>
+        <cve>CVE-2020-29582</cve>
+    </suppress>
+
 </suppressions>

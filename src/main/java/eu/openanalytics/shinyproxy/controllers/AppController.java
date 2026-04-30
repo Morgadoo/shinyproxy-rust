@@ -36,6 +36,7 @@ import eu.openanalytics.containerproxy.model.runtime.runtimevalues.ParameterValu
 import eu.openanalytics.containerproxy.model.runtime.runtimevalues.PortMappingsKey;
 import eu.openanalytics.containerproxy.model.runtime.runtimevalues.PublicPathKey;
 import eu.openanalytics.containerproxy.model.runtime.runtimevalues.RuntimeValue;
+import eu.openanalytics.containerproxy.model.spec.ParameterDefinition;
 import eu.openanalytics.containerproxy.model.spec.ProxySpec;
 import eu.openanalytics.containerproxy.service.AsyncProxyService;
 import eu.openanalytics.containerproxy.service.InvalidParametersException;
@@ -80,6 +81,7 @@ import org.thymeleaf.templateresolver.StringTemplateResolver;
 import javax.annotation.PostConstruct;
 import javax.inject.Inject;
 import java.io.IOException;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -169,6 +171,11 @@ public class AppController extends BaseController {
             map.put("parameterValues", allowedParametersForUser.getValues());
             map.put("parameterDefaults", allowedParametersForUser.getDefaultValue());
             map.put("parameterDefinitions", spec.getParameters().getDefinitions());
+            Map<ParameterDefinition, String> cleanedAppParameterDescriptions = new HashMap<>();
+            for (ParameterDefinition parameterDefinition : spec.getParameters().getDefinitions()) {
+                cleanedAppParameterDescriptions.put(parameterDefinition, thymeleaf.cleanHtml(parameterDefinition.getDescription()));
+            }
+            map.put("cleanedAppParameterDescriptions", cleanedAppParameterDescriptions);
             map.put("parameterIds", spec.getParameters().getIds());
 
             if (spec.getParameters().getTemplate() != null) {
