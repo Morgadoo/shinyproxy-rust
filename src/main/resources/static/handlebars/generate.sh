@@ -26,7 +26,7 @@ set -u
 set -o pipefail
 
 if [ ! -f "./node_modules/.bin/handlebars" ]; then
-  npm install handlebars@4.7.7 --save false
+  npm install handlebars@4.7.9 --save false
 fi
 
 rm precompiled.js
