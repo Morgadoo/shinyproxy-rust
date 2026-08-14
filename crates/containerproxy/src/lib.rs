@@ -31,6 +31,7 @@
 pub mod config;
 pub mod model;
 pub mod service;
+pub mod spec;
 pub mod util;
 
 /// Version of the Java implementation this port aims to be compatible with.
