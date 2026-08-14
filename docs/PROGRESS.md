@@ -12,9 +12,9 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 | P2 | Domain model & spec provider | ✅ | runtime values (22 keys, Java flags), Proxy/Container with both JSON views, SpEL fields, ProxySpec/ContainerSpec with two-phase resolution, ShinyProxy notation → ProxySpec |
 | P3 | `spel` expression engine | ✅ | lexer/parser/evaluator + template splitting, engine-side context (proxy/spec/user objects) and SpecResolver; cross-validated against Spring (0 mismatches, 2 documented supersets) |
 | P4 | HTTP shell, sessions, auth core, UI shell | ✅ | axum server (context path, sessions, security headers, authorization), none/simple auth with CSRF login, embedded assets, index/login/error pages ported from Thymeleaf, verified in a browser |
-| P5 | Proxy lifecycle engine + `local` backend | 🟨 | engine done (store, events, backend trait, port allocator, local backend, runtime values, ProxyService with 8 end-to-end lifecycle tests); wiring into the UI/API follows with P6/P7 |
-| P6 | Data plane (HTTP + WebSocket proxying, heartbeats) | ⬜ | |
-| P7 | REST API parity | ⬜ | |
+| P5 | Proxy lifecycle engine + `local` backend | ✅ | store, events, backend trait, port allocator, local backend, runtime values, ProxyService; wired into the server |
+| P6 | Data plane (HTTP + WebSocket proxying, heartbeats) | ✅ | streaming HTTP forwarding, WebSocket tunnel with browser pings (Java semantics), iframe script injection, cache header modes, crash detection; app page + /app_proxy + heartbeat endpoints |
+| P7 | REST API parity | 🟨 | /api/proxyspec(+id), /api/proxy(+id), status (with watch long poll) and PUT status, /admin/data implemented; issue reporting, delegate proxies, OpenAPI and the admin pages remain |
 | P8 | Docker & Docker Swarm backends | ⬜ | |
 | P9 | UI parity completion | ⬜ | |
 | P10 | Operational features (logs, metrics, timeouts, stats) | ⬜ | |
@@ -27,12 +27,14 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 
 | Suite | Tests | Notes |
 | --- | --- | --- |
-| `containerproxy` unit | 144 | config tree/schema/loader/settings/warnings, canonical YAML, identifiers |
+| `containerproxy` unit | 167 | config tree/schema/loader/settings/warnings, canonical YAML, identifiers |
 | `containerproxy` golden | 2 | canonical YAML + SHA-1 vs Java reference output |
+| `containerproxy` dataplane (end to end) | 6 | streamed bodies, header forwarding, WebSocket + heartbeats, cache headers, injection, crashed app |
+| `shinyproxy` app flow (end to end) | 5 | start app → status watch → app page → proxied HTTP/WebSocket → heartbeat → admin data → stop; ownership and limits |
 | `containerproxy` lifecycle (end to end) | 8 | real app processes: start/reachable/env vars/stop/cleanup, failed start, max instances, shutdown behaviour, events |
 | `shinyproxy` config fixtures | 15 | 13 realistic configurations (docker, kubernetes, openid, ldap, saml, HA, parameters, template groups, usage stats, ecs, proxy sharing, api security) |
 | `shinyproxy` docs/schema sync | 2 | generated CONFIGURATION.md + Java property inventory coverage |
-| `shinyproxy` unit | 22 | schema lookups, generated docs, spec conversion, page model, state (access control, admin, max instances, logos) |
+| `shinyproxy` unit | 31 | schema lookups, generated docs, spec conversion, page model, state (access control, admin, max instances, logos) |
 | `shinyproxy` ui (end to end) | 14 | login/logout/CSRF, index rendering, admin authorization, assets, security headers, context path, landing page, JSON 401 |
 | `shinyproxy` spec conversion | 3 | every fixture yields usable specs; docker/template-group details |
 | `testapp` fixture contract | 5 | routes used by the integration tests |

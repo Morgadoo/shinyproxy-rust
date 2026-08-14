@@ -273,7 +273,11 @@ mod tests {
             args: vec![format!("--spring.config.location={}", path.display())],
             ..LoadOptions::default()
         };
-        let (raw, settings) = crate::load_config(options).expect("config");
+        let (raw, mut settings) = crate::load_config(options).expect("config");
+        // the unit tests have no container runtime, so they use the local backend
+        if settings.proxy.container_backend.is_none() {
+            settings.proxy.container_backend = Some("local".to_string());
+        }
         AppState::new(raw, settings).expect("state")
     }
 

@@ -2124,6 +2124,7 @@ dependencies = [
  "base64",
  "containerproxy",
  "dashmap",
+ "futures",
  "insta",
  "mime_guess",
  "minijinja",
@@ -2145,6 +2146,8 @@ dependencies = [
  "tower-sessions",
  "tracing",
  "tracing-subscriber",
+ "url",
+ "uuid",
 ]
 
 [[package]]

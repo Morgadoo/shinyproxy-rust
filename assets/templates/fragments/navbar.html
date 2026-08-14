@@ -37,10 +37,10 @@
             </div>
             <div class="collapse navbar-collapse" id="navbar-collapse">
                 <div class="navbar-form navbar-right navbar-buttons">
-                    {% if page == 'app' and appMaxInstances.get(appName) != 1 %}
+                    {% if page == 'app' and appMaxInstances[appName] != 1 %}
                     <a class="btn btn-primary btn-sm" role="button" id="switchInstancesModal-btn">Switch instance</a>
                     {% endif %}
-                    {% if page == 'app' and appMaxInstances.get(appName) == 1 %}
+                    {% if page == 'app' and appMaxInstances[appName] == 1 %}
                     <a class="btn btn-primary btn-sm app-details-current-btn" role="button">App details</a>
                     <a class="btn btn-primary btn-sm app-restart-btn" role="button">Restart app</a>
                     <a class="btn btn-primary btn-sm app-stop-current-btn" role="button">Stop app</a>

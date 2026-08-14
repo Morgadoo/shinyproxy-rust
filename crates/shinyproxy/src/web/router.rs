@@ -28,7 +28,7 @@ use axum::extract::{Query, Request, State};
 use axum::http::{header, HeaderMap, StatusCode, Uri};
 use axum::middleware::Next;
 use axum::response::{Html, IntoResponse, Redirect, Response};
-use axum::routing::get;
+use axum::routing::{any, get, post};
 use axum::{Form, Router};
 use containerproxy::auth::{AuthError, AuthenticatedUser, LoginForm};
 use containerproxy::spec::SpecProvider;
@@ -52,6 +52,38 @@ pub fn router(state: Arc<AppState>) -> Router {
 
     let mut routes = Router::new()
         .route(&path("/"), get(index))
+        // --- apps ---
+        .route(&path("/app/{app}"), get(super::apps::app_page))
+        .route(&path("/app/{app}/{*sub}"), get(super::apps::app_page))
+        .route(&path("/app_i/{app}/{instance}"), get(super::apps::app_page))
+        .route(
+            &path("/app_i/{app}/{instance}/{*sub}"),
+            get(super::apps::app_page),
+        )
+        .route(
+            &path("/app_i/{app}/{instance}"),
+            post(super::apps::start_app),
+        )
+        .route(&path("/app_proxy/{target}"), any(super::apps::app_proxy))
+        .route(&path("/app_proxy/{target}/"), any(super::apps::app_proxy))
+        .route(
+            &path("/app_proxy/{target}/{*rest}"),
+            any(super::apps::app_proxy),
+        )
+        .route(
+            &path("/heartbeat/{proxy}"),
+            get(super::apps::heartbeat_info).post(super::apps::heartbeat),
+        )
+        // --- api ---
+        .route(&path("/api/proxyspec"), get(super::api::proxy_specs))
+        .route(&path("/api/proxyspec/{spec}"), get(super::api::proxy_spec))
+        .route(&path("/api/proxy"), get(super::api::proxies))
+        .route(&path("/api/proxy/{proxy}"), get(super::api::proxy))
+        .route(
+            &path("/api/proxy/{proxy}/status"),
+            get(super::api::proxy_status).put(super::api::change_proxy_status),
+        )
+        .route(&path("/admin/data"), get(super::api::admin_data))
         .route(&path("/login"), get(login_page).post(login_submit))
         .route(&path("/logout"), get(logout).post(logout))
         .route(&path("/logout-success"), get(logout_success))

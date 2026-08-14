@@ -25,11 +25,16 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use containerproxy::auth::{self, AuthBackend, AuthenticatedUser};
+use containerproxy::backend::{self, ContainerBackend, PortAllocator};
 use containerproxy::config::{RawConfig, Settings};
+use containerproxy::dataplane::ProxyRouter;
+use containerproxy::events::EventBus;
+use containerproxy::model::runtime_value::RuntimeValueRegistry;
 use containerproxy::model::spec::ProxySpec;
-use containerproxy::service::Identifiers;
+use containerproxy::service::{Identifiers, ProxyService};
 use containerproxy::spec::expression::{ExpressionContextBuilder, SpelResolver};
 use containerproxy::spec::SpecProvider;
+use containerproxy::store::{HeartbeatStore, MemoryHeartbeatStore, MemoryProxyStore, ProxyStore};
 use containerproxy::web::{SecurityHeaders, TemplateEngine};
 
 use crate::spec_provider::{ShinyProxySpecProvider, SpecError};
@@ -51,8 +56,20 @@ pub struct AppState {
     pub templates: TemplateEngine,
     /// Security headers added to every response.
     pub security_headers: SecurityHeaders,
-    /// Whether the container backend supports pausing apps (false until the backends land in P5/P8).
+    /// Whether the container backend supports pausing apps.
     pub pause_supported: bool,
+    /// The proxy lifecycle service.
+    pub proxies: Arc<ProxyService>,
+    /// Where running proxies are stored.
+    pub store: Arc<dyn ProxyStore>,
+    /// Last heartbeat per proxy.
+    pub heartbeats: Arc<dyn HeartbeatStore>,
+    /// The data plane router.
+    pub router: Arc<ProxyRouter>,
+    /// The container backend.
+    pub backend: Arc<dyn ContainerBackend>,
+    /// All known runtime value keys (engine + ShinyProxy).
+    pub runtime_values: RuntimeValueRegistry,
     /// Cached logo data URIs, keyed by the configured URL.
     logo_cache: dashmap::DashMap<String, Option<String>>,
 }
@@ -76,6 +93,8 @@ pub enum StateError {
     #[error(transparent)]
     Auth(#[from] auth::UnsupportedBackend),
     #[error(transparent)]
+    Backend(#[from] backend::UnsupportedBackend),
+    #[error(transparent)]
     Templates(#[from] containerproxy::web::TemplateError),
 }
 
@@ -95,15 +114,41 @@ impl AppState {
         )?;
         let security_headers = SecurityHeaders::from_settings(&settings);
 
+        let settings = Arc::new(settings);
+        let port_allocator = Arc::new(PortAllocator::new(
+            settings.proxy.docker.port_range_start(),
+            settings.proxy.docker.port_range_max(),
+        ));
+        let backend = backend::create(&settings, port_allocator.clone())?;
+        let store: Arc<dyn ProxyStore> = Arc::new(MemoryProxyStore::new(
+            settings.proxy.username_case_sensitive(),
+        ));
+        let heartbeats: Arc<dyn HeartbeatStore> = Arc::new(MemoryHeartbeatStore::new());
+        let proxies = Arc::new(ProxyService::new(
+            settings.clone(),
+            &identifiers,
+            store.clone(),
+            heartbeats.clone(),
+            backend.clone(),
+            EventBus::new(),
+        ));
+
         Ok(AppState {
             raw,
-            settings,
+            settings: (*settings).clone(),
             identifiers,
             specs,
             auth,
             templates,
             security_headers,
-            pause_supported: false,
+            pause_supported: backend.supports_pause(),
+            proxies,
+            store,
+            heartbeats,
+            router: Arc::new(ProxyRouter::new()),
+            backend,
+            runtime_values: RuntimeValueRegistry::engine()
+                .with_keys(crate::runtime_values::SHINYPROXY_KEYS),
             logo_cache: dashmap::DashMap::new(),
         })
     }
@@ -377,7 +422,11 @@ mod tests {
             args: vec![format!("--spring.config.location={}", path.display())],
             ..LoadOptions::default()
         };
-        let (raw, settings) = crate::load_config(options).expect("config");
+        let (raw, mut settings) = crate::load_config(options).expect("config");
+        // the unit tests have no container runtime, so they use the local backend
+        if settings.proxy.container_backend.is_none() {
+            settings.proxy.container_backend = Some("local".to_string());
+        }
         AppState::new(raw, settings).expect("state")
     }
 

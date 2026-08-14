@@ -50,7 +50,11 @@ impl TestInstance {
             args: vec![format!("--spring.config.location={}", path.display())],
             ..LoadOptions::default()
         };
-        let (raw, settings) = shinyproxy::load_config(options).expect("configuration loads");
+        let (raw, mut settings) = shinyproxy::load_config(options).expect("configuration loads");
+        // the test environment has no container runtime: apps run as local processes
+        if settings.proxy.container_backend.is_none() {
+            settings.proxy.container_backend = Some("local".to_string());
+        }
         let state = Arc::new(AppState::new(raw, settings).expect("state"));
         let app = shinyproxy::web::server::build(state.clone());
 
@@ -73,12 +77,21 @@ impl TestInstance {
     }
 
     /// A client that does not follow redirects and keeps cookies.
-    pub fn client(&self) -> reqwest::Client {
-        reqwest::Client::builder()
-            .cookie_store(true)
+    ///
+    /// The cookie jar is kept alongside the client so that tests can read the session cookie back,
+    /// which is needed to open a WebSocket connection (the WebSocket client is a different library).
+    pub fn client(&self) -> TestClient {
+        let jar = Arc::new(reqwest::cookie::Jar::default());
+        let client = reqwest::Client::builder()
+            .cookie_provider(jar.clone())
             .redirect(reqwest::redirect::Policy::none())
             .build()
-            .expect("client")
+            .expect("client");
+        TestClient {
+            client,
+            jar,
+            base_url: self.base_url.clone(),
+        }
     }
 
     /// A client that follows redirects and keeps cookies.
@@ -95,7 +108,7 @@ impl TestInstance {
     }
 
     /// Logs a user in and returns the client that holds the session.
-    pub async fn login(&self, username: &str, password: &str) -> reqwest::Client {
+    pub async fn login(&self, username: &str, password: &str) -> TestClient {
         let client = self.client();
         let token = self.csrf_token(&client).await;
         let response = client
@@ -122,8 +135,13 @@ impl TestInstance {
         client
     }
 
+    /// The session cookie of a client, formatted for a `Cookie` header.
+    pub fn session_cookie(&self, client: &TestClient) -> Option<String> {
+        client.cookie_header()
+    }
+
     /// Reads the CSRF token from the login page.
-    pub async fn csrf_token(&self, client: &reqwest::Client) -> String {
+    pub async fn csrf_token(&self, client: &TestClient) -> String {
         let body = client
             .get(self.url("/login"))
             .send()
@@ -138,6 +156,32 @@ impl TestInstance {
     /// Stops the server.
     pub fn stop(self) {
         self.handle.abort();
+    }
+}
+
+/// A client with an accessible cookie jar.
+pub struct TestClient {
+    client: reqwest::Client,
+    jar: Arc<reqwest::cookie::Jar>,
+    base_url: String,
+}
+
+impl TestClient {
+    /// The value for a `Cookie` header carrying the current session.
+    pub fn cookie_header(&self) -> Option<String> {
+        use reqwest::cookie::CookieStore;
+        let url = self.base_url.parse().expect("base url");
+        self.jar
+            .cookies(&url)
+            .and_then(|value| value.to_str().ok().map(str::to_string))
+    }
+}
+
+impl std::ops::Deref for TestClient {
+    type Target = reqwest::Client;
+
+    fn deref(&self) -> &Self::Target {
+        &self.client
     }
 }
 
