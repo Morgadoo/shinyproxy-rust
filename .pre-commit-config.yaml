@@ -29,10 +29,16 @@ repos:
 - repo: local
   hooks:
     - id: license-check
-      name: format license headers using maven
+      name: check Apache-2.0 headers of Rust sources
       always_run: true
       language: script
-      entry: /bin/sh -c "mvn validate license:format"
+      entry: scripts/license-header.sh --check
+      pass_filenames: false
+    - id: cargo-fmt
+      name: cargo fmt
+      language: system
+      types: [rust]
+      entry: cargo fmt --all --
       pass_filenames: false
 - repo: https://github.com/crate-ci/typos
   rev: v1.35.8

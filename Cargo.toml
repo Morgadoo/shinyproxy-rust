@@ -1,0 +1,83 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/spel",
+    "crates/containerproxy",
+    "crates/shinyproxy",
+    "crates/testapp",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.97"
+license = "Apache-2.0"
+authors = ["Open Analytics NV", "ShinyProxy Rust contributors"]
+repository = "https://github.com/Morgadoo/shinyproxy-rust"
+homepage = "https://www.shinyproxy.io/"
+description = "ShinyProxy: open source enterprise deployment for data science apps (Rust implementation)"
+
+[workspace.dependencies]
+# --- internal ---
+spel = { path = "crates/spel" }
+containerproxy = { path = "crates/containerproxy" }
+
+# --- async runtime & http ---
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "signal", "process", "fs", "io-util", "sync"] }
+tokio-util = { version = "0.7", features = ["io"] }
+axum = { version = "0.8", features = ["macros", "query", "json", "form"] }
+axum-extra = { version = "0.10", features = ["cookie", "typed-header"] }
+hyper = { version = "1", features = ["http1", "server", "client"] }
+hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", "server", "tokio"] }
+http = "1"
+http-body-util = "0.1"
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["trace", "cors", "set-header"] }
+bytes = "1"
+mime = "0.3"
+url = "2"
+percent-encoding = "2"
+
+# --- serialization / config ---
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+serde_yaml_ng = "0.10"
+
+# --- utilities ---
+anyhow = "1"
+thiserror = "2"
+async-trait = "0.1"
+futures = "0.3"
+once_cell = "1"
+dashmap = "6"
+moka = { version = "0.12", features = ["sync"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+regex = "1"
+sha1 = "0.10"
+sha2 = "0.10"
+hex = "0.4"
+base64 = "0.22"
+rand = "0.9"
+itertools = "0.14"
+indexmap = { version = "2", features = ["serde"] }
+
+# --- observability ---
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt", "std"] }
+
+# --- dev/test ---
+insta = { version = "1", features = ["json", "yaml", "redactions"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "cookies", "rustls-tls", "stream"] }
+tokio-tungstenite = "0.28"
+tempfile = "3"
+rstest = "0.26"
+proptest = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+[profile.dev]
+# faster incremental test cycles
+debug = 1
