@@ -28,6 +28,7 @@
 
 pub mod config_schema;
 pub mod spec_provider;
+pub mod web;
 
 /// Version of ShinyProxy (Rust implementation).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

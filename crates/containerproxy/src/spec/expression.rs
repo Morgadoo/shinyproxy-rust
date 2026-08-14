@@ -423,6 +423,16 @@ impl SpelResolver {
     pub fn evaluate_to_list(&self, raw: &str) -> Result<Vec<String>, ResolveError> {
         spel::evaluate_to_list(raw, &self.context).map_err(to_resolve_error)
     }
+
+    /// Evaluates a template into a boolean (access expressions).
+    pub fn boolean_expression(&self, raw: &str) -> Result<bool, ResolveError> {
+        spel::evaluate_to_boolean(raw, &self.context).map_err(to_resolve_error)
+    }
+
+    /// Evaluates a template into an integer (max instances, lifetimes, ...).
+    pub fn integer_expression(&self, raw: &str) -> Result<i64, ResolveError> {
+        spel::evaluate_to_integer(raw, &self.context).map_err(to_resolve_error)
+    }
 }
 
 impl SpecResolver for SpelResolver {

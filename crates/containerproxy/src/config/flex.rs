@@ -127,6 +127,63 @@ impl<'de> Deserialize<'de> for FlexI64 {
     }
 }
 
+/// String that also accepts numbers and booleans.
+///
+/// Spring converts property values on demand, so `default-max-instances: 2` and `logo-width: 100` are
+/// valid even though the properties are strings (they may contain expressions).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct FlexString(pub String);
+
+impl FlexString {
+    /// The value as a `&str`.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<FlexString> for String {
+    fn from(value: FlexString) -> Self {
+        value.0
+    }
+}
+
+impl<'de> Deserialize<'de> for FlexString {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct FlexStringVisitor;
+
+        impl<'de> Visitor<'de> for FlexStringVisitor {
+            type Value = FlexString;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a string, number or boolean")
+            }
+
+            fn visit_str<E: de::Error>(self, value: &str) -> Result<Self::Value, E> {
+                Ok(FlexString(value.to_string()))
+            }
+
+            fn visit_i64<E: de::Error>(self, value: i64) -> Result<Self::Value, E> {
+                Ok(FlexString(value.to_string()))
+            }
+
+            fn visit_u64<E: de::Error>(self, value: u64) -> Result<Self::Value, E> {
+                Ok(FlexString(value.to_string()))
+            }
+
+            fn visit_f64<E: de::Error>(self, value: f64) -> Result<Self::Value, E> {
+                Ok(FlexString(value.to_string()))
+            }
+
+            fn visit_bool<E: de::Error>(self, value: bool) -> Result<Self::Value, E> {
+                Ok(FlexString(value.to_string()))
+            }
+        }
+
+        deserializer.deserialize_any(FlexStringVisitor)
+    }
+}
+
 /// List of strings that accepts a single scalar, a comma separated string, or a YAML list.
 ///
 /// This mirrors the Java `EnvironmentUtils.readList` helper.
@@ -216,6 +273,7 @@ mod tests {
         number: Option<FlexI64>,
         #[serde(default)]
         values: StringList,
+        text: Option<FlexString>,
     }
 
     fn parse(yaml: &str) -> Holder {
@@ -237,6 +295,15 @@ mod tests {
         assert_eq!(parse("number: 10000").number, Some(FlexI64(10000)));
         assert_eq!(parse("number: '-1'").number, Some(FlexI64(-1)));
         assert_eq!(parse("number: 5.0").number, Some(FlexI64(5)));
+    }
+
+    #[test]
+    fn parses_lenient_strings() {
+        assert_eq!(parse("text: abc").text, Some(FlexString("abc".into())));
+        assert_eq!(parse("text: 2").text, Some(FlexString("2".into())));
+        assert_eq!(parse("text: true").text, Some(FlexString("true".into())));
+        assert_eq!(parse("text: 1.5").text, Some(FlexString("1.5".into())));
+        assert_eq!(parse("number: 1").text, None);
     }
 
     #[test]

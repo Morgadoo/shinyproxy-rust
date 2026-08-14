@@ -30,7 +30,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::flex::{FlexBool, FlexI64, StringList};
+use super::flex::{FlexBool, FlexI64, FlexString, StringList};
 
 /// Default heartbeat rate in milliseconds (`ActiveProxiesService.DEFAULT_RATE`).
 pub const DEFAULT_HEARTBEAT_RATE_MS: i64 = 10_000;
@@ -83,8 +83,8 @@ pub struct ProxySettings {
     // --- ui ---
     pub title: Option<String>,
     pub logo_url: Option<String>,
-    pub logo_width: Option<String>,
-    pub logo_height: Option<String>,
+    pub logo_width: Option<FlexString>,
+    pub logo_height: Option<FlexString>,
     pub logo_style: Option<String>,
     pub favicon_path: Option<String>,
     pub landing_page: Option<String>,
@@ -94,8 +94,8 @@ pub struct ProxySettings {
     pub template_path: Option<String>,
     pub my_apps_mode: Option<String>,
     pub default_app_logo_url: Option<String>,
-    pub default_app_logo_width: Option<String>,
-    pub default_app_logo_height: Option<String>,
+    pub default_app_logo_width: Option<FlexString>,
+    pub default_app_logo_height: Option<FlexString>,
     pub default_app_logo_style: Option<String>,
     pub default_app_logo_classes: Option<String>,
     pub support: SupportSettings,
@@ -120,7 +120,7 @@ pub struct ProxySettings {
     pub container_wait_time: Option<FlexI64>,
     pub container_wait_timeout: Option<FlexI64>,
     pub max_total_instances: Option<FlexI64>,
-    pub default_max_instances: Option<String>,
+    pub default_max_instances: Option<FlexString>,
     pub default_proxy_max_lifetime: Option<FlexI64>,
     pub default_cache_headers_mode: Option<String>,
     pub default_stop_proxy_on_logout: Option<FlexBool>,
@@ -236,6 +236,14 @@ impl ProxySettings {
         self.username_case_sensitive
             .map(|value| value.0)
             .unwrap_or(true)
+    }
+
+    /// Default maximum number of instances per user and app as configured (may be an expression).
+    pub fn default_max_instances(&self) -> &str {
+        self.default_max_instances
+            .as_ref()
+            .map(FlexString::as_str)
+            .unwrap_or("1")
     }
 
     /// Landing page (`proxy.landing-page`, default `/`).

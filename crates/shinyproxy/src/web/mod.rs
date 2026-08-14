@@ -19,13 +19,9 @@
  * along with this program.  If not, see <http://www.apache.org/licenses/>
  */
 
-//! The web layer: assets, templates, sessions, security and the shared UI pages.
+//! The ShinyProxy web layer: state, page models and request handlers.
 
-pub mod assets;
-pub mod security;
-pub mod session;
-pub mod templates;
+pub mod model;
+pub mod state;
 
-pub use security::SecurityHeaders;
-pub use session::SessionData;
-pub use templates::{TemplateEngine, TemplateError};
+pub use state::{AppState, StateError};
