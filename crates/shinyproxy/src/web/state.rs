@@ -93,7 +93,7 @@ pub enum StateError {
     #[error(transparent)]
     Auth(#[from] auth::UnsupportedBackend),
     #[error(transparent)]
-    Backend(#[from] backend::UnsupportedBackend),
+    Backend(#[from] backend::CreateError),
     #[error(transparent)]
     Templates(#[from] containerproxy::web::TemplateError),
 }
@@ -119,7 +119,17 @@ impl AppState {
             settings.proxy.docker.port_range_start(),
             settings.proxy.docker.port_range_max(),
         ));
-        let backend = backend::create(&settings, port_allocator.clone())?;
+        let runtime_values = Arc::new(
+            RuntimeValueRegistry::engine().with_keys(crate::runtime_values::SHINYPROXY_KEYS),
+        );
+        let backend = backend::create(
+            &settings,
+            backend::BackendContext {
+                port_allocator: port_allocator.clone(),
+                registry: runtime_values.clone(),
+                realm_id: identifiers.realm_id.clone(),
+            },
+        )?;
         let store: Arc<dyn ProxyStore> = Arc::new(MemoryProxyStore::new(
             settings.proxy.username_case_sensitive(),
         ));
@@ -147,8 +157,7 @@ impl AppState {
             heartbeats,
             router: Arc::new(ProxyRouter::new()),
             backend,
-            runtime_values: RuntimeValueRegistry::engine()
-                .with_keys(crate::runtime_values::SHINYPROXY_KEYS),
+            runtime_values: (*runtime_values).clone(),
             logo_cache: dashmap::DashMap::new(),
         })
     }

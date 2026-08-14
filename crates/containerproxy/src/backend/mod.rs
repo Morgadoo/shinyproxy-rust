@@ -25,8 +25,10 @@
 //! `ecs`, and the test-only `local` backend of this implementation). The trait mirrors
 //! `IContainerBackend`.
 
+pub mod docker;
 pub mod local;
 pub mod ports;
+pub mod swarm;
 pub mod target;
 
 use std::collections::BTreeMap;
@@ -152,29 +154,79 @@ pub trait ContainerBackend: Send + Sync + std::fmt::Debug {
 /// The configured container backend is not implemented yet.
 #[derive(Debug, thiserror::Error)]
 #[error(
-    "container backend '{name}' is not supported yet by this implementation (supported: local); \
-     see docs/PROGRESS.md for the phase that adds it"
+    "container backend '{name}' is not supported yet by this implementation \
+     (supported: docker, docker-swarm, local); see docs/PROGRESS.md for the phase that adds it"
 )]
 pub struct UnsupportedBackend {
     /// The configured value of `proxy.container-backend`.
     pub name: String,
 }
 
+/// Why the container backend could not be created.
+#[derive(Debug, thiserror::Error)]
+pub enum CreateError {
+    /// The backend is not implemented (yet).
+    #[error(transparent)]
+    Unsupported(#[from] UnsupportedBackend),
+    /// The configuration of the backend is invalid.
+    #[error("invalid container backend configuration: {0}")]
+    Configuration(String),
+    /// The backend could not be reached.
+    #[error(transparent)]
+    Backend(#[from] BackendError),
+}
+
+/// Everything a backend may need besides the settings.
+#[derive(Debug, Clone)]
+pub struct BackendContext {
+    /// Ports that can be published on the host.
+    pub port_allocator: Arc<PortAllocator>,
+    /// Runtime value keys, used to parse the labels of existing containers.
+    pub registry: Arc<crate::model::runtime_value::RuntimeValueRegistry>,
+    /// The realm of this server (used in the Loki labels).
+    pub realm_id: Option<String>,
+}
+
 /// Creates the configured container backend.
 pub fn create(
     settings: &Settings,
-    port_allocator: Arc<PortAllocator>,
-) -> Result<Arc<dyn ContainerBackend>, UnsupportedBackend> {
+    context: BackendContext,
+) -> Result<Arc<dyn ContainerBackend>, CreateError> {
+    let BackendContext {
+        port_allocator,
+        registry,
+        realm_id,
+    } = context;
     match settings
         .proxy
         .container_backend()
         .to_ascii_lowercase()
         .as_str()
     {
+        "docker" => {
+            let config = docker::DockerConfig::from_settings(settings, realm_id)
+                .map_err(CreateError::Configuration)?;
+            Ok(Arc::new(docker::DockerBackend::new(
+                config,
+                port_allocator,
+                registry,
+            )?))
+        }
+        "docker-swarm" => {
+            let config = docker::DockerConfig::from_settings(settings, realm_id)
+                .map_err(CreateError::Configuration)?;
+            Ok(Arc::new(swarm::SwarmBackend::new(
+                config,
+                settings,
+                port_allocator,
+                registry,
+            )?))
+        }
         "local" => Ok(Arc::new(local::LocalBackend::new(settings, port_allocator))),
         other => Err(UnsupportedBackend {
             name: other.to_string(),
-        }),
+        }
+        .into()),
     }
 }
 
@@ -182,20 +234,39 @@ pub fn create(
 mod tests {
     use super::*;
 
+    fn context() -> BackendContext {
+        BackendContext {
+            port_allocator: Arc::new(PortAllocator::new(20000, None)),
+            registry: Arc::new(crate::model::runtime_value::RuntimeValueRegistry::engine()),
+            realm_id: None,
+        }
+    }
+
     #[test]
     fn creates_the_local_backend() {
         let settings: Settings =
             serde_yaml_ng::from_str("proxy:\n  container-backend: local\n").unwrap();
-        let backend = create(&settings, Arc::new(PortAllocator::new(20000, None))).unwrap();
+        let backend = create(&settings, context()).unwrap();
         assert_eq!(backend.name(), "local");
         assert!(!backend.supports_pause());
     }
 
     #[test]
     fn reports_unsupported_backends() {
-        let settings = Settings::default(); // docker is the default
-        let error = create(&settings, Arc::new(PortAllocator::new(20000, None))).unwrap_err();
-        assert!(error.to_string().contains("docker"), "{error}");
+        let settings: Settings =
+            serde_yaml_ng::from_str("proxy:\n  container-backend: kubernetes\n").unwrap();
+        let error = create(&settings, context()).unwrap_err();
+        assert!(error.to_string().contains("kubernetes"), "{error}");
         assert!(error.to_string().contains("not supported yet"), "{error}");
+    }
+
+    #[test]
+    fn reports_invalid_backend_configuration() {
+        let settings: Settings = serde_yaml_ng::from_str(
+            "proxy:\n  container-backend: docker\n  docker:\n    image-pull-policy: sometimes\n",
+        )
+        .unwrap();
+        let error = create(&settings, context()).unwrap_err();
+        assert!(error.to_string().contains("image-pull-policy"), "{error}");
     }
 }

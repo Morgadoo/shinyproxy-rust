@@ -33,7 +33,7 @@ use containerproxy::config::{load, LoadOptions, Schema, Settings};
 use containerproxy::events::{Event, EventBus};
 use containerproxy::model::proxy::{ProxyStatus, ProxyStopReason};
 use containerproxy::model::runtime_value::{
-    RuntimeValue, DISPLAY_NAME, PUBLIC_PATH, USER_GROUPS, USER_ID,
+    RuntimeValue, RuntimeValueRegistry, DISPLAY_NAME, PUBLIC_PATH, USER_GROUPS, USER_ID,
 };
 use containerproxy::model::spec::{ContainerSpec, PortMapping, ProxySpec};
 use containerproxy::model::spel_field::{SpelString, SpelStringList, SpelStringMap};
@@ -56,7 +56,15 @@ fn build_service(yaml: &str, port_range_start: u16) -> (Arc<ProxyService>, Arc<P
     let identifiers = Identifiers::from_config(&raw, None);
 
     let allocator = Arc::new(PortAllocator::new(port_range_start, None));
-    let backend = backend::create(&settings, allocator.clone()).expect("backend");
+    let backend = backend::create(
+        &settings,
+        backend::BackendContext {
+            port_allocator: allocator.clone(),
+            registry: Arc::new(RuntimeValueRegistry::engine()),
+            realm_id: None,
+        },
+    )
+    .expect("backend");
 
     let service = ProxyService::new(
         settings,
