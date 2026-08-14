@@ -24,11 +24,16 @@
 //! Spring resolves properties with a *pull* model: it asks every property source for
 //! `proxy.docker.port-range-start`, and the environment source translates that name into
 //! `PROXY_DOCKER_PORT_RANGE_START`. Because this implementation builds a configuration *tree* instead,
-//! it needs to know which property paths exist in order to place environment variables at the right
-//! position in that tree. That knowledge lives here.
+//! it needs to know which property paths exist in order to
 //!
-//! The table doubles as the source of truth for `docs/CONFIGURATION.md` and for the "unknown property"
-//! report that is logged at startup.
+//! * place environment variables at the right position in the tree,
+//! * rewrite relaxed property names (`portRangeStart`, `PORT_RANGE_START`) to their canonical spelling
+//!   before the tree is deserialized into typed settings,
+//! * report properties that ShinyProxy does not know about.
+//!
+//! Array elements are written as `[]`, e.g. `proxy.specs[].container-image`.
+//!
+//! The table doubles as the source of truth for `docs/CONFIGURATION.md`.
 
 use std::collections::BTreeSet;
 
@@ -41,16 +46,15 @@ pub enum KeyKind {
     Scalar,
     /// A list of scalars. Accepts a single value, a comma separated string, or a YAML list.
     ScalarList,
-    /// A list of objects; the fields are relative paths below `<path>[i]`.
-    ObjectList(&'static [&'static str]),
-    /// A free form map (arbitrary keys below the path), e.g. `container-env` or `logging.level`.
+    /// A free form map: arbitrary keys below this path (`container-env`, `logging.level`, ...).
+    /// Keys below a map are never rewritten or validated.
     Map,
 }
 
 /// One known configuration property.
 #[derive(Debug, Clone, Copy)]
 pub struct KeyDef {
-    /// Dotted path without indexes, e.g. `proxy.docker.port-range-start`.
+    /// Dotted path, with `[]` marking array elements, e.g. `proxy.specs[].container-image`.
     pub path: &'static str,
     /// Shape of the value.
     pub kind: KeyKind,
@@ -69,7 +73,19 @@ pub enum Support {
     Unsupported(&'static str),
 }
 
-const fn scalar(path: &'static str, support: Support) -> KeyDef {
+impl Support {
+    /// Short label used in the generated documentation.
+    pub fn label(&self) -> String {
+        match self {
+            Support::Supported => "supported".to_string(),
+            Support::Planned(phase) => format!("planned ({phase})"),
+            Support::Unsupported(reason) => format!("unsupported: {reason}"),
+        }
+    }
+}
+
+/// Declares a scalar property.
+pub const fn scalar(path: &'static str, support: Support) -> KeyDef {
     KeyDef {
         path,
         kind: KeyKind::Scalar,
@@ -77,7 +93,8 @@ const fn scalar(path: &'static str, support: Support) -> KeyDef {
     }
 }
 
-const fn list(path: &'static str, support: Support) -> KeyDef {
+/// Declares a list-of-scalars property.
+pub const fn list(path: &'static str, support: Support) -> KeyDef {
     KeyDef {
         path,
         kind: KeyKind::ScalarList,
@@ -85,7 +102,8 @@ const fn list(path: &'static str, support: Support) -> KeyDef {
     }
 }
 
-const fn map(path: &'static str, support: Support) -> KeyDef {
+/// Declares a free form map property.
+pub const fn map(path: &'static str, support: Support) -> KeyDef {
     KeyDef {
         path,
         kind: KeyKind::Map,
@@ -93,37 +111,7 @@ const fn map(path: &'static str, support: Support) -> KeyDef {
     }
 }
 
-const fn objects(path: &'static str, fields: &'static [&'static str], support: Support) -> KeyDef {
-    KeyDef {
-        path,
-        kind: KeyKind::ObjectList(fields),
-        support,
-    }
-}
-
 use Support::{Planned, Supported, Unsupported};
-
-const CUSTOM_HEADER_FIELDS: &[&str] = &["name", "value"];
-const USAGE_STATS_FIELDS: &[&str] = &[
-    "url",
-    "username",
-    "password",
-    "table-name",
-    "attributes[].name",
-    "attributes[].expression",
-];
-const USER_FIELDS: &[&str] = &["name", "password", "groups"];
-const LDAP_FIELDS: &[&str] = &[
-    "url",
-    "starttls",
-    "user-dn-pattern",
-    "user-search-base",
-    "user-search-filter",
-    "group-search-base",
-    "group-search-filter",
-    "manager-dn",
-    "manager-password",
-];
 
 /// Properties of the engine (the Java `containerproxy` library).
 pub fn engine_keys() -> &'static [KeyDef] {
@@ -157,11 +145,12 @@ static ENGINE_KEYS: &[KeyDef] = {
         scalar("spring.session.store-type", Planned("P12")),
         scalar("spring.session.redis.flush-mode", Planned("P12")),
         scalar("spring.session.redis.repository-type", Planned("P12")),
+        scalar("spring.session.timeout", Planned("P4")),
         scalar("spring.data.redis.host", Planned("P12")),
         scalar("spring.data.redis.port", Planned("P12")),
         scalar("spring.data.redis.password", Planned("P12")),
-        scalar("spring.data.redis.database", Planned("P12")),
         scalar("spring.data.redis.username", Planned("P12")),
+        scalar("spring.data.redis.database", Planned("P12")),
         scalar("spring.data.redis.sentinel.master", Planned("P12")),
         list("spring.data.redis.sentinel.nodes", Planned("P12")),
         scalar("spring.data.redis.sentinel.password", Planned("P12")),
@@ -215,7 +204,9 @@ static ENGINE_KEYS: &[KeyDef] = {
         list("proxy.admin-groups", Planned("P4")),
         list("proxy.admin-users", Planned("P4")),
         scalar("proxy.username-case-sensitive", Planned("P4")),
-        objects("proxy.users", USER_FIELDS, Planned("P4")),
+        scalar("proxy.users[].name", Planned("P4")),
+        scalar("proxy.users[].password", Planned("P4")),
+        list("proxy.users[].groups", Planned("P4")),
         scalar("proxy.allow-transfer-app", Planned("P7")),
         scalar("proxy.api-security.hide-spec-details", Planned("P7")),
         scalar("proxy.api-security.disable-no-sniff-header", Planned("P4")),
@@ -225,11 +216,8 @@ static ENGINE_KEYS: &[KeyDef] = {
             Planned("P4"),
         ),
         list("proxy.api-security.cors-allowed-origins", Planned("P4")),
-        objects(
-            "proxy.api-security.custom-headers",
-            CUSTOM_HEADER_FIELDS,
-            Planned("P4"),
-        ),
+        scalar("proxy.api-security.custom-headers[].name", Planned("P4")),
+        scalar("proxy.api-security.custom-headers[].value", Planned("P4")),
         scalar("proxy.oauth2.resource-id", Planned("P11")),
         scalar("proxy.oauth2.jwks-url", Planned("P11")),
         scalar("proxy.oauth2.roles-claim", Planned("P11")),
@@ -250,16 +238,17 @@ static ENGINE_KEYS: &[KeyDef] = {
         scalar("proxy.openid.enforce-https-redirect-uri", Planned("P11")),
         scalar("proxy.openid.ignore-session-expire", Planned("P11")),
         scalar("proxy.openid.jwks-signature-algorithm", Planned("P11")),
-        objects("proxy.ldap", LDAP_FIELDS, Planned("P11")),
-        scalar("proxy.ldap.url", Planned("P11")),
-        scalar("proxy.ldap.starttls", Planned("P11")),
-        scalar("proxy.ldap.user-dn-pattern", Planned("P11")),
-        scalar("proxy.ldap.user-search-base", Planned("P11")),
-        scalar("proxy.ldap.user-search-filter", Planned("P11")),
-        scalar("proxy.ldap.group-search-base", Planned("P11")),
-        scalar("proxy.ldap.group-search-filter", Planned("P11")),
-        scalar("proxy.ldap.manager-dn", Planned("P11")),
-        scalar("proxy.ldap.manager-password", Planned("P11")),
+        // LDAP can be configured with a single provider (`proxy.ldap.url`) or with a list of providers
+        // (`proxy.ldap[0].url`); both notations use the same property names.
+        scalar("proxy.ldap[].url", Planned("P11")),
+        scalar("proxy.ldap[].starttls", Planned("P11")),
+        scalar("proxy.ldap[].user-dn-pattern", Planned("P11")),
+        scalar("proxy.ldap[].user-search-base", Planned("P11")),
+        scalar("proxy.ldap[].user-search-filter", Planned("P11")),
+        scalar("proxy.ldap[].group-search-base", Planned("P11")),
+        scalar("proxy.ldap[].group-search-filter", Planned("P11")),
+        scalar("proxy.ldap[].manager-dn", Planned("P11")),
+        scalar("proxy.ldap[].manager-password", Planned("P11")),
         scalar("proxy.webservice.authentication-url", Planned("P11")),
         scalar(
             "proxy.webservice.authentication-request-body",
@@ -321,12 +310,17 @@ static ENGINE_KEYS: &[KeyDef] = {
         scalar("proxy.usage-stats-username", Planned("P10")),
         scalar("proxy.usage-stats-password", Planned("P10")),
         scalar("proxy.usage-stats-table-name", Planned("P10")),
-        objects(
-            "proxy.usage-stats-attributes",
-            &["name", "expression"],
+        scalar("proxy.usage-stats-attributes[].name", Planned("P10")),
+        scalar("proxy.usage-stats-attributes[].expression", Planned("P10")),
+        scalar("proxy.usage-stats[].url", Planned("P10")),
+        scalar("proxy.usage-stats[].username", Planned("P10")),
+        scalar("proxy.usage-stats[].password", Planned("P10")),
+        scalar("proxy.usage-stats[].table-name", Planned("P10")),
+        scalar("proxy.usage-stats[].attributes[].name", Planned("P10")),
+        scalar(
+            "proxy.usage-stats[].attributes[].expression",
             Planned("P10"),
         ),
-        objects("proxy.usage-stats", USAGE_STATS_FIELDS, Planned("P10")),
         scalar("proxy.usage-stats-micrometer-prefix", Planned("P10")),
         scalar(
             "proxy.usage-stats-hikari.connection-timeout",
@@ -380,8 +374,8 @@ static ENGINE_KEYS: &[KeyDef] = {
         scalar("proxy.ecs.service-wait-time", Planned("P12")),
         list("proxy.ecs.subnets", Planned("P12")),
         list("proxy.ecs.security-groups", Planned("P12")),
-        // note: `proxy.ecs.enable-cloudwatch` is an accepted alias of this property (see the Java
-        // `EnvironmentUtils.getProperty` fallback); both spellings canonicalise identically.
+        // note: `proxy.ecs.enable-cloudwatch` is an accepted alias (Java `EnvironmentUtils.getProperty`
+        // fallback); both spellings canonicalise identically.
         scalar("proxy.ecs.enable-cloud-watch", Planned("P12")),
         scalar("proxy.ecs.cloud-watch-group-prefix", Planned("P12")),
         scalar("proxy.ecs.cloud-watch-region", Planned("P12")),
@@ -429,66 +423,73 @@ impl Schema {
             .find(|key| canonical_path(key.path) == wanted)
     }
 
-    /// True when the given (possibly indexed) path is known: either directly, as a field of an object
-    /// list, or as a child of a free form map.
+    /// Returns the definition of the map property that contains the given path, if any.
+    pub fn enclosing_map(&self, path: &str) -> Option<&KeyDef> {
+        let wanted = canonical_path(path);
+        self.keys.iter().find(|key| {
+            key.kind == KeyKind::Map
+                && wanted.starts_with(&format!("{}.", canonical_path(key.path)))
+        })
+    }
+
+    /// True when the given (possibly indexed) path is known, either directly or as a key below a
+    /// free form map property.
     pub fn is_known(&self, path: &str) -> bool {
+        self.find(path).is_some() || self.enclosing_map(path).is_some()
+    }
+
+    /// Canonical spelling of the last segment of a known path, used to normalise relaxed names.
+    ///
+    /// Works for leaves (`proxy.HEARTBEAT_RATE` -> `heartbeat-rate`) as well as for intermediate nodes
+    /// (`proxy.DOCKER` -> `docker`), because the latter are needed to rebuild a tree that serde can
+    /// deserialize.
+    pub fn canonical_segment(&self, path: &str) -> Option<&'static str> {
         let canonical = canonical_path(path);
+        if canonical.is_empty() {
+            return None;
+        }
+        let depth = canonical.split('.').count();
+        let prefix = format!("{canonical}.");
         for key in &self.keys {
             let key_canonical = canonical_path(key.path);
-            match key.kind {
-                KeyKind::Scalar | KeyKind::ScalarList => {
-                    if canonical == key_canonical {
-                        return true;
-                    }
-                }
-                KeyKind::Map => {
-                    if canonical == key_canonical
-                        || canonical.starts_with(&format!("{key_canonical}."))
-                    {
-                        return true;
-                    }
-                }
-                KeyKind::ObjectList(fields) => {
-                    if canonical == key_canonical {
-                        return true;
-                    }
-                    if let Some(rest) = canonical.strip_prefix(&format!("{key_canonical}.")) {
-                        for field in fields {
-                            let field_canonical = canonical_path(field);
-                            if rest == field_canonical
-                                || rest.starts_with(&format!("{field_canonical}."))
-                            {
-                                return true;
-                            }
-                        }
-                    }
+            if key_canonical == canonical || key_canonical.starts_with(&prefix) {
+                let segments: Vec<&'static str> = key
+                    .path
+                    .split('.')
+                    .map(|segment| segment.trim_end_matches("[]"))
+                    .collect();
+                if let Some(segment) = segments.get(depth - 1) {
+                    return Some(segment);
                 }
             }
         }
-        false
+        None
     }
 
-    /// All paths of properties that can be overridden by a single environment variable.
-    pub fn env_bindable_paths(&self) -> Vec<(String, KeyKind)> {
-        let mut result = Vec::new();
-        for key in &self.keys {
-            match key.kind {
-                KeyKind::Scalar | KeyKind::ScalarList => {
-                    result.push((key.path.to_string(), key.kind))
-                }
-                KeyKind::ObjectList(_) | KeyKind::Map => {}
-            }
-        }
-        result
+    /// All keys whose path contains no array, i.e. those bindable from a single environment variable.
+    pub fn simple_keys(&self) -> impl Iterator<Item = &KeyDef> {
+        self.keys.iter().filter(|key| !key.path.contains("[]"))
     }
 
-    /// Object list properties: `(path, fields)`.
-    pub fn object_lists(&self) -> Vec<(&'static str, &'static [&'static str])> {
-        self.keys
+    /// Keys grouped by their array root: `proxy.users` -> [`proxy.users[].name`, ...].
+    pub fn array_groups(&self) -> Vec<(String, Vec<&KeyDef>)> {
+        let mut roots: Vec<String> = self
+            .keys
             .iter()
-            .filter_map(|key| match key.kind {
-                KeyKind::ObjectList(fields) => Some((key.path, fields)),
-                _ => None,
+            .filter_map(|key| key.path.split_once("[]").map(|(root, _)| root.to_string()))
+            .collect();
+        roots.sort();
+        roots.dedup();
+        roots
+            .into_iter()
+            .map(|root| {
+                let prefix = format!("{root}[]");
+                let members = self
+                    .keys
+                    .iter()
+                    .filter(|key| key.path.starts_with(&prefix))
+                    .collect();
+                (root, members)
             })
             .collect()
     }
@@ -499,13 +500,19 @@ impl Schema {
     }
 }
 
-/// Canonical form of a path: indexes removed, relaxed names, `[]` markers dropped.
+/// Canonical form of a path: indexes and `[]` markers removed, names relaxed.
 pub fn canonical_path(path: &str) -> String {
     parse_path(path)
         .into_iter()
         .filter_map(|segment| match segment {
-            Segment::Key(key) if key == "[]" => None,
-            Segment::Key(key) => Some(canonical_name(&key)),
+            Segment::Key(key) => {
+                let key = key.trim_end_matches("[]");
+                if key.is_empty() {
+                    None
+                } else {
+                    Some(canonical_name(key))
+                }
+            }
             Segment::Index(_) => None,
         })
         .collect::<Vec<_>>()
@@ -526,6 +533,7 @@ mod tests {
             canonical_path("proxy.specs[0].container-image"),
             "proxy.specs.containerimage"
         );
+        assert_eq!(canonical_path("proxy.users[].name"), "proxy.users.name");
         assert_eq!(canonical_path("proxy.admin-groups[1]"), "proxy.admingroups");
     }
 
@@ -534,6 +542,7 @@ mod tests {
         let schema = Schema::engine();
         assert!(schema.is_known("proxy.port"));
         assert!(schema.is_known("proxy.docker.port-range-start"));
+        assert!(schema.is_known("proxy.docker.portRangeStart"));
         assert!(schema.is_known("proxy.admin-groups[0]"));
         assert!(schema.is_known("proxy.users[2].password"));
         assert!(schema.is_known("logging.level.org.something"));
@@ -546,11 +555,37 @@ mod tests {
         let schema = Schema::engine();
         let mut seen = std::collections::HashMap::new();
         for key in schema.keys() {
-            // `proxy.ldap.url` and `proxy.ldap[].url` intentionally coexist (single and multi provider).
             let canonical = canonical_path(key.path);
             if let Some(previous) = seen.insert(canonical.clone(), key.path) {
                 assert_eq!(previous, key.path, "duplicate canonical path {canonical}");
             }
         }
+    }
+
+    #[test]
+    fn groups_array_keys() {
+        let schema = Schema::engine();
+        let groups = schema.array_groups();
+        let users = groups
+            .iter()
+            .find(|(root, _)| root == "proxy.users")
+            .expect("proxy.users group");
+        assert_eq!(users.1.len(), 3);
+        assert!(groups.iter().any(|(root, _)| root == "proxy.usage-stats"));
+    }
+
+    #[test]
+    fn reports_canonical_spelling() {
+        let schema = Schema::engine();
+        assert_eq!(
+            schema.canonical_segment("proxy.HEARTBEAT_RATE"),
+            Some("heartbeat-rate")
+        );
+        assert_eq!(
+            schema.canonical_segment("proxy.users[0].name"),
+            Some("name")
+        );
+        assert_eq!(schema.canonical_segment("proxy.DOCKER"), Some("docker"));
+        assert_eq!(schema.canonical_segment("PROXY"), Some("proxy"));
     }
 }

@@ -19,21 +19,8 @@
  * along with this program.  If not, see <http://www.apache.org/licenses/>
  */
 
-//! Configuration subsystem.
-//!
-//! ShinyProxy is configured through `application.yml` with Spring Boot semantics (profiles, relaxed
-//! binding, environment variable and command line overrides, `${...}` placeholders). This module
-//! reproduces those semantics and binds the result onto typed settings.
+//! Services: the stateful components of the engine.
 
-pub mod flex;
-pub mod loader;
-pub mod schema;
-pub mod settings;
-pub mod tree;
-pub mod warnings;
+pub mod identifier;
 
-pub use flex::{FlexBool, FlexI64, StringList};
-pub use loader::{load, ConfigError, LoadOptions, RawConfig, CONFIG_FILENAME, DEMO_PROFILE};
-pub use schema::{KeyDef, KeyKind, Schema, Support};
-pub use settings::{ProxySettings, ServerSettings, Settings, SpringSettings};
-pub use warnings::{validate, Diagnostic, Severity};
+pub use identifier::Identifiers;

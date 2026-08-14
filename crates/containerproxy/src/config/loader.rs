@@ -265,7 +265,10 @@ pub fn load(schema: &Schema, options: &LoadOptions) -> Result<RawConfig, ConfigE
         tree::set(&mut merged, key, tree::scalar_from_str(value));
     }
 
-    // 7. placeholder resolution
+    // 7. rewrite relaxed property names to their canonical spelling
+    normalize_keys(schema, &mut merged, "");
+
+    // 8. placeholder resolution
     resolve_placeholders(&mut merged, &options.env)?;
 
     let unknown_properties = unknown_properties(schema, &merged);
@@ -363,50 +366,59 @@ fn apply_env(schema: &Schema, env: &BTreeMap<String, String>, target: &mut Value
         return;
     }
 
-    for (path, kind) in schema.env_bindable_paths() {
-        let base = env_name(&path);
+    for key in schema.simple_keys() {
+        if key.kind == KeyKind::Map {
+            // Free form maps cannot be bound from the environment (arbitrary keys).
+            continue;
+        }
+        let base = env_name(key.path);
         if let Some(value) = env.get(&base) {
-            match kind {
-                KeyKind::ScalarList => tree::set(&mut *target, &path, split_list(value)),
-                _ => tree::set(&mut *target, &path, tree::scalar_from_str(value)),
+            match key.kind {
+                KeyKind::ScalarList => tree::set(&mut *target, key.path, split_list(value)),
+                _ => tree::set(&mut *target, key.path, tree::scalar_from_str(value)),
             }
             continue;
         }
-        // Indexed form: PROXY_ADMIN_GROUPS_0 / PROXY_ADMIN_GROUPS_0_
-        let mut values = Vec::new();
-        for index in 0.. {
-            let candidate = env
-                .get(&format!("{base}_{index}"))
-                .or_else(|| env.get(&format!("{base}_{index}_")));
-            match candidate {
-                Some(value) => values.push(Value::String(value.clone())),
-                None => break,
+        if key.kind == KeyKind::ScalarList {
+            // Indexed form: PROXY_ADMIN_GROUPS_0 / PROXY_ADMIN_GROUPS_0_
+            let mut values = Vec::new();
+            for index in 0.. {
+                let candidate = env
+                    .get(&format!("{base}_{index}"))
+                    .or_else(|| env.get(&format!("{base}_{index}_")));
+                match candidate {
+                    Some(value) => values.push(Value::String(value.clone())),
+                    None => break,
+                }
             }
-        }
-        if !values.is_empty() {
-            tree::set(&mut *target, &path, Value::Array(values));
+            if !values.is_empty() {
+                tree::set(&mut *target, key.path, Value::Array(values));
+            }
         }
     }
 
-    // Object lists: PROXY_USERS_0_NAME, PROXY_SPECS_1_CONTAINER_IMAGE, ...
-    for (path, fields) in schema.object_lists() {
-        let base = env_name(path);
+    // Array properties: PROXY_USERS_0_NAME, PROXY_SPECS_1_CONTAINER_IMAGE, ...
+    // Only one level of nesting is bound from the environment; deeper nesting (for example
+    // `proxy.usage-stats[].attributes[].name`) has to be configured in the file, see
+    // docs/COMPATIBILITY.md.
+    for (root, members) in schema.array_groups() {
+        let base = env_name(&root);
         for index in 0.. {
             let mut found = false;
-            for field in fields {
-                // Only direct fields are bindable from the environment; nested lists inside object
-                // lists (e.g. `attributes[].name`) are not (Spring supports it, but no ShinyProxy
-                // deployment relies on it; see docs/COMPATIBILITY.md).
-                if field.contains("[]") {
+            for member in &members {
+                let Some((_, field)) = member.path.split_once("[].") else {
+                    continue;
+                };
+                if field.contains("[]") || member.kind == KeyKind::Map {
                     continue;
                 }
                 let name = format!("{base}_{index}_{}", env_name(field));
                 if let Some(value) = env.get(&name) {
-                    tree::set(
-                        &mut *target,
-                        &format!("{path}[{index}].{field}"),
-                        tree::scalar_from_str(value),
-                    );
+                    let path = format!("{root}[{index}].{field}");
+                    match member.kind {
+                        KeyKind::ScalarList => tree::set(&mut *target, &path, split_list(value)),
+                        _ => tree::set(&mut *target, &path, tree::scalar_from_str(value)),
+                    }
                     found = true;
                 }
             }
@@ -414,6 +426,48 @@ fn apply_env(schema: &Schema, env: &BTreeMap<String, String>, target: &mut Value
                 break;
             }
         }
+    }
+}
+
+/// Rewrites relaxed property names to their canonical spelling so that the tree can be deserialized
+/// into typed settings by serde (which matches field names exactly).
+///
+/// Keys below free form map properties (`container-env`, `logging.level`, ...) are left untouched.
+fn normalize_keys(schema: &Schema, value: &mut Value, path: &str) {
+    match value {
+        Value::Object(map) => {
+            let keys: Vec<String> = map.keys().cloned().collect();
+            for key in keys {
+                let child_path = if path.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{path}.{key}")
+                };
+                let canonical = schema.canonical_segment(&child_path);
+                let is_map = schema
+                    .find(&child_path)
+                    .is_some_and(|definition| definition.kind == KeyKind::Map);
+
+                let mut child = map.remove(&key).unwrap_or(Value::Null);
+                let target_key = canonical.map(str::to_string).unwrap_or_else(|| key.clone());
+                if !is_map {
+                    let normalized_path = if path.is_empty() {
+                        target_key.clone()
+                    } else {
+                        format!("{path}.{target_key}")
+                    };
+                    normalize_keys(schema, &mut child, &normalized_path);
+                }
+                map.insert(target_key, child);
+            }
+        }
+        Value::Array(items) => {
+            let child_path = format!("{path}[]");
+            for item in items.iter_mut() {
+                normalize_keys(schema, item, &child_path);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -756,6 +810,55 @@ mod tests {
         let config = load(&schema(), &options).unwrap();
         assert_eq!(config.property("proxy.port").as_deref(), Some("9999"));
         assert_eq!(config.file_tree.unwrap(), json!({"proxy": {"port": 8080}}));
+    }
+
+    #[test]
+    fn normalizes_relaxed_property_names() {
+        let (_dir, options) = options(
+            "proxy:\n  heartbeatRate: 5000\n  DOCKER:\n    PORT_RANGE_START: 20000\n  users:\n    - NAME: jack\n      Password: secret\n",
+        );
+        let config = load(&schema(), &options).unwrap();
+        assert_eq!(
+            config.tree["proxy"]["heartbeat-rate"],
+            json!(5000),
+            "tree was {:#}",
+            config.tree
+        );
+        assert_eq!(
+            config.tree["proxy"]["docker"]["port-range-start"],
+            json!(20000)
+        );
+        assert_eq!(config.tree["proxy"]["users"][0]["name"], json!("jack"));
+        assert_eq!(
+            config.tree["proxy"]["users"][0]["password"],
+            json!("secret")
+        );
+        assert!(
+            config.unknown_properties.is_empty(),
+            "{:?}",
+            config.unknown_properties
+        );
+    }
+
+    #[test]
+    fn keeps_keys_of_free_form_maps_untouched() {
+        let (_dir, options) = options(
+            "logging:\n  level:\n    org.springframework.WEB: DEBUG\nproxy:\n  kubernetes:\n    node-selector:\n      kubernetes.io/hostName: node-1\n",
+        );
+        let config = load(&schema(), &options).unwrap();
+        assert_eq!(
+            config.tree["logging"]["level"]["org.springframework.WEB"],
+            json!("DEBUG")
+        );
+        assert_eq!(
+            config.tree["proxy"]["kubernetes"]["node-selector"]["kubernetes.io/hostName"],
+            json!("node-1")
+        );
+        assert!(
+            config.unknown_properties.is_empty(),
+            "{:?}",
+            config.unknown_properties
+        );
     }
 
     #[test]
