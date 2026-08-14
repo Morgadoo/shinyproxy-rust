@@ -28,6 +28,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod config;
+
 /// Version of the Java implementation this port aims to be compatible with.
 pub const COMPATIBLE_WITH_JAVA_VERSION: &str = "3.2.4";
 
