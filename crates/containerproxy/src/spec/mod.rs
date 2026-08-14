@@ -24,6 +24,10 @@
 //! The engine only needs to *read* specs; how they are configured is up to the application. ShinyProxy
 //! implements this trait on top of the compact `proxy.specs` notation.
 
+pub mod expression;
+
+pub use expression::{ExpressionContextBuilder, SpelResolver, UserContext, UserKind};
+
 use crate::model::spec::ProxySpec;
 
 /// Provides the app definitions of this ShinyProxy instance.

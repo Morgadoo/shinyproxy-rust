@@ -105,7 +105,7 @@ pub fn evaluate_template(template: &str, context: &Context) -> Result<String, Sp
         match part {
             template::Part::Text(text) => result.push_str(&text),
             template::Part::Expression(expression) => {
-                let value = Expression::parse(&expression)?.evaluate(context)?;
+                let value = evaluate_part(&expression, template, context)?;
                 result.push_str(&value.to_display_string());
             }
         }
@@ -123,9 +123,23 @@ pub fn evaluate_template_to_value(template: &str, context: &Context) -> Result<V
     }
     let parts = template::split(template)?;
     if let [template::Part::Expression(expression)] = parts.as_slice() {
-        return Expression::parse(expression)?.evaluate(context);
+        return evaluate_part(expression, template, context);
     }
     evaluate_template(template, context).map(Value::Str)
+}
+
+/// Evaluates one `#{...}` part of a template, reporting errors against the whole template so that the
+/// message points at the configuration value the user wrote.
+fn evaluate_part(expression: &str, template: &str, context: &Context) -> Result<Value, SpelError> {
+    let attach = |mut error: SpelError| {
+        if error.expression != template {
+            error.message = format!("{} (in expression '{}')", error.message, error.expression);
+            error.expression = template.to_string();
+        }
+        error
+    };
+    let parsed = Expression::parse(expression).map_err(attach)?;
+    parsed.evaluate(context).map_err(attach)
 }
 
 /// Evaluates a template and converts the result into a string.

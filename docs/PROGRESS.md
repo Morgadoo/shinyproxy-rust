@@ -10,7 +10,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 | P0 | Foundations (workspace, toolchain, CI, fixture app) | ✅ | Rust 1.97.1 pinned, 4 crates, CI (fmt/clippy/test/build), `sp-testapp` fixture |
 | P1 | Configuration subsystem (Spring-compatible) | ✅ | tree/schema/loader, typed settings, warnings, instance id (Jackson-compatible hash), 13 fixture configs, generated docs/CONFIGURATION.md |
 | P2 | Domain model & spec provider | ✅ | runtime values (22 keys, Java flags), Proxy/Container with both JSON views, SpEL fields, ProxySpec/ContainerSpec with two-phase resolution, ShinyProxy notation → ProxySpec |
-| P3 | `spel` expression engine | ⬜ | |
+| P3 | `spel` expression engine | ✅ | lexer/parser/evaluator + template splitting, engine-side context (proxy/spec/user objects) and SpecResolver; cross-validated against Spring (0 mismatches, 2 documented supersets) |
 | P4 | HTTP shell, sessions, auth core, UI shell | ⬜ | |
 | P5 | Proxy lifecycle engine + `local` backend | ⬜ | |
 | P6 | Data plane (HTTP + WebSocket proxying, heartbeats) | ⬜ | |
@@ -27,14 +27,15 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 
 | Suite | Tests | Notes |
 | --- | --- | --- |
-| `containerproxy` unit | 76 | config tree/schema/loader/settings/warnings, canonical YAML, identifiers |
+| `containerproxy` unit | 81 | config tree/schema/loader/settings/warnings, canonical YAML, identifiers |
 | `containerproxy` golden | 2 | canonical YAML + SHA-1 vs Java reference output |
 | `shinyproxy` config fixtures | 15 | 13 realistic configurations (docker, kubernetes, openid, ldap, saml, HA, parameters, template groups, usage stats, ecs, proxy sharing, api security) |
 | `shinyproxy` docs/schema sync | 2 | generated CONFIGURATION.md + Java property inventory coverage |
 | `shinyproxy` unit | 13 | schema lookups, generated docs, spec conversion |
 | `shinyproxy` spec conversion | 3 | every fixture yields usable specs; docker/template-group details |
 | `testapp` fixture contract | 5 | routes used by the integration tests |
-| `spel` | 1 | placeholder until P3 |
+| `spel` | 40 | unit tests + 116 expression corpus cross-validated against Spring |
+| `containerproxy` expression context | 5 | Java context names, runtime values, end-to-end spec resolution |
 
 ## Ported Java test classes
 
