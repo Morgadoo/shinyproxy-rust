@@ -30,7 +30,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 | `containerproxy` unit | 167 | config tree/schema/loader/settings/warnings, canonical YAML, identifiers |
 | `containerproxy` golden | 2 | canonical YAML + SHA-1 vs Java reference output |
 | `containerproxy` dataplane (end to end) | 6 | streamed bodies, header forwarding, WebSocket + heartbeats, cache headers, injection, crashed app |
-| `shinyproxy` docker backend (end to end, `SP_TEST_DOCKER=1`) | 3 | container create request (labels, env, published ports), HTTP + WebSocket proxying, stop/cleanup, app recovery after a restart and the instanceId check |
+| `shinyproxy` docker backend (end to end, `SP_TEST_DOCKER=1`) | 4 | container create request (labels, env, published ports), HTTP + WebSocket proxying, stop/cleanup, pause/resume, app recovery after a restart and the instanceId check |
 | `shinyproxy` admin & api (end to end) | 9 | admin pages and assets, app transfer, custom app details, issue reporting validation, app_direct, api/route, delegate-proxy authorization |
 | `shinyproxy` app flow (end to end) | 5 | start app → status watch → app page → proxied HTTP/WebSocket → heartbeat → admin data → stop; ownership and limits |
 | `containerproxy` lifecycle (end to end) | 8 | real app processes: start/reachable/env vars/stop/cleanup, failed start, max instances, shutdown behaviour, events |

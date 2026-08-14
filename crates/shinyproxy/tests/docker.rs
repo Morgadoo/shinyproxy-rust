@@ -538,3 +538,121 @@ async fn does_not_recover_apps_of_another_configuration() {
     cleanup(&[proxy_id]).await;
     third.stop();
 }
+
+#[tokio::test]
+async fn apps_can_be_paused_and_resumed() {
+    if !enabled() {
+        eprintln!("skipping: set SP_TEST_DOCKER=1 to run the Docker tests");
+        return;
+    }
+
+    cleanup_all().await;
+    let instance = TestInstance::start(&config(24400, "", "")).await;
+    // the Docker backends are the only ones that can pause apps
+    assert!(instance.state.pause_supported);
+
+    let jack = instance.login("jack", "password").await;
+    let started: serde_json::Value = jack
+        .post(instance.url("/app_i/01_hello/_"))
+        .send()
+        .await
+        .expect("start request")
+        .json()
+        .await
+        .expect("json");
+    let proxy_id = started["data"]["id"]
+        .as_str()
+        .expect("proxy id")
+        .to_string();
+    let status: serde_json::Value = jack
+        .get(instance.url(&format!(
+            "/api/proxy/{proxy_id}/status?watch=true&timeout=60"
+        )))
+        .send()
+        .await
+        .expect("status request")
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(status["data"]["status"], "Up", "{status}");
+
+    // pausing stops the container but keeps it
+    let response = jack
+        .put(instance.url(&format!("/api/proxy/{proxy_id}/status")))
+        .json(&serde_json::json!({"status": "Pausing"}))
+        .send()
+        .await
+        .expect("pause request");
+    assert_eq!(response.status(), 200);
+
+    let mut paused = false;
+    for _ in 0..60 {
+        let status: serde_json::Value = jack
+            .get(instance.url(&format!("/api/proxy/{proxy_id}/status")))
+            .send()
+            .await
+            .expect("status request")
+            .json()
+            .await
+            .expect("json");
+        if status["data"]["status"] == "Paused" {
+            paused = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+    assert!(paused, "the app must reach the Paused status");
+
+    let container = inspect(&format!("sp-container-{proxy_id}-0")).await;
+    assert_eq!(
+        container["State"]["Running"], false,
+        "the container of a paused app is stopped but still exists"
+    );
+
+    // resuming starts the container again and the app is reachable
+    let response = jack
+        .put(instance.url(&format!("/api/proxy/{proxy_id}/status")))
+        .json(&serde_json::json!({"status": "Resuming"}))
+        .send()
+        .await
+        .expect("resume request");
+    assert_eq!(response.status(), 200);
+
+    let status: serde_json::Value = jack
+        .get(instance.url(&format!(
+            "/api/proxy/{proxy_id}/status?watch=true&timeout=60"
+        )))
+        .send()
+        .await
+        .expect("status request")
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(status["data"]["status"], "Up", "{status}");
+
+    let container = inspect(&format!("sp-container-{proxy_id}-0")).await;
+    assert_eq!(container["State"]["Running"], true);
+
+    let body = jack
+        .get(instance.url(&format!("/app_proxy/{proxy_id}/")))
+        .send()
+        .await
+        .expect("app request")
+        .text()
+        .await
+        .expect("body");
+    assert!(body.contains("sp-testapp"), "{body}");
+
+    // a resumed app can be stopped as usual
+    let response = jack
+        .put(instance.url(&format!("/api/proxy/{proxy_id}/status")))
+        .json(&serde_json::json!({"status": "Stopping"}))
+        .send()
+        .await
+        .expect("stop request");
+    assert_eq!(response.status(), 200);
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+    cleanup(&[proxy_id]).await;
+    instance.stop();
+}

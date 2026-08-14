@@ -221,7 +221,19 @@ pub async fn change_proxy_status(
                     proxy.status
                 ));
             }
-            fail("Pausing apps is not supported by this backend")
+            if !state.backend.supports_pause() {
+                return fail("Pausing apps is not supported by this backend");
+            }
+            // pausing takes a while, so the client is told to watch the status (as in Java)
+            let state_for_pause = state.clone();
+            let proxy_to_pause = proxy.clone();
+            tokio::spawn(async move {
+                state_for_pause.router.remove_mappings(&proxy_to_pause.id);
+                if let Err(error) = state_for_pause.proxies.pause_proxy(&proxy_to_pause).await {
+                    tracing::warn!("cannot pause proxy {}: {error}", proxy_to_pause.id);
+                }
+            });
+            success(serde_json::Value::Null)
         }
         "Resuming" => {
             if proxy.status != ProxyStatus::Paused {
@@ -230,7 +242,41 @@ pub async fn change_proxy_status(
                     proxy.status
                 ));
             }
-            fail("Resuming apps is not supported by this backend")
+            if !state.backend.supports_pause() {
+                return fail("Resuming apps is not supported by this backend");
+            }
+            // only the owner may resume an app (an admin may only stop it)
+            if !owner {
+                return forbidden();
+            }
+            let Some(spec) = proxy
+                .spec_id
+                .as_deref()
+                .and_then(|spec_id| state.specs.spec(spec_id))
+                .cloned()
+            else {
+                return fail("Cannot resume proxy because the app definition no longer exists");
+            };
+
+            // choosing parameters again while resuming arrives with the parameters feature (P9); the
+            // app is resumed with the parameters it was started with, which is what happens in Java
+            // when the request contains no parameters
+            let resuming = proxy.clone();
+
+            let state_for_resume = state.clone();
+            tokio::spawn(async move {
+                match state_for_resume
+                    .proxies
+                    .resume_proxy(&resuming, &spec)
+                    .await
+                {
+                    Ok(resumed) => state_for_resume.router.add_mappings(&resumed),
+                    Err(error) => {
+                        tracing::warn!("cannot resume proxy {}: {error}", resuming.id)
+                    }
+                }
+            });
+            success(serde_json::Value::Null)
         }
         _ => fail("Invalid status"),
     }

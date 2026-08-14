@@ -65,6 +65,9 @@ pub enum StartError {
     /// The proxy or spec does not exist.
     #[error("{0}")]
     NotFound(String),
+    /// The backend cannot do this (pausing and resuming apps).
+    #[error("{0}")]
+    Unsupported(String),
 }
 
 /// Runs and stops proxies.
@@ -327,6 +330,99 @@ impl ProxyService {
         });
         self.finish_action(&proxy.id);
         Ok(())
+    }
+
+    /// Pauses a proxy: the containers stay, but they are stopped and their ports are released
+    /// (`pauseProxy`, only supported by the Docker backends).
+    pub async fn pause_proxy(&self, proxy: &Proxy) -> Result<Proxy, StartError> {
+        if !self.backend.supports_pause() {
+            tracing::warn!(
+                "Trying to pause a proxy when the backend does not support pausing apps \
+                 [proxyId: {}]",
+                proxy.id
+            );
+            return Err(StartError::Unsupported(
+                "Trying to pause a proxy when the backend does not support pausing apps"
+                    .to_string(),
+            ));
+        }
+
+        self.actions_in_progress.insert(proxy.id.clone(), ());
+        let pausing = proxy.with_status(ProxyStatus::Pausing);
+        self.store.update_proxy(&pausing);
+
+        let result = match self.backend.pause_proxy(&pausing).await {
+            Ok(()) => {
+                let paused = pausing.with_status(ProxyStatus::Paused);
+                self.store.update_proxy(&paused);
+                tracing::info!("Proxy paused [proxyId: {}]", paused.id);
+                self.events.publish(Event::ProxyPaused {
+                    proxy: Box::new(paused.clone()),
+                });
+                Ok(paused)
+            }
+            Err(error) => {
+                tracing::error!("Failed to pause proxy [proxyId: {}]: {error}", proxy.id);
+                // the proxy stays in Pausing, exactly as in the Java implementation
+                Err(StartError::Backend(error.to_string()))
+            }
+        };
+        self.finish_action(&proxy.id);
+        result
+    }
+
+    /// Resumes a paused proxy (`resumeProxy`).
+    pub async fn resume_proxy(&self, proxy: &Proxy, spec: &ProxySpec) -> Result<Proxy, StartError> {
+        if !self.backend.supports_pause() {
+            tracing::warn!(
+                "Trying to resume a proxy when the backend does not support pausing apps \
+                 [proxyId: {}]",
+                proxy.id
+            );
+            return Err(StartError::Unsupported(
+                "Trying to resume a proxy when the backend does not support pausing apps"
+                    .to_string(),
+            ));
+        }
+
+        self.actions_in_progress.insert(proxy.id.clone(), ());
+        let mut resuming = proxy.with_status(ProxyStatus::Resuming);
+        self.store.update_proxy(&resuming);
+
+        let result = match self.backend.resume_proxy(&resuming, spec).await {
+            Ok(started) => {
+                // the published ports changed, so the targets are replaced
+                if !started.targets.is_empty() {
+                    resuming.targets.clear();
+                    for (mapping, target) in started.targets {
+                        resuming.targets.insert(mapping, target);
+                    }
+                }
+                if !self.wait_until_reachable(&resuming).await {
+                    tracing::warn!(
+                        "Proxy failed to resume: container did not respond in time [proxyId: {}]",
+                        resuming.id
+                    );
+                    self.store.update_proxy(&resuming);
+                    self.finish_action(&proxy.id);
+                    return Err(StartError::Timeout);
+                }
+                let up = resuming.with_status(ProxyStatus::Up);
+                self.store.update_proxy(&up);
+                self.heartbeats.update(&up.id, now_millis());
+                tracing::info!("Proxy resumed [proxyId: {}]", up.id);
+                self.events.publish(Event::ProxyResumed {
+                    proxy: Box::new(up.clone()),
+                });
+                Ok(up)
+            }
+            Err(error) => {
+                tracing::warn!("Proxy failed to resume [proxyId: {}]: {error}", proxy.id);
+                Err(StartError::Backend(error.to_string()))
+            }
+        };
+        self.finish_action(&proxy.id);
+        result
     }
 
     /// Stops every proxy, used when the server shuts down (`proxy.stop-proxies-on-shutdown`).

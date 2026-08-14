@@ -784,7 +784,8 @@ impl ContainerBackend for DockerBackend {
                     BackendError::Backend(format!("cannot resume container {id}: {error}"))
                 })?;
 
-            // the published ports changed, so the targets are rebuilt from the container itself
+            // the host ports of a restarted container are the ones of its configuration, but they were
+            // released while the app was paused, so they are claimed again and the targets are rebuilt
             let info = self
                 .client
                 .inspect_container(id, None::<InspectContainerOptions>)
@@ -792,11 +793,13 @@ impl ContainerBackend for DockerBackend {
                 .map_err(|error| {
                     BackendError::Backend(format!("cannot inspect container {id}: {error}"))
                 })?;
-            let bindings = info
+            let mut host_ports: BTreeMap<i64, u16> = BTreeMap::new();
+            for (port, binding) in info
                 .network_settings
+                .clone()
                 .and_then(|settings| settings.ports)
-                .unwrap_or_default();
-            for (port, binding) in bindings {
+                .unwrap_or_default()
+            {
                 let Some(host_port) = binding
                     .and_then(|bindings| bindings.first().cloned())
                     .and_then(|binding| binding.host_port)
@@ -804,19 +807,43 @@ impl ContainerBackend for DockerBackend {
                 else {
                     continue;
                 };
-                let container_port: i64 = port
-                    .split('/')
-                    .next()
-                    .and_then(|port| port.parse().ok())
-                    .unwrap_or_default();
+                let Some(container_port) =
+                    port.split('/').next().and_then(|port| port.parse().ok())
+                else {
+                    continue;
+                };
                 self.port_allocator.add_existing_port(&proxy.id, host_port);
+                host_ports.insert(container_port, host_port);
+            }
+
+            // the names and paths of the mappings are stored on the container, so the targets look
+            // exactly like they did before the app was paused
+            let mappings: crate::service::runtime_values::PortMappings = container
+                .runtime_values
+                .get(&crate::model::runtime_value::PORT_MAPPINGS)
+                .and_then(|value| value.data.parse_json())
+                .unwrap_or_default();
+            let hostname = if self.config.internal_networking {
+                self.internal_hostname(id).await?
+            } else {
+                self.config.target_host.clone()
+            };
+            for mapping in &mappings.port_mappings {
+                let port = if self.config.internal_networking {
+                    mapping.port as u16
+                } else {
+                    match host_ports.get(&mapping.port) {
+                        Some(host_port) => *host_port,
+                        None => continue,
+                    }
+                };
                 targets.insert(
-                    container_port.to_string(),
+                    mapping_key_to_path(&mapping.name),
                     target_url(
                         &self.config.target_protocol,
-                        &self.config.target_host,
-                        host_port,
-                        "",
+                        &hostname,
+                        port,
+                        &mapping.target_path,
                     ),
                 );
             }
