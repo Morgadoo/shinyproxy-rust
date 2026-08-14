@@ -236,6 +236,144 @@ pub async fn change_proxy_status(
     }
 }
 
+/// Body of `PUT /api/proxy/{id}/userId`.
+#[derive(Debug, Deserialize)]
+pub struct ChangeUserIdBody {
+    /// The user the app is transferred to.
+    #[serde(rename = "userId")]
+    pub user_id: Option<String>,
+}
+
+/// `PUT /api/proxy/{id}/userId` — transfers an app to another user (`ProxyApiController`).
+pub async fn change_proxy_user_id(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(CurrentUser(user)): axum::Extension<CurrentUser>,
+    Path(proxy_id): Path<String>,
+    Json(body): Json<ChangeUserIdBody>,
+) -> Response {
+    if !state.settings.proxy.allow_transfer_app() {
+        return forbidden();
+    }
+
+    // ownership is checked before validation, so that the answer does not leak whether the app exists
+    let Some(proxy) = state
+        .proxies
+        .proxy(&proxy_id)
+        .filter(|proxy| is_owner(&state, user.as_ref(), proxy))
+    else {
+        return forbidden();
+    };
+
+    let Some(new_user_id) = body.user_id.filter(|value| !value.trim().is_empty()) else {
+        return fail("Cannot transfer app because no userId is provided in the request");
+    };
+
+    if proxy.status != ProxyStatus::Up {
+        return fail(&format!(
+            "Cannot transfer app because it is not in Up status (status is {})",
+            proxy.status
+        ));
+    }
+
+    if state.username_equals(proxy.user_id.as_deref().unwrap_or_default(), &new_user_id) {
+        return fail("Cannot transfer app because the proxy is already owned by this user");
+    }
+
+    // the instance is renamed so that the new owner does not get a name clash
+    let instance = proxy
+        .runtime_value(&crate::runtime_values::APP_INSTANCE)
+        .unwrap_or_else(|| crate::runtime_values::DEFAULT_INSTANCE.to_string());
+    let instance = crate::runtime_values::instance_display_name(&instance).to_string();
+    let mut new_instance = format!("{}-{instance}", proxy.user_id.clone().unwrap_or_default());
+    new_instance.truncate(64);
+
+    let mut transferred = proxy.clone();
+    transferred.user_id = Some(new_user_id);
+    transferred.add_runtime_value(
+        containerproxy::model::runtime_value::RuntimeValue::string(
+            &crate::runtime_values::APP_INSTANCE,
+            new_instance,
+        ),
+        true,
+    );
+
+    // remove and add so that the indexes of the store are rebuilt
+    state.store.remove_proxy(&proxy);
+    state.store.add_proxy(&transferred);
+
+    success(serde_json::Value::Null)
+}
+
+/// `GET /api/proxy/{id}/details` — the custom app details, with their expressions resolved.
+pub async fn proxy_details(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(CurrentUser(user)): axum::Extension<CurrentUser>,
+    Path(proxy_id): Path<String>,
+) -> Response {
+    let Some(proxy) = state
+        .proxies
+        .proxy(&proxy_id)
+        .filter(|proxy| is_owner(&state, user.as_ref(), proxy))
+    else {
+        return app_stopped();
+    };
+
+    let details: Vec<crate::spec_provider::CustomAppDetail> = proxy
+        .runtime_values
+        .get(&crate::runtime_values::CUSTOM_APP_DETAILS)
+        .and_then(|value| value.data.parse_json())
+        .unwrap_or_default();
+    if details.is_empty() {
+        return success(json!([]));
+    }
+
+    let spec = proxy
+        .spec_id
+        .as_deref()
+        .and_then(|spec_id| state.specs.spec(spec_id))
+        .cloned();
+    let resolver = state.resolver_for_proxy(user.as_ref(), &proxy, spec.as_ref());
+
+    let resolved: Vec<serde_json::Value> = details
+        .into_iter()
+        .map(|detail| {
+            let value = match &detail.value {
+                Some(raw) => match resolver.evaluate_to_string(raw) {
+                    Ok(value) => Some(value),
+                    Err(error) => {
+                        tracing::warn!(
+                            "Error while resolving CustomAppDetail expression '{}': {error}",
+                            detail.name.clone().unwrap_or_default()
+                        );
+                        detail.value.clone()
+                    }
+                },
+                None => None,
+            };
+            json!({"name": detail.name, "description": detail.description, "value": value})
+        })
+        .collect();
+
+    success(json!(resolved))
+}
+
+/// The 410 answer for apps that are gone.
+fn app_stopped() -> Response {
+    (
+        StatusCode::GONE,
+        Json(json!({"status": "fail", "message": "app_stopped_or_non_existent"})),
+    )
+        .into_response()
+}
+
+/// `DELETE /admin/delegate-proxy` — removes the pre-initialized containers (admin only).
+///
+/// Container pre-initialization lands in P12; until then the endpoint answers successfully because there
+/// is nothing to remove, which is also what a deployment without pre-initialization does in Java.
+pub async fn remove_delegate_proxies(State(_state): State<Arc<AppState>>) -> Response {
+    success(serde_json::Value::Null)
+}
+
 /// `GET /admin/data` — the proxies of all users (admin only).
 pub async fn admin_data(State(state): State<Arc<AppState>>) -> Response {
     let proxies: Vec<serde_json::Value> = state

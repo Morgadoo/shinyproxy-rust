@@ -74,6 +74,31 @@ pub fn router(state: Arc<AppState>) -> Router {
             &path("/heartbeat/{proxy}"),
             get(super::apps::heartbeat_info).post(super::apps::heartbeat),
         )
+        // apps that are embedded elsewhere: started on demand and proxied directly
+        .route(&path("/app_direct/{app}"), any(super::apps::app_direct))
+        .route(&path("/app_direct/{app}/"), any(super::apps::app_direct))
+        .route(
+            &path("/app_direct/{app}/{*rest}"),
+            any(super::apps::app_direct),
+        )
+        .route(
+            &path("/app_direct_i/{app}/{instance}"),
+            any(super::apps::app_direct),
+        )
+        .route(
+            &path("/app_direct_i/{app}/{instance}/"),
+            any(super::apps::app_direct),
+        )
+        .route(
+            &path("/app_direct_i/{app}/{instance}/{*rest}"),
+            any(super::apps::app_direct),
+        )
+        .route(&path("/api/route/{target}"), any(super::apps::api_route))
+        .route(&path("/api/route/{target}/"), any(super::apps::api_route))
+        .route(
+            &path("/api/route/{target}/{*rest}"),
+            any(super::apps::api_route),
+        )
         // --- api ---
         .route(&path("/api/proxyspec"), get(super::api::proxy_specs))
         .route(&path("/api/proxyspec/{spec}"), get(super::api::proxy_spec))
@@ -83,6 +108,21 @@ pub fn router(state: Arc<AppState>) -> Router {
             &path("/api/proxy/{proxy}/status"),
             get(super::api::proxy_status).put(super::api::change_proxy_status),
         )
+        .route(
+            &path("/api/proxy/{proxy}/userId"),
+            axum::routing::put(super::api::change_proxy_user_id),
+        )
+        .route(
+            &path("/api/proxy/{proxy}/details"),
+            get(super::api::proxy_details),
+        )
+        .route(
+            &path("/admin/delegate-proxy"),
+            axum::routing::delete(super::api::remove_delegate_proxies),
+        )
+        .route(&path("/issue"), post(super::issue::report_issue))
+        .route(&path("/admin"), get(super::admin::admin_page))
+        .route(&path("/admin/about"), get(super::admin::about_page))
         .route(&path("/admin/data"), get(super::api::admin_data))
         .route(&path("/login"), get(login_page).post(login_submit))
         .route(&path("/logout"), get(logout).post(logout))

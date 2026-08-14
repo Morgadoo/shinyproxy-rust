@@ -177,6 +177,25 @@ impl AppState {
         SpelResolver::new(builder.build())
     }
 
+    /// Builds an expression resolver for a running proxy (custom app details, issue reports).
+    pub fn resolver_for_proxy(
+        &self,
+        user: Option<&AuthenticatedUser>,
+        proxy: &containerproxy::model::proxy::Proxy,
+        spec: Option<&ProxySpec>,
+    ) -> SpelResolver {
+        let mut builder = ExpressionContextBuilder::new()
+            .process_environment()
+            .proxy(proxy.clone());
+        if let Some(user) = user {
+            builder = builder.user(user.to_user_context());
+        }
+        if let Some(spec) = spec {
+            builder = builder.spec(spec.clone());
+        }
+        SpelResolver::new(builder.build())
+    }
+
     /// The title of the UI, with expressions resolved (`proxy.title`).
     pub fn resolve_title(&self, user: Option<&AuthenticatedUser>) -> String {
         let title = self.settings.proxy.title();

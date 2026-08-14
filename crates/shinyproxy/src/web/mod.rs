@@ -21,8 +21,10 @@
 
 //! The ShinyProxy web layer: state, page models and request handlers.
 
+pub mod admin;
 pub mod api;
 pub mod apps;
+pub mod issue;
 pub mod model;
 pub mod router;
 pub mod server;

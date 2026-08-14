@@ -627,6 +627,276 @@ async fn app_crashed_or_stopped(state: &Arc<AppState>, proxy: &Proxy) -> Respons
     }
 }
 
+/// `ANY /app_direct/{app}/**` and `/app_direct_i/{app}/{instance}/**` — proxy that starts the app.
+///
+/// Used for embedding an app somewhere else: the app is started if it does not exist yet and the request
+/// is proxied once it is up (`AppDirectController`). Parameters and resuming are not supported here,
+/// exactly as in the Java implementation.
+pub async fn app_direct(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(CurrentUser(user)): axum::Extension<CurrentUser>,
+    request: Request,
+) -> Response {
+    let context = state.context_path_with_slash();
+    let path = request.uri().path().to_string();
+
+    let Some(info) = AppRequestInfo::parse(&path, &context) else {
+        return (StatusCode::FORBIDDEN, "Forbidden\n").into_response();
+    };
+
+    // the URL must end with a slash, otherwise relative links of the app break
+    let Some(sub_path) = info.sub_path.clone() else {
+        let mut target = path.clone();
+        target.push('/');
+        if let Some(query) = request.uri().query() {
+            target.push('?');
+            target.push_str(query);
+        }
+        return Redirect::to(&target).into_response();
+    };
+
+    let Some(user) = user else {
+        return (StatusCode::FORBIDDEN, "Forbidden\n").into_response();
+    };
+
+    let mut proxy = find_user_proxy(&state, Some(&user), &info.app_name, &info.app_instance);
+    if proxy.is_none() {
+        let Some(spec) = state
+            .specs
+            .spec(&info.app_name)
+            .cloned()
+            .filter(|spec| state.can_access(Some(&user), spec))
+        else {
+            return (StatusCode::FORBIDDEN, "Forbidden\n").into_response();
+        };
+
+        // max-instances per user and app
+        let max_instances = state
+            .max_instances(Some(&user))
+            .get(&info.app_name)
+            .copied()
+            .unwrap_or(1);
+        if max_instances >= 0
+            && state
+                .proxies
+                .user_proxies_by_spec(&user.id, &info.app_name)
+                .len() as i64
+                >= max_instances
+        {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Cannot start new proxy because the maximum amount of instances of this proxy has been reached\n",
+            )
+                .into_response();
+        }
+
+        let proxy_id = uuid::Uuid::new_v4().to_string();
+        let mut runtime_values =
+            shinyproxy_runtime_values(&state, &spec, &info.app_instance, &proxy_id, None);
+        // app_direct serves the app under its own path instead of /app_proxy
+        runtime_values.retain(|value| value.key.env_var != PUBLIC_PATH.env_var);
+        runtime_values.push(RuntimeValue::string(
+            &PUBLIC_PATH,
+            format!(
+                "{context}app_direct_i/{}/{}",
+                info.app_name, info.app_instance
+            ),
+        ));
+
+        let created = match state.proxies.create_proxy(
+            &proxy_id,
+            &user.to_user_context(),
+            &spec,
+            runtime_values,
+        ) {
+            Ok(created) => created,
+            Err(error) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to start app {}: {error}\n", info.app_name),
+                )
+                    .into_response()
+            }
+        };
+
+        match state
+            .proxies
+            .start_proxy(created, &spec, &user.to_user_context())
+            .await
+        {
+            Ok(started) => {
+                state.router.add_mappings(&started);
+                proxy = Some(started);
+            }
+            Err(error) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to start app {}: {error}\n", info.app_name),
+                )
+                    .into_response()
+            }
+        }
+    }
+
+    let Some(proxy) = proxy else {
+        return app_stopped_response();
+    };
+
+    // wait for an app that is still starting (the Java implementation waits up to 10 minutes)
+    let proxy = match wait_until_up(&state, &proxy).await {
+        Some(proxy) => proxy,
+        None => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to start app {}\n", info.app_name),
+            )
+                .into_response()
+        }
+    };
+
+    let Some(resolved) = state.router.resolve(&proxy, &sub_path) else {
+        return app_stopped_response();
+    };
+    let url = resolved.url(request.uri().query());
+    forward_to_app(&state, &proxy, request, &url).await
+}
+
+/// Waits until a proxy is up, giving up after ten minutes (as in `AppDirectController`).
+async fn wait_until_up(state: &Arc<AppState>, proxy: &Proxy) -> Option<Proxy> {
+    if proxy.status == ProxyStatus::Up {
+        return Some(proxy.clone());
+    }
+    for _ in 0..600 {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        match state.proxies.proxy(&proxy.id) {
+            Some(current) if current.status == ProxyStatus::Up => return Some(current),
+            Some(current) if current.status == ProxyStatus::New => continue,
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// `ANY /api/route/{targetId}/**` — the raw proxy route used by embedded clients.
+pub async fn api_route(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(CurrentUser(user)): axum::Extension<CurrentUser>,
+    request: Request,
+) -> Response {
+    let context = state.context_path_with_slash();
+    let prefix = format!("{context}api/route/");
+    let Some(rest) = request.uri().path().strip_prefix(&prefix) else {
+        return app_stopped_response();
+    };
+    let (target_id, sub_path) = match rest.split_once('/') {
+        Some((target_id, sub_path)) => (target_id.to_string(), sub_path.to_string()),
+        None => (rest.to_string(), String::new()),
+    };
+
+    let Some(proxy) = find_proxy_by_target(&state, user.as_ref(), &target_id) else {
+        return app_stopped_response();
+    };
+    if proxy.status.is_unavailable() {
+        return app_stopped_response();
+    }
+    let Some(resolved) = state.router.resolve(&proxy, &sub_path) else {
+        return app_stopped_response();
+    };
+    let url = resolved.url(request.uri().query());
+    forward_to_app(&state, &proxy, request, &url).await
+}
+
+/// Forwards a request to an app, without the iframe script injection.
+async fn forward_to_app(
+    state: &Arc<AppState>,
+    proxy: &Proxy,
+    request: Request,
+    url: &str,
+) -> Response {
+    let method = request.method().clone();
+    let options = ForwardOptions {
+        extra_headers: proxy_headers(proxy),
+        force_identity_encoding: false,
+    };
+    let heartbeat_rate =
+        Duration::from_millis(state.settings.proxy.heartbeat_rate_ms().max(1) as u64);
+    let observer: Arc<dyn TunnelObserver> = Arc::new(HeartbeatObserver {
+        state: state.clone(),
+        proxy_id: proxy.id.clone(),
+    });
+    state.heartbeats.update(&proxy.id, now_millis());
+
+    match proxy_upgrade(request, url, &options, heartbeat_rate, observer).await {
+        Ok(mut response) => {
+            if response.status() == StatusCode::SERVICE_UNAVAILABLE {
+                return app_crashed_or_stopped(state, proxy).await;
+            }
+            let mode = proxy
+                .runtime_value(&runtime_value::CACHE_HEADERS_MODE)
+                .as_deref()
+                .and_then(parse_cache_headers_mode)
+                .unwrap_or(CacheHeadersMode::EnforceNoCache);
+            cache_headers::apply(mode, &method, response.headers_mut());
+            response
+        }
+        Err(error) => {
+            tracing::info!("Failed request to {url} [proxyId: {}]: {error}", proxy.id);
+            app_crashed_or_stopped(state, proxy).await
+        }
+    }
+}
+
+/// The app name, instance and sub path of an `/app`, `/app_i`, `/app_direct` or `/app_direct_i` URL.
+///
+/// Mirrors `AppRequestInfo.fromURI`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppRequestInfo {
+    /// Name of the app.
+    pub app_name: String,
+    /// Name of the instance (`_` when the URL has none).
+    pub app_instance: String,
+    /// The path inside the app, `None` when the URL does not end with a slash.
+    pub sub_path: Option<String>,
+}
+
+impl AppRequestInfo {
+    /// Parses a request path.
+    pub fn parse(path: &str, context_path: &str) -> Option<Self> {
+        let path = path.strip_prefix(context_path).unwrap_or(path);
+        let path = path.trim_start_matches('/');
+        let mut segments = path.split('/');
+        let prefix = segments.next()?;
+        let with_instance = matches!(prefix, "app_i" | "app_direct_i");
+        if !matches!(prefix, "app" | "app_i" | "app_direct" | "app_direct_i") {
+            return None;
+        }
+
+        let app_name = segments.next().filter(|name| !name.is_empty())?.to_string();
+        let app_instance = if with_instance {
+            let instance = segments.next().filter(|name| !name.is_empty())?;
+            if instance.len() > 64 || !is_valid_instance_name(instance) {
+                return None;
+            }
+            instance.to_string()
+        } else {
+            DEFAULT_INSTANCE.to_string()
+        };
+
+        let rest: Vec<&str> = segments.collect();
+        let sub_path = if rest.is_empty() {
+            None
+        } else {
+            Some(rest.join("/"))
+        };
+
+        Some(AppRequestInfo {
+            app_name,
+            app_instance,
+            sub_path,
+        })
+    }
+}
+
 /// `POST /heartbeat/{proxyId}` — forces a heartbeat.
 pub async fn heartbeat(
     State(state): State<Arc<AppState>>,

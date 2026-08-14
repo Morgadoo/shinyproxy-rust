@@ -93,6 +93,16 @@ types. Allow-listed static types: `java.lang.System.getenv`, `java.lang.String.v
 | Fatal configurations | `store-mode: Redis` + app recovery aborts startup | ✅ |
 | Panics | A panic inside a request or task does not terminate the server (`panic = "unwind"`), matching the Java thread-per-request behaviour | 🟨 |
 
+## Pages and endpoints
+
+| Topic | Behaviour | Status |
+| --- | --- | --- |
+| `/admin/about` | The Java page lists JVM version, JVM arguments and heap sizes. This implementation is a native binary and shows the equivalent rows instead: implementation/compatibility, build (version, rustc, profile), process arguments, resident memory, container backend and authentication backend | 🟨 deliberate deviation |
+| `POST /issue` | Same validation and mail body as Java (incl. per-app recipient/subject). Container log **attachments** land with log collection in P10; until then the log paths are mentioned in the body, which is what Java does when the files do not exist | 🟨 |
+| `DELETE /admin/delegate-proxy` | Answers successfully; there is nothing to remove until container pre-initialization lands in P12 | 🟨 |
+| `PUT /api/proxy/{id}/status` with `Pausing`/`Resuming` | Answers `fail` with "not supported by this backend"; pausing arrives with the Docker backend in P8 | 🟨 |
+| `/app_direct[_i]/**` | Starts the app on demand, waits up to 10 minutes and proxies without injecting the iframe script, as in Java | ✅ |
+
 ## Not yet implemented
 
 Everything in [PROGRESS.md](PROGRESS.md) that is not marked ✅. Properties whose behaviour is not
