@@ -29,10 +29,13 @@
 #![forbid(unsafe_code)]
 
 pub mod auth;
+pub mod backend;
 pub mod config;
+pub mod events;
 pub mod model;
 pub mod service;
 pub mod spec;
+pub mod store;
 pub mod util;
 pub mod web;
 

@@ -22,5 +22,9 @@
 //! Services: the stateful components of the engine.
 
 pub mod identifier;
+pub mod proxy_service;
+pub mod runtime_values;
 
 pub use identifier::Identifiers;
+pub use proxy_service::{ProxyService, StartError};
+pub use runtime_values::{PortMappings, RuntimeValueService};

@@ -1,0 +1,201 @@
+/*
+ * ShinyProxy
+ *
+ * Copyright (C) 2016-2026 Open Analytics
+ *
+ * ===========================================================================
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the Apache License as published by
+ * The Apache Software Foundation, either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * Apache License for more details.
+ *
+ * You should have received a copy of the Apache License
+ * along with this program.  If not, see <http://www.apache.org/licenses/>
+ */
+
+//! Container backends: what actually runs an app.
+//!
+//! `proxy.container-backend` selects the backend (`docker` by default, `docker-swarm`, `kubernetes`,
+//! `ecs`, and the test-only `local` backend of this implementation). The trait mirrors
+//! `IContainerBackend`.
+
+pub mod local;
+pub mod ports;
+pub mod target;
+
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+use async_trait::async_trait;
+
+use crate::config::Settings;
+use crate::model::proxy::{Container, Proxy};
+use crate::model::runtime_value::RuntimeValues;
+use crate::model::spec::{ContainerSpec, ProxySpec};
+use crate::spec::expression::UserContext;
+
+pub use ports::PortAllocator;
+pub use target::{compute_target_path, mapping_key_to_path, DEFAULT_MAPPING_KEY};
+
+/// Everything a backend needs to start a container.
+pub struct StartContext<'a> {
+    /// The user the app is started for.
+    pub user: Option<&'a UserContext>,
+    /// The proxy the container belongs to.
+    pub proxy: &'a Proxy,
+    /// The app definition (with expressions resolved).
+    pub spec: &'a ProxySpec,
+    /// The definition of this container.
+    pub container_spec: &'a ContainerSpec,
+    /// The container that is being started (index and runtime values are already set).
+    pub container: &'a Container,
+    /// Environment variables to inject (runtime values + `container-env` + env file).
+    pub environment: BTreeMap<String, String>,
+    /// Labels/annotations to set (runtime values + `labels`).
+    pub labels: BTreeMap<String, String>,
+}
+
+/// The result of starting a container.
+#[derive(Debug, Clone, Default)]
+pub struct StartedContainer {
+    /// Backend specific id of the container.
+    pub id: Option<String>,
+    /// Runtime values the backend added (e.g. the backend container name).
+    pub runtime_values: RuntimeValues,
+    /// Targets of the proxy: mapping name (`""` for the default mapping) to URL.
+    pub targets: BTreeMap<String, String>,
+}
+
+/// Information about a container that already exists, used by app recovery.
+#[derive(Debug, Clone)]
+pub struct ExistingContainerInfo {
+    /// Backend specific id.
+    pub id: String,
+    /// Runtime values parsed from the labels/annotations.
+    pub runtime_values: RuntimeValues,
+    /// Image of the container.
+    pub image: Option<String>,
+    /// Container port to host port mapping.
+    pub port_bindings: BTreeMap<u16, u16>,
+}
+
+/// Errors of a container backend.
+#[derive(Debug, thiserror::Error)]
+pub enum BackendError {
+    /// The container could not be created or started.
+    #[error("{0}")]
+    FailedToStart(String),
+    /// The backend does not support this operation (e.g. pausing).
+    #[error("this backend does not support {0}")]
+    Unsupported(&'static str),
+    /// Something went wrong while talking to the backend.
+    #[error("backend error: {0}")]
+    Backend(String),
+}
+
+/// What runs the apps.
+#[async_trait]
+pub trait ContainerBackend: Send + Sync + std::fmt::Debug {
+    /// Name as used by `proxy.container-backend`.
+    fn name(&self) -> &'static str;
+
+    /// Whether apps can be paused and resumed (only the Docker backends can).
+    fn supports_pause(&self) -> bool {
+        false
+    }
+
+    /// Whether `is_proxy_healthy` gives a meaningful answer for this backend.
+    fn supports_health_check(&self) -> bool {
+        false
+    }
+
+    /// Starts one container of a proxy.
+    async fn start_container(
+        &self,
+        context: StartContext<'_>,
+    ) -> Result<StartedContainer, BackendError>;
+
+    /// Stops all containers of a proxy; must be idempotent.
+    async fn stop_proxy(&self, proxy: &Proxy) -> Result<(), BackendError>;
+
+    /// Pauses a proxy (keeping its containers).
+    async fn pause_proxy(&self, _proxy: &Proxy) -> Result<(), BackendError> {
+        Err(BackendError::Unsupported("pausing apps"))
+    }
+
+    /// Resumes a paused proxy.
+    async fn resume_proxy(
+        &self,
+        _proxy: &Proxy,
+        _spec: &ProxySpec,
+    ) -> Result<StartedContainer, BackendError> {
+        Err(BackendError::Unsupported("resuming apps"))
+    }
+
+    /// Whether the containers of the proxy are still running.
+    async fn is_proxy_healthy(&self, _proxy: &Proxy) -> Result<bool, BackendError> {
+        Ok(true)
+    }
+
+    /// Containers that already exist, used by app recovery.
+    async fn scan_existing_containers(&self) -> Result<Vec<ExistingContainerInfo>, BackendError> {
+        Ok(Vec::new())
+    }
+}
+
+/// The configured container backend is not implemented yet.
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "container backend '{name}' is not supported yet by this implementation (supported: local); \
+     see docs/PROGRESS.md for the phase that adds it"
+)]
+pub struct UnsupportedBackend {
+    /// The configured value of `proxy.container-backend`.
+    pub name: String,
+}
+
+/// Creates the configured container backend.
+pub fn create(
+    settings: &Settings,
+    port_allocator: Arc<PortAllocator>,
+) -> Result<Arc<dyn ContainerBackend>, UnsupportedBackend> {
+    match settings
+        .proxy
+        .container_backend()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "local" => Ok(Arc::new(local::LocalBackend::new(settings, port_allocator))),
+        other => Err(UnsupportedBackend {
+            name: other.to_string(),
+        }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn creates_the_local_backend() {
+        let settings: Settings =
+            serde_yaml_ng::from_str("proxy:\n  container-backend: local\n").unwrap();
+        let backend = create(&settings, Arc::new(PortAllocator::new(20000, None))).unwrap();
+        assert_eq!(backend.name(), "local");
+        assert!(!backend.supports_pause());
+    }
+
+    #[test]
+    fn reports_unsupported_backends() {
+        let settings = Settings::default(); // docker is the default
+        let error = create(&settings, Arc::new(PortAllocator::new(20000, None))).unwrap_err();
+        assert!(error.to_string().contains("docker"), "{error}");
+        assert!(error.to_string().contains("not supported yet"), "{error}");
+    }
+}

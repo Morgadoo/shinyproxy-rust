@@ -12,7 +12,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 | P2 | Domain model & spec provider | ✅ | runtime values (22 keys, Java flags), Proxy/Container with both JSON views, SpEL fields, ProxySpec/ContainerSpec with two-phase resolution, ShinyProxy notation → ProxySpec |
 | P3 | `spel` expression engine | ✅ | lexer/parser/evaluator + template splitting, engine-side context (proxy/spec/user objects) and SpecResolver; cross-validated against Spring (0 mismatches, 2 documented supersets) |
 | P4 | HTTP shell, sessions, auth core, UI shell | ✅ | axum server (context path, sessions, security headers, authorization), none/simple auth with CSRF login, embedded assets, index/login/error pages ported from Thymeleaf, verified in a browser |
-| P5 | Proxy lifecycle engine + `local` backend | ⬜ | |
+| P5 | Proxy lifecycle engine + `local` backend | 🟨 | engine done (store, events, backend trait, port allocator, local backend, runtime values, ProxyService with 8 end-to-end lifecycle tests); wiring into the UI/API follows with P6/P7 |
 | P6 | Data plane (HTTP + WebSocket proxying, heartbeats) | ⬜ | |
 | P7 | REST API parity | ⬜ | |
 | P8 | Docker & Docker Swarm backends | ⬜ | |
@@ -27,8 +27,9 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 
 | Suite | Tests | Notes |
 | --- | --- | --- |
-| `containerproxy` unit | 81 | config tree/schema/loader/settings/warnings, canonical YAML, identifiers |
+| `containerproxy` unit | 144 | config tree/schema/loader/settings/warnings, canonical YAML, identifiers |
 | `containerproxy` golden | 2 | canonical YAML + SHA-1 vs Java reference output |
+| `containerproxy` lifecycle (end to end) | 8 | real app processes: start/reachable/env vars/stop/cleanup, failed start, max instances, shutdown behaviour, events |
 | `shinyproxy` config fixtures | 15 | 13 realistic configurations (docker, kubernetes, openid, ldap, saml, HA, parameters, template groups, usage stats, ecs, proxy sharing, api security) |
 | `shinyproxy` docs/schema sync | 2 | generated CONFIGURATION.md + Java property inventory coverage |
 | `shinyproxy` unit | 22 | schema lookups, generated docs, spec conversion, page model, state (access control, admin, max instances, logos) |
