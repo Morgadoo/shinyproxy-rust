@@ -481,25 +481,65 @@ async fn error_page(
 
 /// `GET /favicon.ico` and `GET /{instanceId}/favicon` (`FaviconController`).
 async fn favicon(State(state): State<Arc<AppState>>) -> Response {
-    serve_favicon(&state)
+    serve_favicon(&state, None, None)
 }
 
-fn serve_favicon(state: &AppState) -> Response {
-    if let Some(path) = &state.settings.proxy.favicon_path {
-        match std::fs::read(path) {
-            Ok(data) => {
-                let mime = mime_guess::from_path(path).first_or_octet_stream();
-                return ([(header::CONTENT_TYPE, mime.to_string())], data).into_response();
-            }
-            Err(error) => tracing::warn!("cannot read proxy.favicon-path {path}: {error}"),
+/// Serves the favicon of ShinyProxy or of one app (`/{instanceId}/favicon/{specId}`).
+///
+/// Per-app favicons fall back to the configured default; an unknown or inaccessible app gives 403 and a
+/// missing favicon gives 404 without a body (so that browsers do not log a JSON parse error), which is
+/// what the Java `FaviconController` does.
+fn serve_favicon(
+    state: &AppState,
+    spec_id: Option<&str>,
+    user: Option<&AuthenticatedUser>,
+) -> Response {
+    let mut path = state.settings.proxy.favicon_path.clone();
+
+    if let Some(spec_id) = spec_id {
+        let Some(spec) = state.specs.spec(spec_id) else {
+            return StatusCode::FORBIDDEN.into_response();
+        };
+        if !state.can_access(user, spec) {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+        if let Some(spec_favicon) = &spec.favicon_path {
+            path = Some(spec_favicon.clone());
         }
     }
-    // ShinyProxy has no default favicon; the browser falls back to none (as in Java)
-    (StatusCode::NOT_FOUND, "not found\n").into_response()
+
+    let Some(path) = path else {
+        // ShinyProxy has no built-in favicon
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    match std::fs::read(&path) {
+        Ok(data) => (
+            [
+                (
+                    header::CONTENT_TYPE,
+                    mime_guess::from_path(&path)
+                        .first_or_octet_stream()
+                        .to_string(),
+                ),
+                (header::CACHE_CONTROL, "max-age=86400".to_string()),
+            ],
+            data,
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::warn!("Error while reading favicon {path}: {error}");
+            StatusCode::NOT_FOUND.into_response()
+        }
+    }
 }
 
 /// Serves embedded assets, both with and without the instance id prefix, and the favicon.
-async fn static_asset(State(state): State<Arc<AppState>>, uri: Uri) -> Response {
+async fn static_asset(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(CurrentUser(user)): axum::Extension<CurrentUser>,
+    uri: Uri,
+) -> Response {
     let path = strip_context_path(&state, uri.path());
     let prefix = format!("/{}/", state.identifiers.instance_id);
     let (path, cacheable) = match path.strip_prefix(&prefix) {
@@ -507,7 +547,10 @@ async fn static_asset(State(state): State<Arc<AppState>>, uri: Uri) -> Response 
         None => (path, false),
     };
     if path == "/favicon" || path == "/favicon.ico" {
-        return serve_favicon(&state);
+        return serve_favicon(&state, None, user.as_ref());
+    }
+    if let Some(spec_id) = path.strip_prefix("/favicon/") {
+        return serve_favicon(&state, Some(spec_id), user.as_ref());
     }
     if !assets::exists(&path) {
         return not_found(State(state.clone()), HeaderMap::new()).await;

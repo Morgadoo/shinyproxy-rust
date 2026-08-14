@@ -375,6 +375,84 @@ async fn assets_are_served_with_and_without_the_instance_prefix() {
 }
 
 #[tokio::test]
+async fn favicons_follow_the_java_behaviour() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let global = directory.path().join("global.png");
+    let app_icon = directory.path().join("app.png");
+    std::fs::write(&global, b"\x89PNG\r\n\x1a\nglobal").expect("write");
+    std::fs::write(&app_icon, b"\x89PNG\r\n\x1a\napp").expect("write");
+
+    let instance = TestInstance::start(&format!(
+        r#"
+proxy:
+  authentication: none
+  favicon-path: {}
+  specs:
+    - id: with_icon
+      container-image: sp-testapp
+      favicon-path: {}
+    - id: without_icon
+      container-image: sp-testapp
+"#,
+        global.display(),
+        app_icon.display()
+    ))
+    .await;
+    let client = instance.client();
+    let instance_id = instance.state.identifiers.instance_id.clone();
+
+    // the global favicon
+    for path in [
+        "/favicon.ico".to_string(),
+        format!("/{instance_id}/favicon"),
+    ] {
+        let response = client
+            .get(instance.url(&path))
+            .send()
+            .await
+            .expect("request");
+        assert_eq!(response.status(), 200, "{path}");
+        assert_eq!(response.headers().get("content-type").unwrap(), "image/png");
+        assert_eq!(
+            response.headers().get("cache-control").unwrap(),
+            "max-age=86400"
+        );
+        assert!(
+            response.bytes().await.unwrap().ends_with(b"global"),
+            "{path}"
+        );
+    }
+
+    // the favicon of an app, falling back to the global one
+    let response = client
+        .get(instance.url(&format!("/{instance_id}/favicon/with_icon")))
+        .send()
+        .await
+        .expect("request");
+    assert_eq!(response.status(), 200);
+    assert!(response.bytes().await.unwrap().ends_with(b"app"));
+
+    let response = client
+        .get(instance.url(&format!("/{instance_id}/favicon/without_icon")))
+        .send()
+        .await
+        .expect("request");
+    assert_eq!(response.status(), 200);
+    assert!(response.bytes().await.unwrap().ends_with(b"global"));
+
+    // unknown apps are forbidden, and the answer has no body (browsers must not parse it)
+    let response = client
+        .get(instance.url(&format!("/{instance_id}/favicon/unknown")))
+        .send()
+        .await
+        .expect("request");
+    assert_eq!(response.status(), 403);
+    assert!(response.text().await.unwrap().is_empty());
+
+    instance.stop();
+}
+
+#[tokio::test]
 async fn security_headers_are_present() {
     let instance = TestInstance::start(ANONYMOUS_CONFIG).await;
     let client = instance.client();
