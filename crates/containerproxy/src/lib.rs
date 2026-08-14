@@ -31,6 +31,7 @@
 pub mod auth;
 pub mod backend;
 pub mod config;
+pub mod dataplane;
 pub mod events;
 pub mod model;
 pub mod service;

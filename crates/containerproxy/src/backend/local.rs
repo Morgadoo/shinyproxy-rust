@@ -257,7 +257,10 @@ fn resolve_program(program: &str) -> String {
     }
     if let Ok(current) = std::env::current_exe() {
         // tests run from target/debug/deps/<test binary>
-        let directories = [current.parent(), current.parent().and_then(|parent| parent.parent())];
+        let directories = [
+            current.parent(),
+            current.parent().and_then(|parent| parent.parent()),
+        ];
         for directory in directories.into_iter().flatten() {
             let candidate = directory.join(program);
             if candidate.is_file() {

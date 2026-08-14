@@ -24,6 +24,8 @@ futures.workspace = true
 hex.workspace = true
 http.workspace = true
 http-body-util.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
 mime_guess.workspace = true
 minijinja.workspace = true
 indexmap.workspace = true
@@ -50,6 +52,13 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+axum = { workspace = true, features = ["ws"] }
+hex.workspace = true
+futures.workspace = true
 insta.workspace = true
+reqwest.workspace = true
+sha2.workspace = true
+testapp = { path = "../testapp" }
+tokio-tungstenite.workspace = true
 rstest.workspace = true
 tempfile.workspace = true
