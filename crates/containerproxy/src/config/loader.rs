@@ -72,8 +72,6 @@ pub enum ConfigError {
     },
     #[error("configuration file {path} must contain a YAML mapping at the top level")]
     NotAMapping { path: PathBuf },
-    #[error("cannot resolve placeholder ${{{name}}} used in property '{property}'")]
-    UnresolvedPlaceholder { name: String, property: String },
     #[error("invalid configuration: {0}")]
     Invalid(String),
 }
@@ -206,19 +204,18 @@ pub fn load(schema: &Schema, options: &LoadOptions) -> Result<RawConfig, ConfigE
         }
         None => {
             profiles.push(DEMO_PROFILE.to_string());
-            match &options.fallback_config {
-                Some(text) => (
-                    Some(parse_yaml(Path::new("application-demo.yml"), text)?),
-                    None,
-                ),
-                None => (None, None),
-            }
+            (None, None)
         }
     };
 
-    let mut merged = file_tree
-        .clone()
-        .unwrap_or_else(|| Value::Object(Default::default()));
+    // Note: the fallback (demo) configuration is deliberately *not* part of `file_tree`: the Java
+    // implementation derives the instance id from the configuration *file* and reports
+    // `unknown-instance-id` when there is none, which is exactly the case in demo mode.
+    let mut merged = match (&file_tree, &options.fallback_config) {
+        (Some(tree), _) => tree.clone(),
+        (None, Some(text)) => parse_yaml(Path::new("application-demo.yml"), text)?,
+        (None, None) => Value::Object(Default::default()),
+    };
 
     // 3. additional profiles requested through the file, the environment or the command line
     for source in [
@@ -551,10 +548,17 @@ fn resolve_placeholders_in(
             (Some(value), _) => value,
             (None, Some(default)) => default.to_string(),
             (None, None) => {
-                return Err(ConfigError::UnresolvedPlaceholder {
-                    name: name.to_string(),
-                    property: property.to_string(),
-                })
+                // Spring's Environment ignores unresolvable nested placeholders, which is essential
+                // because Thymeleaf snippets in the configuration (`parameters.template`) contain
+                // `${...}` expressions that must survive untouched.
+                tracing::debug!(
+                    "leaving unresolvable placeholder ${{{name}}} of property '{property}' as-is"
+                );
+                result.push_str("${");
+                result.push_str(expression);
+                result.push('}');
+                rest = &after[end + 1..];
+                continue;
             }
         };
         result.push_str(&resolve_placeholders_in(
@@ -733,12 +737,17 @@ mod tests {
     }
 
     #[test]
-    fn fails_on_unresolvable_placeholder() {
-        let (_dir, options) = options("proxy:\n  title: ${NOPE}\n");
-        let error = load(&schema(), &options).unwrap_err();
-        assert!(
-            matches!(error, ConfigError::UnresolvedPlaceholder { .. }),
-            "{error}"
+    fn keeps_unresolvable_placeholders_literal() {
+        // Spring's Environment ignores unresolvable nested placeholders; ShinyProxy configurations rely
+        // on this for Thymeleaf snippets such as `th:each="p : ${parameterDefinitions}"`.
+        let (_dir, options) = options(
+            "proxy:\n  title: ${NOPE}\n  notification-message: 'a ${parameterDefinitions} b'\n",
+        );
+        let config = load(&schema(), &options).unwrap();
+        assert_eq!(config.property("proxy.title").as_deref(), Some("${NOPE}"));
+        assert_eq!(
+            config.property("proxy.notification-message").as_deref(),
+            Some("a ${parameterDefinitions} b")
         );
     }
 

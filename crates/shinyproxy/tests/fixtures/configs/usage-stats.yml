@@ -1,0 +1,28 @@
+proxy:
+  port: 8080
+  authentication: none
+  usage-stats-url: jdbc:postgresql://localhost:5432/shinyproxy
+  usage-stats-username: postgres
+  usage-stats-password: secret
+  usage-stats-table-name: event
+  usage-stats-attributes:
+    - name: realm
+      expression: "#{proxy.getRuntimeValue('SHINYPROXY_REALM_ID')}"
+  usage-stats-hikari:
+    connection-timeout: 30000
+    maximum-pool-size: 5
+  usage-stats:
+    - url: micrometer
+    - url: /var/log/shinyproxy/usage.csv
+      attributes:
+        - name: user
+          expression: "#{userId}"
+  usage-stats-micrometer-prefix: shinyproxy
+  container-log-path: /var/log/shinyproxy/containers
+  container-log-s3-access-key: key
+  container-log-s3-access-secret: secret
+  container-log-s3-endpoint: https://s3.example.com
+  container-log-s3-sse: true
+  specs:
+    - id: 01_hello
+      container-image: openanalytics/shinyproxy-demo

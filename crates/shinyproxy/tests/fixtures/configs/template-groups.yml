@@ -1,0 +1,32 @@
+proxy:
+  port: 8080
+  authentication: none
+  my-apps-mode: Inline
+  template-path: /opt/shinyproxy/templates
+  hide-navbar: false
+  body-classes: [ dark, compact ]
+  notification-message: "<b>Maintenance</b> on Sunday"
+  default-app-logo-url: https://example.com/default.png
+  template-groups:
+    - id: reporting
+      properties:
+        display-name: Reporting
+        color: blue
+    - id: modelling
+      properties:
+        display-name: Modelling
+  specs:
+    - id: report
+      container-image: openanalytics/shinyproxy-demo
+      template-group: reporting
+      template-properties:
+        category: finance
+      always-show-switch-instance: true
+      hide-navbar-on-main-page-link: true
+      custom-app-details:
+        - name: Dataset
+          description: The dataset used by this app
+          value: "#{proxy.getRuntimeValue('SHINYPROXY_PARAMETERS')}"
+    - id: external
+      display-name: External app
+      external-url: https://example.com/app

@@ -9,6 +9,10 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[lib]
+name = "shinyproxy"
+path = "src/lib.rs"
+
 [[bin]]
 name = "shinyproxy"
 path = "src/main.rs"

@@ -1,0 +1,36 @@
+proxy:
+  port: 8080
+  authentication: none
+  container-backend: kubernetes
+  kubernetes:
+    namespace: shinyproxy
+    internal-networking: true
+    image-pull-policy: Always
+    image-pull-secrets: [ registry-secret ]
+    node-selector:
+      kubernetes.io/hostname: node-1
+    pod-wait-time: 120000
+    debug-patches: true
+    authorized-pod-patches: [ admins ]
+  specs:
+    - id: 01_hello
+      container-image: openanalytics/shinyproxy-demo
+      kubernetes-pod-patches: |
+        - op: add
+          path: /spec/containers/0/volumeMounts/-
+          value:
+            name: cache-volume
+            mountPath: /cache
+      kubernetes-additional-manifests:
+        - |
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: manifests-pvc
+      kubernetes-authorized-pod-patches:
+        - patches: |
+            - op: add
+              path: /spec/nodeSelector
+              value: { gpu: "true" }
+          access-control:
+            groups: [ gpu-users ]

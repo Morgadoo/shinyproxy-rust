@@ -1,0 +1,59 @@
+proxy:
+  port: 8080
+  bind-address: 127.0.0.1
+  authentication: simple
+  same-site-cookie: None
+  username-case-sensitive: false
+  allow-transfer-app: true
+  log-as-json: true
+  users:
+    - name: jack
+      password: password
+  api-security:
+    hide-spec-details: true
+    disable-hsts-header: true
+    disable-no-sniff-header: false
+    cors-allowed-origins: [ "https://example.com" ]
+    custom-headers:
+      - name: X-Frame-Options
+        value: SAMEORIGIN
+  oauth2:
+    resource-id: shinyproxy
+    jwks-url: https://idp.example.com/jwks
+    roles-claim: roles
+    username-attribute: sub
+  support:
+    mail-to-address: support@example.com
+    mail-from-address: shinyproxy@example.com
+    mail-subject: ShinyProxy issue
+  monitoring:
+    grafana-url: https://grafana.example.com
+  specs:
+    - id: 01_hello
+      container-image: openanalytics/shinyproxy-demo
+server:
+  servlet:
+    context-path: /shinyproxy
+  secure-cookies: true
+  frame-options: sameorigin
+spring:
+  mail:
+    host: smtp.example.com
+    port: 587
+    username: mailer
+    password: secret
+    properties:
+      mail.smtp.starttls.enable: true
+logging:
+  file:
+    name: shinyproxy.log
+  level:
+    eu.openanalytics: DEBUG
+management:
+  server:
+    port: 9091
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true

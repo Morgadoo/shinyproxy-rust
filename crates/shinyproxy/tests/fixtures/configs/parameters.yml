@@ -1,0 +1,40 @@
+proxy:
+  port: 8080
+  authentication: simple
+  users:
+    - name: jack
+      password: password
+      groups: [ scientists ]
+  specs:
+    - id: parameterized
+      container-image: openanalytics/shinyproxy-demo
+      container-cmd: [ "R", "-e", "shinyproxy::run_01_hello()" ]
+      container-memory-limit: "#{proxy.getRuntimeValue('SHINYPROXY_PARAMETERS')}"
+      parameters:
+        definitions:
+          - id: resources
+            display-name: Resources
+            description: The amount of resources for this app
+            default-value: 1 CPU core - 2G RAM
+            value-names:
+              - value: 1-2
+                name: 1 CPU core - 2G RAM
+              - value: 2-8
+                name: 2 CPU cores - 8G RAM
+          - id: dataset
+            display-name: Dataset
+        value-sets:
+          - name: default
+            values:
+              resources: [ 1-2 ]
+              dataset: [ public ]
+          - name: power-users
+            access-control:
+              groups: [ scientists ]
+            values:
+              resources: [ 1-2, 2-8 ]
+              dataset: [ public, private ]
+        template: |
+          <div th:each="parameter : ${parameterDefinitions}">
+            <span th:text="${parameter.displayNameOrId}"></span>
+          </div>

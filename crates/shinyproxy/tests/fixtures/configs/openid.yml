@@ -1,0 +1,27 @@
+proxy:
+  port: 8080
+  authentication: openid
+  openid:
+    auth-url: https://idp.example.com/authorize
+    token-url: https://idp.example.com/token
+    jwks-url: https://idp.example.com/.well-known/jwks.json
+    userinfo-url: https://idp.example.com/userinfo
+    logout-url: https://idp.example.com/logout
+    client-id: shinyproxy
+    client-secret: super-secret
+    scopes: [ openid, email, profile ]
+    username-attribute: preferred_username
+    roles-claim: groups
+    with-pkce: true
+    include-default-scopes: false
+  admin-groups: [ shinyproxy-admins ]
+  ms-graph:
+    client-id: graph-client
+    client-secret: graph-secret
+    tenant-id: tenant
+    scopes: [ "https://graph.microsoft.com/.default" ]
+  specs:
+    - id: restricted
+      container-image: openanalytics/shinyproxy-demo
+      access-expression: "#{groups.contains('scientists') and oidcUser.attributes['dept'] == 'research'}"
+      access-strict-expression: "#{userId != 'guest'}"

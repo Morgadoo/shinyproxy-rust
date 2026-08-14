@@ -23,13 +23,12 @@
 
 #![forbid(unsafe_code)]
 
-use std::net::SocketAddr;
-
 use axum::http::StatusCode;
 use axum::routing::any;
 use axum::Router;
-
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+use containerproxy::config::{warnings, LoadOptions};
+use containerproxy::service::Identifiers;
+use shinyproxy::VERSION;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -48,6 +47,23 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
+    let (raw, settings) = shinyproxy::load_config(LoadOptions::from_process())?;
+    match &raw.path {
+        Some(path) => tracing::info!("Using configuration file {}", path.display()),
+        None => {
+            tracing::warn!("WARNING: Did not found configuration, using fallback configuration!")
+        }
+    }
+
+    let diagnostics = warnings::validate(&settings, &raw.unknown_properties);
+    if let Some(fatal) = warnings::report(&diagnostics) {
+        anyhow::bail!(fatal);
+    }
+
+    let identifiers =
+        Identifiers::from_config(&raw, std::env::var("SP_KUBE_POD_NAME").ok().as_deref());
+    identifiers.log();
+
     // Placeholder router: replaced by the real UI/API routers in phases P4 onwards.
     let app = Router::new().fallback(any(|| async {
         (
@@ -56,9 +72,17 @@ async fn main() -> anyhow::Result<()> {
         )
     }));
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 8080));
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    tracing::info!("ShinyProxy {VERSION} listening on http://{addr}");
+    let address = format!(
+        "{}:{}",
+        settings.proxy.bind_address(),
+        settings.proxy.port()
+    );
+    let listener = tokio::net::TcpListener::bind(&address).await?;
+    tracing::info!(
+        "ShinyProxy {VERSION} listening on http://{}{}",
+        listener.local_addr()?,
+        settings.server.context_path()
+    );
     axum::serve(listener, app).await?;
     Ok(())
 }

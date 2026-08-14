@@ -1,0 +1,19 @@
+proxy:
+  port: 8080
+  authentication: saml
+  saml:
+    idp-metadata-url: https://idp.example.com/metadata
+    app-entity-id: shinyproxy
+    app-base-url: https://shinyproxy.example.com
+    keystore: /opt/shinyproxy/saml/keystore.jks
+    keystore-password: changeit
+    encryption-cert-name: shinyproxy
+    encryption-cert-password: changeit
+    name-attribute: urn:oid:0.9.2342.19200300.100.1.1
+    roles-attribute: urn:oid:2.5.4.11
+    force-authn: true
+    log-attributes: true
+    logout-method: local
+  specs:
+    - id: 01_hello
+      container-image: openanalytics/shinyproxy-demo

@@ -8,7 +8,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 | Phase | Title | Status | Notes |
 | --- | --- | --- | --- |
 | P0 | Foundations (workspace, toolchain, CI, fixture app) | ✅ | Rust 1.97.1 pinned, 4 crates, CI (fmt/clippy/test/build), `sp-testapp` fixture |
-| P1 | Configuration subsystem (Spring-compatible) | ⬜ | |
+| P1 | Configuration subsystem (Spring-compatible) | ✅ | tree/schema/loader, typed settings, warnings, instance id (Jackson-compatible hash), 13 fixture configs, generated docs/CONFIGURATION.md |
 | P2 | Domain model & spec provider | ⬜ | |
 | P3 | `spel` expression engine | ⬜ | |
 | P4 | HTTP shell, sessions, auth core, UI shell | ⬜ | |
@@ -27,9 +27,13 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 
 | Suite | Tests | Notes |
 | --- | --- | --- |
+| `containerproxy` unit | 52 | config tree/schema/loader/settings/warnings, canonical YAML, identifiers |
+| `containerproxy` golden | 2 | canonical YAML + SHA-1 vs Java reference output |
+| `shinyproxy` config fixtures | 15 | 13 realistic configurations (docker, kubernetes, openid, ldap, saml, HA, parameters, template groups, usage stats, ecs, proxy sharing, api security) |
+| `shinyproxy` docs/schema sync | 2 | generated CONFIGURATION.md + Java property inventory coverage |
+| `shinyproxy` unit | 3 | schema lookups, generated docs |
 | `testapp` fixture contract | 5 | routes used by the integration tests |
 | `spel` | 1 | placeholder until P3 |
-| `containerproxy` | 1 | placeholder until P1 |
 
 ## Ported Java test classes
 

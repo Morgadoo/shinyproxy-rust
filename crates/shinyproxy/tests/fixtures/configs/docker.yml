@@ -1,0 +1,56 @@
+# Docker backend, modelled on https://shinyproxy.io/documentation/configuration/
+proxy:
+  title: My ShinyProxy
+  logo-url: file:///opt/shinyproxy/logo.png
+  landing-page: /
+  heartbeat-rate: 10000
+  heartbeat-timeout: 60000
+  container-wait-time: 20000
+  port: 8080
+  authentication: simple
+  admin-groups: [ scientists, admins ]
+  users:
+    - name: jack
+      password: password
+      groups: [ scientists ]
+  container-backend: docker
+  docker:
+    url: tcp://localhost:2375
+    port-range-start: 20000
+    port-range-max: 21000
+    internal-networking: false
+    image-pull-policy: IfNotPresent
+    target-bind-ip: 127.0.0.1
+    default-container-network: sp-net
+  specs:
+    - id: 01_hello
+      display-name: Hello Application
+      description: Application which demonstrates the basics of a Shiny app
+      container-cmd: [ "R", "-e", "shinyproxy::run_01_hello()" ]
+      container-image: openanalytics/shinyproxy-demo
+      container-env:
+        SHINYPROXY_APP: hello
+        MY_VAR: "#{proxy.userId}"
+      container-memory-limit: 2g
+      container-cpu-limit: 1
+      container-volumes: [ "/tmp:/tmp" ]
+      container-network: sp-net
+      port: 3838
+      target-path: /app
+      access-groups: [ scientists ]
+      max-lifetime: 120
+      heartbeat-timeout: 90000
+      stop-on-logout: true
+      max-total-instances: 10
+      max-instances: 2
+      labels:
+        team: data-science
+      http-headers:
+        X-Custom: value
+      add-default-http-headers: true
+      cache-headers-mode: EnforceNoCache
+      websocket-reconnection-mode: Confirm
+      additional-port-mappings:
+        - name: dashboard
+          port: 8080
+          target-path: /dash
