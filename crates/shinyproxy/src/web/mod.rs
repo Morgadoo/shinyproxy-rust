@@ -26,6 +26,7 @@ pub mod api;
 pub mod apps;
 pub mod issue;
 pub mod model;
+pub mod openapi;
 pub mod router;
 pub mod server;
 pub mod state;

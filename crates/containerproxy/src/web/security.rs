@@ -160,7 +160,7 @@ pub fn is_public_path(path: &str, instance_id: &str) -> bool {
         "/favicon.ico",
         "/saml/metadata",
     ];
-    const PUBLIC_PREFIXES: &[&str] = &["/signin/", "/actuator/"];
+    const PUBLIC_PREFIXES: &[&str] = &["/signin/", "/actuator/", "/v3/api-docs", "/swagger-ui/"];
 
     if PUBLIC.contains(&path) {
         return true;
@@ -244,6 +244,8 @@ mod tests {
             "/abc123/js/shiny.common.js",
             "/abc123/favicon",
             "/actuator/health",
+            "/v3/api-docs",
+            "/swagger-ui/index.html",
         ] {
             assert!(is_public_path(path, instance), "{path} must be public");
         }

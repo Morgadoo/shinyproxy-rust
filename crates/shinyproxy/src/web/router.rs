@@ -121,6 +121,11 @@ pub fn router(state: Arc<AppState>) -> Router {
             axum::routing::delete(super::api::remove_delegate_proxies),
         )
         .route(&path("/issue"), post(super::issue::report_issue))
+        .route(&path("/v3/api-docs"), get(super::openapi::api_docs))
+        .route(
+            &path("/swagger-ui/index.html"),
+            get(super::openapi::swagger_ui),
+        )
         .route(&path("/admin"), get(super::admin::admin_page))
         .route(&path("/admin/about"), get(super::admin::about_page))
         .route(&path("/admin/data"), get(super::api::admin_data))

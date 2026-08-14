@@ -461,6 +461,75 @@ async fn app_direct_starts_the_app_and_proxies_to_it() {
 }
 
 #[tokio::test]
+async fn openapi_is_disabled_by_default_and_can_be_enabled() {
+    // disabled by default, exactly like springdoc in the Java implementation
+    let instance = TestInstance::start(CONFIG).await;
+    let client = instance.client();
+    for path in ["/v3/api-docs", "/swagger-ui/index.html"] {
+        let response = client
+            .get(instance.url(path))
+            .send()
+            .await
+            .expect("request");
+        assert_eq!(response.status(), 404, "{path}");
+    }
+    instance.stop();
+
+    let instance = TestInstance::start(
+        r##"
+proxy:
+  authentication: simple
+  container-backend: local
+  users:
+    - name: jack
+      password: password
+  specs:
+    - id: 01_hello
+      container-image: sp-testapp
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true
+"##,
+    )
+    .await;
+    let client = instance.client();
+
+    // the description is public, as springdoc's endpoints are
+    let document: serde_json::Value = client
+        .get(instance.url("/v3/api-docs"))
+        .send()
+        .await
+        .expect("request")
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(document["openapi"], "3.0.1");
+    assert!(
+        document["paths"]["/api/proxy"]["get"]["summary"].is_string(),
+        "{document}"
+    );
+    assert!(
+        document["paths"]["/heartbeat/{proxyId}"]["post"].is_object(),
+        "{document}"
+    );
+
+    let body = client
+        .get(instance.url("/swagger-ui/index.html"))
+        .send()
+        .await
+        .expect("request")
+        .text()
+        .await
+        .expect("body");
+    assert!(body.contains("ShinyProxy API"), "{body}");
+    assert!(body.contains("/api/proxy/{proxyId}/status"), "{body}");
+
+    instance.stop();
+}
+
+#[tokio::test]
 async fn delegate_proxy_endpoint_is_admin_only() {
     let instance = TestInstance::start(CONFIG).await;
 

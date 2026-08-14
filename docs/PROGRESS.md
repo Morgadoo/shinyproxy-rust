@@ -14,7 +14,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 | P4 | HTTP shell, sessions, auth core, UI shell | ✅ | axum server (context path, sessions, security headers, authorization), none/simple auth with CSRF login, embedded assets, index/login/error pages ported from Thymeleaf, verified in a browser |
 | P5 | Proxy lifecycle engine + `local` backend | ✅ | store, events, backend trait, port allocator, local backend, runtime values, ProxyService; wired into the server |
 | P6 | Data plane (HTTP + WebSocket proxying, heartbeats) | ✅ | streaming HTTP forwarding, WebSocket tunnel with browser pings (Java semantics), iframe script injection, cache header modes, crash detection; app page + /app_proxy + heartbeat endpoints |
-| P7 | REST API parity | 🟨 | all documented endpoints implemented (specs, proxies, status+watch, transfer, details, admin pages/data, issue reporting, delegate-proxy, app_direct, api/route); OpenAPI/swagger and the ContainerProxy-style POST /api/proxy/{specId} remain |
+| P7 | REST API parity | ✅ | all documented endpoints (specs, proxies, status+watch, transfer, details, admin pages/data, issue reporting, delegate-proxy, app_direct, api/route) plus the OpenAPI document; the Java integration test classes are all covered |
 | P8 | Docker & Docker Swarm backends | ⬜ | |
 | P9 | UI parity completion | ⬜ | |
 | P10 | Operational features (logs, metrics, timeouts, stats) | ⬜ | |
@@ -30,12 +30,12 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 | `containerproxy` unit | 167 | config tree/schema/loader/settings/warnings, canonical YAML, identifiers |
 | `containerproxy` golden | 2 | canonical YAML + SHA-1 vs Java reference output |
 | `containerproxy` dataplane (end to end) | 6 | streamed bodies, header forwarding, WebSocket + heartbeats, cache headers, injection, crashed app |
-| `shinyproxy` admin & api (end to end) | 8 | admin pages and assets, app transfer, custom app details, issue reporting validation, app_direct, api/route, delegate-proxy authorization |
+| `shinyproxy` admin & api (end to end) | 9 | admin pages and assets, app transfer, custom app details, issue reporting validation, app_direct, api/route, delegate-proxy authorization |
 | `shinyproxy` app flow (end to end) | 5 | start app → status watch → app page → proxied HTTP/WebSocket → heartbeat → admin data → stop; ownership and limits |
 | `containerproxy` lifecycle (end to end) | 8 | real app processes: start/reachable/env vars/stop/cleanup, failed start, max instances, shutdown behaviour, events |
 | `shinyproxy` config fixtures | 15 | 13 realistic configurations (docker, kubernetes, openid, ldap, saml, HA, parameters, template groups, usage stats, ecs, proxy sharing, api security) |
 | `shinyproxy` docs/schema sync | 2 | generated CONFIGURATION.md + Java property inventory coverage |
-| `shinyproxy` unit | 36 | schema lookups, generated docs, spec conversion, page model, state (access control, admin, max instances, logos) |
+| `shinyproxy` unit | 38 | schema lookups, generated docs, spec conversion, page model, state (access control, admin, max instances, logos) |
 | `shinyproxy` ui (end to end) | 14 | login/logout/CSRF, index rendering, admin authorization, assets, security headers, context path, landing page, JSON 401 |
 | `shinyproxy` spec conversion | 3 | every fixture yields usable specs; docker/template-group details |
 | `testapp` fixture contract | 5 | routes used by the integration tests |

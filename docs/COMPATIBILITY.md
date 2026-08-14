@@ -102,6 +102,7 @@ types. Allow-listed static types: `java.lang.System.getenv`, `java.lang.String.v
 | `DELETE /admin/delegate-proxy` | Answers successfully; there is nothing to remove until container pre-initialization lands in P12 | 🟨 |
 | `PUT /api/proxy/{id}/status` with `Pausing`/`Resuming` | Answers `fail` with "not supported by this backend"; pausing arrives with the Docker backend in P8 | 🟨 |
 | `/app_direct[_i]/**` | Starts the app on demand, waits up to 10 minutes and proxies without injecting the iframe script, as in Java | ✅ |
+| OpenAPI (`springdoc.*`) | Disabled by default, as in Java. `/v3/api-docs` serves an OpenAPI 3.0.1 document describing the same endpoints and tags. `springdoc.swagger-ui.enabled` serves a readable HTML overview instead of the interactive Swagger UI (which would add several megabytes of vendored assets for a feature that is off by default) | 🟨 deliberate deviation |
 
 ## Not yet implemented
 
