@@ -1,0 +1,126 @@
+{#
+    ShinyProxy
+
+    Copyright (C) 2016-2026 Open Analytics
+
+    ===========================================================================
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the Apache License as published by
+    The Apache Software Foundation, either version 2 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    Apache License for more details.
+
+    You should have received a copy of the Apache License
+    along with this program.  If not, see <http://www.apache.org/licenses/>
+
+    Ported from src/main/resources/templates/fragments/modal.html (Thymeleaf).
+#}
+{% macro modal() %}
+<div class="modal fade" id="modal" role="dialog">
+    <div class="modal-dialog" id="switchInstancesModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button aria-hidden="true" class="close" data-dismiss="modal" type="button">&times;</button>
+                <h4 class="modal-title">Switch instance</h4>
+            </div>
+            <div class="modal-body">
+                <div class="myApps" id="appInstances">
+                </div>
+                <form class="form-inline" id="newInstanceForm">
+                    <div class="form-group">
+                        <label for="instanceNameField"><span class="glyphicon glyphicon-chat"></span>Name of
+                            new
+                            instance:</label><br>
+                        <div class="input-group">
+                            <input class="form-control" id="instanceNameField" type="text">
+                            <button class="btn btn-default btn-success" type="submit">Start</button>
+                        </div>
+                    </div>
+                </form>
+                Max instances: <span id="maxInstances"></span>, used: <span id="usedInstances"></span>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-default" data-dismiss="modal" type="button">Close</button>
+            </div>
+        </div>
+    </div>
+    {% if myAppsMode == 'Modal' %}
+    <div class="modal-dialog" id="myAppsModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button aria-hidden="true" class="close" data-dismiss="modal" type="button">&times;</button>
+                <h4 class="modal-title">My apps</h4>
+            </div>
+            <div class="modal-body">
+                <div class="myApps" id="myApps">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn pull-left btn-danger" id="stop-all-apps-btn"
+                        type="button">Stop all apps
+                </button>
+                <button class="btn pull-left btn-danger" disabled id="stopping-all-apps-btn" type="button">
+                    Stopping
+                    all apps...
+                </button>
+                <button class="btn btn-default" data-dismiss="modal" type="button">Close</button>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+    <div class="modal-dialog" id="appDetailsModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button aria-hidden="true" class="close" data-dismiss="modal" type="button">&times;</button>
+                <h4 class="modal-title">App Details</h4>
+            </div>
+            <div class="modal-body">
+                <div id="appDetails">
+                </div>
+                {% if allowTransferApp and page != 'admin' %}
+                <form class="form-inline" id="changeUserIdForm">
+                    <div class="form-group">
+                        <label for="userIdField"><span class="glyphicon glyphicon-chat"></span>Transfer app to another user:</label><br>
+                        <div class="input-group">
+                            <input class="form-control" id="userIdField" type="text">
+                            <button class="btn btn-default btn-success" type="submit">Transfer</button>
+                        </div>
+                    </div>
+                </form>
+                {% endif %}
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-default close-button" type="button">Close</button>
+            </div>
+        </div>
+    </div>
+    <div class="modal-dialog" id="reportIssueModal">
+        <div class="modal-content">
+            <form id="reportIssueForm">
+                <div class="modal-header">
+                    <button aria-hidden="true" class="close" data-dismiss="modal" type="button">&times;
+                    </button>
+                    <h4 class="modal-title">Report Issue</h4>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label for="reportIssueMessage"><span class="glyphicon glyphicon-chat"></span>
+                            Message to add to the report:</label>
+                        <textarea class="form-control" cols="40" id="reportIssueMessage"
+                                  name="reportIssueMessage" placeholder="Enter message" rows="5"></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-default btn-success" type="submit">Submit</button>
+                    <button class="btn btn-default" data-dismiss="modal" type="button">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endmacro %}

@@ -19,12 +19,9 @@
  * along with this program.  If not, see <http://www.apache.org/licenses/>
  */
 
-//! Small helpers shared across the engine.
+//! The web layer: assets, templates, sessions, security and the shared UI pages.
 
-pub mod canonical_yaml;
-pub mod clean_html;
-pub mod sha1;
+pub mod assets;
+pub mod templates;
 
-pub use canonical_yaml::to_canonical_yaml;
-pub use clean_html::{clean_html, clean_html_opt};
-pub use sha1::{sha1_hex, sha1_of_value};
+pub use templates::{TemplateEngine, TemplateError};

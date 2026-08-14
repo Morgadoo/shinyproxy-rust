@@ -33,6 +33,7 @@ pub mod model;
 pub mod service;
 pub mod spec;
 pub mod util;
+pub mod web;
 
 /// Version of the Java implementation this port aims to be compatible with.
 pub const COMPATIBLE_WITH_JAVA_VERSION: &str = "3.2.4";

@@ -1,5 +1,5 @@
-/*
- * ShinyProxy
+/**
+ * ContainerProxy
  *
  * Copyright (C) 2016-2026 Open Analytics
  *
@@ -18,13 +18,42 @@
  * You should have received a copy of the Apache License
  * along with this program.  If not, see <http://www.apache.org/licenses/>
  */
+#navbar + div {
+    padding-top: 50px;
+}
 
-//! Small helpers shared across the engine.
+.form-signin {
+    max-width: 330px;
+    padding: 15px;
+    margin: 0 auto;
+}
 
-pub mod canonical_yaml;
-pub mod clean_html;
-pub mod sha1;
+.form-signin .form-signin-heading, .form-signin .checkbox {
+    margin-bottom: 10px;
+}
 
-pub use canonical_yaml::to_canonical_yaml;
-pub use clean_html::{clean_html, clean_html_opt};
-pub use sha1::{sha1_hex, sha1_of_value};
+.form-signin .form-control {
+    position: relative;
+    height: auto;
+    -webkit-box-sizing: border-box;
+    -moz-box-sizing: border-box;
+    box-sizing: border-box;
+    padding: 10px;
+    font-size: 16px;
+}
+
+.form-signin .form-control:focus {
+    z-index: 2;
+}
+
+.form-signin #username {
+    margin-bottom: -1px;
+    border-bottom-right-radius: 0;
+    border-bottom-left-radius: 0;
+}
+
+.form-signin #password {
+    margin-bottom: 10px;
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+}

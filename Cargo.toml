@@ -43,6 +43,15 @@ serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 serde_yaml_ng = "0.10"
 
+# --- web / ui ---
+minijinja = { version = "2", features = ["loader", "json", "builtins"] }
+rust-embed = { version = "8", features = ["include-exclude", "interpolate-folder-path"] }
+mime_guess = "2"
+tower-sessions = { version = "0.14", default-features = false, features = ["axum-core", "memory-store"] }
+ammonia = "4"
+bcrypt = "0.17"
+time = "0.3"
+
 # --- utilities ---
 anyhow = "1"
 thiserror = "2"
