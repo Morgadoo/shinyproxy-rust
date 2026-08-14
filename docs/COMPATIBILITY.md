@@ -55,6 +55,36 @@ Known deviations:
   high-availability "outdated instance" check, so the impact is limited to migrating with running apps.
 * When no configuration file exists (demo mode), the id is `unknown-instance-id`, as in Java.
 
+## Expressions (`#{...}`)
+
+The `spel` crate implements the subset of the Spring Expression Language that ShinyProxy
+configurations use. It is cross-validated against the real Spring implementation:
+
+```
+tools/spel-crossvalidate/run.sh   # downloads spring-expression, evaluates the corpus, diffs the results
+```
+
+The corpus (`crates/spel/tests/corpus.rs`, 116 expressions taken from the ShinyProxy documentation and
+configuration examples) produces **identical results in both implementations**, except for two
+constructs where this implementation is deliberately more permissive:
+
+| Construct | Spring | Here |
+| --- | --- | --- |
+| `map.key` (dot access on a `Map`) | fails (`MapAccessor` is not registered by default), `map['key']` is required | works, `map['key']` also works |
+| `array.size()` (result of `String.split`) | fails (arrays have `length`) | works, `length` also works |
+
+Supported: literals, arithmetic and string concatenation, property navigation with safe navigation,
+indexing, method calls on strings/lists/maps/context objects, the `SpecExpressionContext` helpers
+(`toList`, `toLowerCaseList`, `isOneOf`, `isOneOfIgnoreCase`), comparisons (incl. `matches` with Java's
+full-match semantics and the textual `eq`/`ne`/`lt`/`gt` operators), logical operators, ternary and
+elvis operators, inline lists/maps, projection `.![...]` and selection `.?[...]`.
+
+Not supported (each produces an error naming the construct, at configuration load time):
+constructor calls (`new ...`), bean method calls other than the registered beans, arbitrary static java
+types. Allow-listed static types: `java.lang.System.getenv`, `java.lang.String.valueOf/join`,
+`java.lang.Math.min/max/abs`, `java.lang.Integer.parseInt`, `java.lang.Long.parseLong`,
+`java.lang.Boolean.parseBoolean`.
+
 ## Runtime
 
 | Topic | Behaviour | Status |
