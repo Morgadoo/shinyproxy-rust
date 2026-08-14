@@ -31,7 +31,7 @@ use containerproxy::dataplane::ProxyRouter;
 use containerproxy::events::EventBus;
 use containerproxy::model::runtime_value::RuntimeValueRegistry;
 use containerproxy::model::spec::ProxySpec;
-use containerproxy::service::{Identifiers, ProxyService};
+use containerproxy::service::{AppRecoveryService, Identifiers, ProxyService};
 use containerproxy::spec::expression::{ExpressionContextBuilder, SpelResolver};
 use containerproxy::spec::SpecProvider;
 use containerproxy::store::{HeartbeatStore, MemoryHeartbeatStore, MemoryProxyStore, ProxyStore};
@@ -68,6 +68,8 @@ pub struct AppState {
     pub router: Arc<ProxyRouter>,
     /// The container backend.
     pub backend: Arc<dyn ContainerBackend>,
+    /// Recovery of apps that are still running (`proxy.recover-running-proxies`).
+    pub recovery: Arc<AppRecoveryService>,
     /// All known runtime value keys (engine + ShinyProxy).
     pub runtime_values: RuntimeValueRegistry,
     /// Cached logo data URIs, keyed by the configured URL.
@@ -130,6 +132,7 @@ impl AppState {
                 realm_id: identifiers.realm_id.clone(),
             },
         )?;
+        let recovery = Arc::new(AppRecoveryService::new(&settings, &identifiers));
         let store: Arc<dyn ProxyStore> = Arc::new(MemoryProxyStore::new(
             settings.proxy.username_case_sensitive(),
         ));
@@ -156,9 +159,28 @@ impl AppState {
             store,
             heartbeats,
             router: Arc::new(ProxyRouter::new()),
+            recovery,
             backend,
             runtime_values: (*runtime_values).clone(),
             logo_cache: dashmap::DashMap::new(),
+        })
+    }
+
+    /// Starts the background work of the server: taking over the apps that are still running.
+    ///
+    /// Until this finished, the server answers 503 with the startup page, exactly like the Java
+    /// `AppRecoveryFilter`. Called by `main` and by the test harness, so that both go through the same
+    /// startup sequence.
+    pub fn spawn_startup_tasks(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
+        let state = self.clone();
+        tokio::spawn(async move {
+            let recovered = state
+                .recovery
+                .recover(&state.backend, &state.store, &state.heartbeats)
+                .await;
+            for proxy in &recovered {
+                state.router.add_mappings(proxy);
+            }
         })
     }
 

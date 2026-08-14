@@ -104,6 +104,15 @@ types. Allow-listed static types: `java.lang.System.getenv`, `java.lang.String.v
 | `/app_direct[_i]/**` | Starts the app on demand, waits up to 10 minutes and proxies without injecting the iframe script, as in Java | ✅ |
 | OpenAPI (`springdoc.*`) | Disabled by default, as in Java. `/v3/api-docs` serves an OpenAPI 3.0.1 document describing the same endpoints and tags. `springdoc.swagger-ui.enabled` serves a readable HTML overview instead of the interactive Swagger UI (which would add several megabytes of vendored assets for a feature that is off by default) | 🟨 deliberate deviation |
 
+## Container backends
+
+| Topic | Behaviour | Status |
+| --- | --- | --- |
+| `docker` | Same container create request as Java: image, cmd, env, labels, published ports on `proxy.docker.target-bind-ip`, memory reservation/limit, `cpuPeriod` 100000 + quota, network + `container-network-connections`, dns, binds, privileged, ipc, runtime, group-add, user, device requests and the Loki log driver; container name `sp-container-{proxyId}-{index}` | ✅ |
+| `docker-swarm` | Service per container (`sp-service-{proxyId}-{index}`), restart policy `none`, bind mounts, swarm secrets, reservations/limits in nano CPUs, published ports on the endpoint spec, task polling until `running` | ✅ |
+| App recovery | `proxy.recover-running-proxies[-from-different-config]`; the containers are found by their `openanalytics.eu/sp-*` labels, so a Java server and this implementation can take over each other's apps. While recovery runs every request (except `/actuator`) answers 503 with `startup.html` | ✅ |
+| Recovery of apps without a time zone label | A container is only recoverable when every required label is present, including `openanalytics.eu/sp-user-timezone`; apps started without a time zone (i.e. not through the UI) are therefore not recovered — identical to Java | 🟨 shared limitation |
+
 ## Not yet implemented
 
 Everything in [PROGRESS.md](PROGRESS.md) that is not marked ✅. Properties whose behaviour is not

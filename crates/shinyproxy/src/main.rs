@@ -70,6 +70,10 @@ async fn main() -> anyhow::Result<()> {
         state.auth.name()
     );
 
+    // apps that are still running are taken over first; until recovery finished the server answers 503
+    // with the startup page (as the Java AppRecoveryFilter does)
+    state.spawn_startup_tasks();
+
     let app = shinyproxy::web::server::build(state.clone());
 
     let address = format!("{bind_address}:{port}");

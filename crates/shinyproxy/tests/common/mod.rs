@@ -39,9 +39,24 @@ pub struct TestInstance {
     handle: tokio::task::JoinHandle<()>,
 }
 
+/// Sends the log output of the server to the test output, so that `cargo test -- --nocapture` (and the
+/// output of a failing test) shows what the server logged. Enable with `RUST_LOG=info`.
+fn init_logging() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"));
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_test_writer()
+            .try_init();
+    });
+}
+
 impl TestInstance {
     /// Starts a server with the given configuration.
     pub async fn start(yaml: &str) -> TestInstance {
+        init_logging();
         let directory = tempfile::tempdir().expect("temp dir");
         let path = directory.path().join("application.yml");
         std::fs::write(&path, yaml).expect("write configuration");
@@ -56,6 +71,11 @@ impl TestInstance {
             settings.proxy.container_backend = Some("local".to_string());
         }
         let state = Arc::new(AppState::new(raw, settings).expect("state"));
+        // the same startup sequence as `main`: recovery runs before requests are served
+        state
+            .spawn_startup_tasks()
+            .await
+            .expect("startup tasks finish");
         let app = shinyproxy::web::server::build(state.clone());
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")

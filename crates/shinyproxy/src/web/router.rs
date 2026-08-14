@@ -150,7 +150,47 @@ pub fn router(state: Arc<AppState>) -> Router {
             state.clone(),
             authorize,
         ))
+        // runs before authorization, so that no request is served while apps are being recovered
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            app_recovery_filter,
+        ))
         .with_state(state)
+}
+
+/// Answers 503 with `startup.html` while app recovery is running (`AppRecoveryFilter`).
+///
+/// Requests to `/actuator` are let through, so that the probes of an orchestrator keep working.
+async fn app_recovery_filter(
+    State(state): State<Arc<AppState>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if state.recovery.is_ready() {
+        return next.run(request).await;
+    }
+
+    let path = strip_context_path(&state, request.uri().path());
+    if path.starts_with("/actuator") {
+        return next.run(request).await;
+    }
+
+    let html = state
+        .templates
+        .render(
+            "startup.html",
+            TemplateValue::from_serialize(serde_json::json!({
+                "application_name": state.settings.application_name(),
+            })),
+        )
+        .unwrap_or_else(|error| {
+            tracing::error!("cannot render startup.html: {error}");
+            format!(
+                "{} is starting up, check back in a few seconds.\n",
+                state.settings.application_name()
+            )
+        });
+    (StatusCode::SERVICE_UNAVAILABLE, Html(html)).into_response()
 }
 
 /// Redirects `/{context-path}` to `/{context-path}/`.

@@ -393,8 +393,17 @@ impl RuntimeValueRegistry {
                 }
             }
         }
+        // Java checks the keys that are stored as a label or annotation, including the container
+        // specific ones, and logs which label it missed
         for key in &self.keys {
-            if key.required && !key.container_specific && values.get(key).is_none() {
+            if (key.include_as_label || key.include_as_annotation)
+                && key.required
+                && values.get(key).is_none()
+            {
+                tracing::warn!(
+                    "Ignoring container because no label named {} is found",
+                    key.label
+                );
                 return None;
             }
         }
@@ -721,6 +730,12 @@ mod tests {
             ("openanalytics.eu/sp-heartbeat-timeout", "60000"),
             ("openanalytics.eu/sp-max-lifetime", "-1"),
             ("openanalytics.eu/sp-cache-headers-mode", "EnforceNoCache"),
+            // container specific values are required as well (Java checks every label backed key)
+            ("openanalytics.eu/sp-container-index", "0"),
+            (
+                "openanalytics.eu/sp-port-mappings",
+                "{\"portMappings\":[{\"name\":\"default\",\"port\":3838,\"targetPath\":\"\"}]}",
+            ),
             ("some.other/label", "ignored"),
         ];
         let values = registry.parse_labels(labels).expect("complete labels");
