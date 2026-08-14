@@ -22,6 +22,9 @@
 //! The ShinyProxy web layer: state, page models and request handlers.
 
 pub mod model;
+pub mod router;
+pub mod server;
 pub mod state;
 
+pub use router::router;
 pub use state::{AppState, StateError};

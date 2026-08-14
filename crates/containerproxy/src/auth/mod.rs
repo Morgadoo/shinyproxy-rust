@@ -174,7 +174,7 @@ pub fn create(settings: &Settings) -> Result<Arc<dyn AuthBackend>, UnsupportedBa
         .to_ascii_lowercase()
         .as_str()
     {
-        "none" => Ok(Arc::new(none::NoAuthenticationBackend::default())),
+        "none" => Ok(Arc::new(none::NoAuthenticationBackend)),
         "simple" => Ok(Arc::new(simple::SimpleAuthenticationBackend::new(
             &settings.proxy.users,
             settings.proxy.username_case_sensitive(),

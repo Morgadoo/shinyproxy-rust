@@ -23,11 +23,11 @@
 
 #![forbid(unsafe_code)]
 
-use axum::http::StatusCode;
-use axum::routing::any;
-use axum::Router;
+use std::sync::Arc;
+
 use containerproxy::config::{warnings, LoadOptions};
-use containerproxy::service::Identifiers;
+use containerproxy::spec::SpecProvider;
+use shinyproxy::web::AppState;
 use shinyproxy::VERSION;
 
 #[tokio::main]
@@ -60,29 +60,52 @@ async fn main() -> anyhow::Result<()> {
         anyhow::bail!(fatal);
     }
 
-    let identifiers =
-        Identifiers::from_config(&raw, std::env::var("SP_KUBE_POD_NAME").ok().as_deref());
-    identifiers.log();
-
-    // Placeholder router: replaced by the real UI/API routers in phases P4 onwards.
-    let app = Router::new().fallback(any(|| async {
-        (
-            StatusCode::NOT_IMPLEMENTED,
-            "ShinyProxy (Rust) is being implemented; no routes are registered yet.\n",
-        )
-    }));
-
-    let address = format!(
-        "{}:{}",
-        settings.proxy.bind_address(),
-        settings.proxy.port()
+    let bind_address = settings.proxy.bind_address().to_string();
+    let port = settings.proxy.port();
+    let state = Arc::new(AppState::new(raw, settings)?);
+    state.identifiers.log();
+    tracing::info!(
+        "Serving {} app(s), authentication: {}",
+        state.specs.specs().len(),
+        state.auth.name()
     );
+
+    let app = shinyproxy::web::server::build(state.clone());
+
+    let address = format!("{bind_address}:{port}");
     let listener = tokio::net::TcpListener::bind(&address).await?;
     tracing::info!(
         "ShinyProxy {VERSION} listening on http://{}{}",
         listener.local_addr()?,
-        settings.server.context_path()
+        state.context_path()
     );
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+    tracing::info!("ShinyProxy stopped");
     Ok(())
+}
+
+/// Waits for `SIGTERM`/`SIGINT` so that the server can shut down gracefully.
+async fn shutdown_signal() {
+    let interrupt = async {
+        tokio::signal::ctrl_c().await.ok();
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(error) => tracing::warn!("cannot listen for SIGTERM: {error}"),
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = interrupt => tracing::info!("Received SIGINT, shutting down"),
+        _ = terminate => tracing::info!("Received SIGTERM, shutting down"),
+    }
 }

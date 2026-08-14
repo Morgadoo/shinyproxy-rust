@@ -105,7 +105,7 @@ impl SecurityHeaders {
                 HeaderValue::from_str(value),
             ) {
                 (Ok(name), Ok(value)) => {
-                    headers.retain(|(existing, _)| existing != &name);
+                    headers.retain(|(existing, _)| existing != name);
                     headers.push((name, value));
                 }
                 _ => tracing::warn!("Ignoring invalid custom header {name}"),

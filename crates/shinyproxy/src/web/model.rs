@@ -86,9 +86,9 @@ pub fn prepare_model(
     let proxy = &settings.proxy;
     let context_path = state.context_path_with_slash();
     let resource_prefix = format!(
-        "{}{}",
+        "{}/{}",
         context_path.trim_end_matches('/'),
-        format!("/{}", state.identifiers.instance_id)
+        state.identifiers.instance_id
     );
 
     let accessible: Vec<&ProxySpec> = state

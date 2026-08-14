@@ -33,6 +33,22 @@ use minijinja::{Environment, Value as TemplateValue};
 use super::assets::Templates;
 use crate::util::clean_html;
 
+/// Escapes HTML like Thymeleaf does: `&`, `<`, `>`, `"` and `'`, but not `/`.
+fn escape_html(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    for character in input.chars() {
+        match character {
+            '&' => output.push_str("&amp;"),
+            '<' => output.push_str("&lt;"),
+            '>' => output.push_str("&gt;"),
+            '"' => output.push_str("&quot;"),
+            '\'' => output.push_str("&#39;"),
+            other => output.push(other),
+        }
+    }
+    output
+}
+
 /// Renders the ShinyProxy pages.
 pub struct TemplateEngine {
     environment: Environment<'static>,
@@ -76,16 +92,30 @@ impl TemplateEngine {
     /// Creates an engine that renders the embedded templates.
     pub fn new(template_path: Option<PathBuf>) -> Result<Self, TemplateError> {
         let mut environment = Environment::new();
+        // everything ShinyProxy renders is HTML (including templates that come from the
+        // configuration, which are rendered without a file name)
         environment.set_auto_escape_callback(|name| {
-            if name.ends_with(".html") {
-                minijinja::AutoEscape::Html
-            } else {
+            if name.ends_with(".json") || name.ends_with(".txt") || name.ends_with(".js") {
                 minijinja::AutoEscape::None
+            } else {
+                minijinja::AutoEscape::Html
             }
         });
 
         // sanitises HTML that comes from the configuration, like the Java `CleanHtml` helper
         environment.add_filter("clean_html", |value: String| clean_html(&value));
+
+        // Thymeleaf does not escape `/` in attribute values; keep URLs readable and identical to the
+        // Java output by using an escaper that only escapes the characters that matter.
+        environment.set_formatter(|output, state, value| {
+            if state.auto_escape() == minijinja::AutoEscape::Html && !value.is_safe() {
+                if let Some(text) = value.as_str() {
+                    output.write_str(&escape_html(text))?;
+                    return Ok(());
+                }
+            }
+            minijinja::escape_formatter(output, state, value)
+        });
 
         let overrides = template_path.clone();
         environment.set_loader(move |name| {
@@ -224,9 +254,46 @@ mod tests {
     }
 
     #[test]
+    fn escapes_html_without_mangling_urls() {
+        let engine = TemplateEngine::new(None).expect("engine");
+        let html = engine
+            .render_string(
+                "<a href=\"{{ url }}\">{{ text }}</a>",
+                context! { url => "/app/01_hello?a=1&b=2", text => "<script>x</script>" },
+            )
+            .expect("renders");
+        assert_eq!(
+            html,
+            "<a href=\"/app/01_hello?a=1&amp;b=2\">&lt;script&gt;x&lt;/script&gt;</a>"
+        );
+    }
+
+    #[test]
     fn reports_missing_templates() {
         let engine = TemplateEngine::new(None).expect("engine");
         let error = engine.render("nope.html", context! {}).unwrap_err();
         assert!(matches!(error, TemplateError::Load { .. }), "{error}");
+    }
+}
+
+#[cfg(test)]
+mod escaping_tests {
+    use super::*;
+
+    #[test]
+    fn does_not_escape_slashes_in_named_templates() {
+        let engine = TemplateEngine::new(None).expect("engine");
+        let model = serde_json::json!({"title": "SP", "contextPath": "/sub/path/"});
+        let html = engine
+            .render(
+                "logout-success.html",
+                minijinja::Value::from_serialize(&model),
+            )
+            .expect("renders");
+        assert!(html.contains("href=\"/sub/path/\""), "{html}");
+        assert!(
+            !html.contains("&#x2f;"),
+            "slashes must not be escaped: {html}"
+        );
     }
 }

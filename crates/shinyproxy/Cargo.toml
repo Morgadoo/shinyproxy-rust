@@ -25,6 +25,7 @@ anyhow.workspace = true
 base64.workspace = true
 dashmap.workspace = true
 mime_guess.workspace = true
+percent-encoding.workspace = true
 axum.workspace = true
 axum-extra.workspace = true
 minijinja.workspace = true
