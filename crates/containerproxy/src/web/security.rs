@@ -148,8 +148,40 @@ pub fn no_cache_headers() -> [(HeaderName, HeaderValue); 3] {
     ]
 }
 
-/// Paths that are reachable without authentication (the `permitAll` matchers of the Java
-/// configuration).
+/// Builds an absolute URL for a path of this server, like Spring's
+/// `ServletUriComponentsBuilder.fromCurrentContextPath()`.
+///
+/// The scheme and host come from the `X-Forwarded-*` headers when a reverse proxy set them (which is what
+/// `server.forward-headers-strategy: native` does in the Java implementation), else from the `Host`
+/// header. The pages that redirect with JavaScript need an absolute URL, because `new URL(...)` does not
+/// accept a path.
+pub fn absolute_url(headers: &HeaderMap, path: &str) -> String {
+    let header = |name: &str| {
+        headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            // a chain of proxies produces a comma separated list; the first entry is the client side
+            .map(|value| value.split(',').next().unwrap_or(value).trim().to_string())
+            .filter(|value| !value.is_empty())
+    };
+
+    let scheme = header("x-forwarded-proto").unwrap_or_else(|| "http".to_string());
+    let host = header("x-forwarded-host")
+        .or_else(|| header("host"))
+        .unwrap_or_else(|| "localhost".to_string());
+    let port = header("x-forwarded-port").filter(|port| {
+        // the default ports are not part of the URL
+        !((port == "80" && scheme == "http") || (port == "443" && scheme == "https"))
+    });
+
+    let host = match port {
+        Some(port) if !host.contains(':') => format!("{host}:{port}"),
+        _ => host,
+    };
+    format!("{scheme}://{host}{path}")
+}
+
+/// Whether a path is public (no authentication needed).
 pub fn is_public_path(path: &str, instance_id: &str) -> bool {
     const PUBLIC: &[&str] = &[
         "/login",

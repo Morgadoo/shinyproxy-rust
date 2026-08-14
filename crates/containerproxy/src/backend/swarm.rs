@@ -380,6 +380,13 @@ impl ContainerBackend for SwarmBackend {
         true
     }
 
+    async fn initialize(&self) -> Result<(), BackendError> {
+        // as in Java: a daemon that is not part of a swarm is a fatal configuration error
+        let swarm_id = self.check_swarm().await?;
+        tracing::info!("Using Docker Swarm {swarm_id}");
+        Ok(())
+    }
+
     async fn start_container(
         &self,
         context: StartContext<'_>,

@@ -210,6 +210,71 @@ async fn successful_login_renders_the_accessible_apps() {
 }
 
 #[tokio::test]
+async fn auth_success_page_redirects_with_an_absolute_url() {
+    let instance = TestInstance::start(SIMPLE_CONFIG).await;
+    let client = instance.client();
+    let token = instance.csrf_token(&client).await;
+
+    // a user who wanted to open an app is sent there after logging in
+    let response = client
+        .get(instance.url("/app/01_hello"))
+        .send()
+        .await
+        .expect("request");
+    assert_eq!(response.status(), 303);
+
+    let response = client
+        .post(instance.url("/login"))
+        .form(&[
+            ("username", "jack"),
+            ("password", "password"),
+            ("_csrf", token.as_str()),
+        ])
+        .send()
+        .await
+        .expect("login request");
+    let location = response
+        .headers()
+        .get("location")
+        .and_then(|value| value.to_str().ok())
+        .expect("redirect")
+        .to_string();
+    assert_eq!(location, "/auth-success?continue=%2Fapp%2F01_hello");
+
+    let host = instance.base_url.trim_start_matches("http://").to_string();
+    let body = client
+        .get(instance.url("/auth-success?continue=%2Fapp%2F01_hello"))
+        .send()
+        .await
+        .expect("request")
+        .text()
+        .await
+        .expect("body");
+    // the page redirects with `new URL(...)`, which throws for a path, so the URL must be absolute
+    // (the Java implementation renders an absolute URL as well)
+    let expected = format!("http://{host}/app/01_hello");
+    assert!(body.contains(&format!("new URL(\"{expected}\")")), "{body}");
+    assert!(
+        body.contains(&format!("window.location.href = \"{expected}\"")),
+        "{body}"
+    );
+
+    // an external redirect target is replaced by the main page
+    let body = client
+        .get(instance.url("/auth-success?continue=https%3A%2F%2Fevil.example.com%2F"))
+        .send()
+        .await
+        .expect("request")
+        .text()
+        .await
+        .expect("body");
+    assert!(body.contains(&format!("http://{host}/")), "{body}");
+    assert!(!body.contains("evil.example.com"), "{body}");
+
+    instance.stop();
+}
+
+#[tokio::test]
 async fn administrators_see_all_apps_and_the_admin_button() {
     let instance = TestInstance::start(SIMPLE_CONFIG).await;
     let client = instance.login("root", "rootpw").await;

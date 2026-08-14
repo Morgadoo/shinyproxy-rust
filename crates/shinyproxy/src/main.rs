@@ -70,6 +70,10 @@ async fn main() -> anyhow::Result<()> {
         state.auth.name()
     );
 
+    // the backend is checked before the server starts: an unusable backend (e.g. a daemon that is not
+    // part of a swarm) is a fatal error, exactly as in the Java implementation
+    state.backend.initialize().await?;
+
     // apps that are still running are taken over first; until recovery finished the server answers 503
     // with the startup page (as the Java AppRecoveryFilter does)
     state.spawn_startup_tasks();

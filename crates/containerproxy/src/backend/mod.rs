@@ -117,6 +117,15 @@ pub trait ContainerBackend: Send + Sync + std::fmt::Debug {
         false
     }
 
+    /// Checks whether the backend can be used, called once at startup.
+    ///
+    /// The Java implementation only fails at startup for Docker Swarm (which inspects the swarm); the
+    /// other backends fail when the first app is started. This method keeps that behaviour: it returns an
+    /// error only when the backend is certainly unusable.
+    async fn initialize(&self) -> Result<(), BackendError> {
+        Ok(())
+    }
+
     /// Starts one container of a proxy.
     async fn start_container(
         &self,

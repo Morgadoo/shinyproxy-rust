@@ -557,6 +557,16 @@ impl ContainerBackend for DockerBackend {
         true
     }
 
+    async fn initialize(&self) -> Result<(), BackendError> {
+        // the Java client does not ping the daemon at startup either, so an unreachable daemon is only
+        // a warning here; starting an app then fails with the same message as in Java
+        match self.check_connection().await {
+            Ok(version) => tracing::info!("Using Docker daemon (API version {version})"),
+            Err(error) => tracing::warn!("Cannot reach the Docker daemon: {error}"),
+        }
+        Ok(())
+    }
+
     async fn start_container(
         &self,
         context: StartContext<'_>,

@@ -450,6 +450,7 @@ async fn logout(State(state): State<Arc<AppState>>, session: Session) -> Respons
 async fn auth_success(
     State(state): State<Arc<AppState>>,
     Query(query): Query<HashMap<String, String>>,
+    headers: HeaderMap,
 ) -> Response {
     let target = query
         .get("continue")
@@ -461,9 +462,12 @@ async fn auth_success(
     } else {
         state.context_path_with_slash()
     };
+    // the page redirects with `new URL(...)`, which needs an absolute URL; the Java implementation puts
+    // an absolute URL in the model as well (ServletUriComponentsBuilder.fromCurrentContextPath())
+    let url = containerproxy::web::security::absolute_url(&headers, &target);
     let mut model = serde_json::Map::new();
     model.insert("title".into(), serde_json::json!(state.resolve_title(None)));
-    model.insert("url".into(), serde_json::json!(target));
+    model.insert("url".into(), serde_json::json!(url));
     render(&state, "auth-success.html", model)
 }
 
@@ -686,6 +690,12 @@ fn render(
 }
 
 fn urlencode(value: &str) -> String {
-    use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
-    utf8_percent_encode(value, NON_ALPHANUMERIC).to_string()
+    use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
+    // the unreserved characters of RFC 3986 are left alone, like Spring's UriUtils
+    const UNRESERVED: &AsciiSet = &NON_ALPHANUMERIC
+        .remove(b'-')
+        .remove(b'_')
+        .remove(b'.')
+        .remove(b'~');
+    utf8_percent_encode(value, UNRESERVED).to_string()
 }
