@@ -634,3 +634,130 @@ async fn a_rolling_update_moves_the_leadership_to_the_new_configuration() {
     late.stop();
     clear_realm(&realm);
 }
+
+#[tokio::test]
+async fn two_servers_share_their_pre_initialized_containers() {
+    if !enabled() {
+        eprintln!("skipping: set SP_TEST_REDIS=1 (and run a Redis) to run the Redis tests");
+        return;
+    }
+
+    let realm = format!("seats-{}", std::process::id());
+    clear_realm(&realm);
+
+    // the app uses pre-started containers, and the seats live in Redis because of the store mode
+    let configuration = format!(
+        "{}      minimum-seats-available: 2\n      seats-per-container: 1\n",
+        config(&realm)
+    );
+
+    let first = TestInstance::start(&configuration).await;
+    let second = TestInstance::start(&configuration).await;
+
+    // the leader creates the containers; both servers see the same seats
+    let leader = if first
+        .state
+        .redis_leader
+        .as_ref()
+        .expect("election")
+        .is_leader()
+    {
+        &first
+    } else {
+        &second
+    };
+    let follower = if std::ptr::eq(leader, &first) {
+        &second
+    } else {
+        &first
+    };
+
+    for _ in 0..200 {
+        if leader.state.sharing_scalers[0].seats().unclaimed_count() >= 2 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert_eq!(
+        leader.state.sharing_scalers[0].seats().unclaimed_count(),
+        2,
+        "the leader creates the seats"
+    );
+    assert_eq!(
+        follower.state.sharing_scalers[0].seats().unclaimed_count(),
+        2,
+        "the other server sees the same seats through Redis"
+    );
+    assert_eq!(
+        follower.state.sharing_scalers[0].delegate_proxies().len(),
+        2,
+        "and the same pre-initialized containers"
+    );
+
+    // a user of the follower claims a seat of a container the leader started
+    let jack = follower.login("jack", "password").await;
+    let started: serde_json::Value = jack
+        .post(follower.url("/app_i/01_hello/_"))
+        .send()
+        .await
+        .expect("start request")
+        .json()
+        .await
+        .expect("json");
+    let proxy_id = started["data"]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the app must start: {started}"))
+        .to_string();
+    let status: serde_json::Value = jack
+        .get(follower.url(&format!(
+            "/api/proxy/{proxy_id}/status?watch=true&timeout=20"
+        )))
+        .send()
+        .await
+        .expect("status request")
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(status["data"]["status"], "Up", "{status}");
+
+    assert_eq!(
+        leader.state.sharing_scalers[0].seats().claimed_count(),
+        1,
+        "the leader sees the claimed seat"
+    );
+    let proxy = follower
+        .state
+        .proxies
+        .proxy(&proxy_id)
+        .expect("the proxy of the user");
+    let container_of_the_user = proxy.target_id.clone().expect("the delegate proxy");
+    assert!(
+        leader.state.sharing_scalers[0]
+            .delegate_proxies()
+            .iter()
+            .any(|delegate| delegate.proxy.id == container_of_the_user),
+        "the user is served by a container of the leader"
+    );
+
+    // the seat is given back when the app stops
+    jack.put(follower.url(&format!("/api/proxy/{proxy_id}/status")))
+        .json(&serde_json::json!({"status": "Stopping"}))
+        .send()
+        .await
+        .expect("stop request");
+    for _ in 0..100 {
+        if leader.state.sharing_scalers[0].seats().claimed_count() == 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert_eq!(
+        leader.state.sharing_scalers[0].seats().claimed_count(),
+        0,
+        "the seat is released in the shared store"
+    );
+
+    first.stop();
+    second.stop();
+    clear_realm(&realm);
+}

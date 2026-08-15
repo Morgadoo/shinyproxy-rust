@@ -32,8 +32,8 @@ pub mod redis;
 
 pub use memory::{MemoryHeartbeatStore, MemoryProxyStore};
 pub use redis::{
-    RedisHeartbeatStore, RedisLock, RedisPortRegistry, RedisProxyStore, RedisSessionStore,
-    RedisStores, RedisVersionStore,
+    RedisDelegateProxyStore, RedisHeartbeatStore, RedisLock, RedisPortRegistry, RedisProxyStore,
+    RedisSeatStore, RedisSessionStore, RedisStores, RedisVersionStore,
 };
 
 /// Keeps track of the running proxies.

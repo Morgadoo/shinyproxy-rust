@@ -576,10 +576,12 @@ impl ProxySharingScaler {
     ///
     /// A seat of a container that may be re-used is offered to the next user; otherwise the container is
     /// marked for removal, which is also what happens when the app of the user crashed.
+    ///
+    /// Unlike the Java implementation this runs on the server that released the seat instead of on the
+    /// leader (Java bridges the event through Redis to the leader). Every step is a single operation on the
+    /// seat store, which is shared and idempotent, so the outcome is the same; the scaling that follows is
+    /// still leader-only, because `reconcile` checks that itself.
     pub async fn seat_released(&self, seat_id: &str, crashed: bool) {
-        if !self.leader.is_leader() {
-            return;
-        }
         let Some(seat) = self.seats.seat(seat_id) else {
             tracing::warn!(
                 "ProxySharing: Seat {seat_id} not found during processing of SeatReleasedEvent"

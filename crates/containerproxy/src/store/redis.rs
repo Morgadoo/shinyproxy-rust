@@ -154,6 +154,16 @@ impl RedisStores {
         RedisSessionStore::new(self.clone(), realm_id, version, session_timeout)
     }
 
+    /// The seat store of an app definition.
+    pub fn seat_store(&self, spec_id: &str) -> RedisSeatStore {
+        RedisSeatStore::new(self.clone(), spec_id)
+    }
+
+    /// The delegate proxy store of an app definition.
+    pub fn delegate_proxy_store(&self, spec_id: &str) -> RedisDelegateProxyStore {
+        RedisDelegateProxyStore::new(self.clone(), spec_id)
+    }
+
     /// The version store of these stores.
     pub fn version_store(&self) -> RedisVersionStore {
         RedisVersionStore::new(self.clone())
@@ -637,6 +647,346 @@ impl RedisSessionStore {
             .get_multiplexed_async_connection()
             .await
             .map_err(|error| tower_sessions::session_store::Error::Backend(error.to_string()))
+    }
+}
+
+/// The seats of one app definition, shared by the servers of a realm (`RedisSeatStore`).
+///
+/// The seats live in the hash `shinyproxy_{realmId}__seats_{specId}` and the ids of the seats that can be
+/// claimed in the set `shinyproxy_{realmId}__unclaimed_seat_ids_{specId}`, exactly as the Java
+/// implementation stores them. Claiming a seat pops an id from the set, which is atomic, so two servers can
+/// never hand out the same seat.
+#[derive(Debug, Clone)]
+pub struct RedisSeatStore {
+    stores: RedisStores,
+    seats_key: String,
+    unclaimed_key: String,
+}
+
+impl RedisSeatStore {
+    /// The seat store of an app definition.
+    pub fn new(stores: RedisStores, spec_id: &str) -> Self {
+        let seats_key = format!("{}__seats_{spec_id}", stores.prefix);
+        let unclaimed_key = format!("{}__unclaimed_seat_ids_{spec_id}", stores.prefix);
+        RedisSeatStore {
+            stores,
+            seats_key,
+            unclaimed_key,
+        }
+    }
+
+    /// The key of the hash with the seats (used by tests).
+    pub fn seats_key(&self) -> &str {
+        &self.seats_key
+    }
+
+    /// The key of the set with the seats that can be claimed (used by tests).
+    pub fn unclaimed_key(&self) -> &str {
+        &self.unclaimed_key
+    }
+
+    /// Writes a seat.
+    fn put(&self, connection: &mut redis::Connection, seat: &crate::service::sharing::Seat) {
+        let Ok(document) = serde_json::to_string(seat) else {
+            return;
+        };
+        let _: Result<(), _> = redis::cmd("HSET")
+            .arg(&self.seats_key)
+            .arg(&seat.id)
+            .arg(document)
+            .query(connection);
+    }
+}
+
+impl crate::service::sharing::SeatStore for RedisSeatStore {
+    fn add_seat(&self, seat: crate::service::sharing::Seat) {
+        let Some(mut connection) = self.stores.connection() else {
+            return;
+        };
+        self.put(&mut connection, &seat);
+        if seat.delegating_proxy_id.is_none() {
+            let _: Result<(), _> = redis::cmd("SADD")
+                .arg(&self.unclaimed_key)
+                .arg(&seat.id)
+                .query(&mut connection);
+        }
+    }
+
+    fn seat(&self, seat_id: &str) -> Option<crate::service::sharing::Seat> {
+        let mut connection = self.stores.connection()?;
+        let document: Option<String> = redis::cmd("HGET")
+            .arg(&self.seats_key)
+            .arg(seat_id)
+            .query(&mut connection)
+            .unwrap_or_default();
+        document.and_then(|document| serde_json::from_str(&document).ok())
+    }
+
+    fn claim_seat(&self, claiming_proxy_id: &str) -> Option<crate::service::sharing::Seat> {
+        let mut connection = self.stores.connection()?;
+        // SPOP is atomic: only one server gets the seat
+        let seat_id: Option<String> = redis::cmd("SPOP")
+            .arg(&self.unclaimed_key)
+            .query(&mut connection)
+            .unwrap_or_default();
+        let seat_id = seat_id?;
+
+        let document: Option<String> = redis::cmd("HGET")
+            .arg(&self.seats_key)
+            .arg(&seat_id)
+            .query(&mut connection)
+            .unwrap_or_default();
+        let mut seat: crate::service::sharing::Seat =
+            document.and_then(|document| serde_json::from_str(&document).ok())?;
+        seat.delegating_proxy_id = Some(claiming_proxy_id.to_string());
+        self.put(&mut connection, &seat);
+        Some(seat)
+    }
+
+    fn release_seat(&self, seat_id: &str) {
+        let Some(mut connection) = self.stores.connection() else {
+            return;
+        };
+        let document: Option<String> = redis::cmd("HGET")
+            .arg(&self.seats_key)
+            .arg(seat_id)
+            .query(&mut connection)
+            .unwrap_or_default();
+        let Some(mut seat) = document.and_then(|document| {
+            serde_json::from_str::<crate::service::sharing::Seat>(&document).ok()
+        }) else {
+            return;
+        };
+        seat.delegating_proxy_id = None;
+        self.put(&mut connection, &seat);
+    }
+
+    fn add_to_unclaimed_seats(&self, seat_id: &str) {
+        let Some(mut connection) = self.stores.connection() else {
+            return;
+        };
+        let _: Result<(), _> = redis::cmd("SADD")
+            .arg(&self.unclaimed_key)
+            .arg(seat_id)
+            .query(&mut connection);
+    }
+
+    fn remove_seats_if_unclaimed(
+        &self,
+        seat_ids: &[String],
+    ) -> Result<bool, crate::service::sharing::SeatClaimedDuringRemoval> {
+        let Some(mut connection) = self.stores.connection() else {
+            return Ok(false);
+        };
+        if seat_ids.is_empty() {
+            return Ok(true);
+        }
+
+        // WATCH the set, check that every seat can be claimed, then remove them in one transaction: a seat
+        // that is claimed in the meantime aborts the transaction (`UnclaimedSeatRemover`)
+        let _: Result<(), _> = redis::cmd("WATCH")
+            .arg(&self.unclaimed_key)
+            .query(&mut connection);
+        for seat_id in seat_ids {
+            let member: bool = redis::cmd("SISMEMBER")
+                .arg(&self.unclaimed_key)
+                .arg(seat_id)
+                .query(&mut connection)
+                .unwrap_or(false);
+            if !member {
+                let _: Result<(), _> = redis::cmd("UNWATCH").query(&mut connection);
+                return Ok(false);
+            }
+        }
+
+        let mut pipeline = redis::pipe();
+        pipeline.atomic();
+        let mut remove = pipeline.cmd("SREM");
+        remove = remove.arg(&self.unclaimed_key);
+        for seat_id in seat_ids {
+            remove = remove.arg(seat_id);
+        }
+        let answer: Option<Vec<redis::Value>> = remove.query(&mut connection).ok();
+        match answer {
+            Some(answers) if !answers.is_empty() => {
+                let mut delete = redis::cmd("HDEL");
+                let mut delete = delete.arg(&self.seats_key);
+                for seat_id in seat_ids {
+                    delete = delete.arg(seat_id);
+                }
+                let _: Result<(), _> = delete.query(&mut connection);
+                Ok(true)
+            }
+            // the transaction was aborted: somebody claimed one of the seats
+            _ => Err(crate::service::sharing::SeatClaimedDuringRemoval),
+        }
+    }
+
+    fn remove_seat_info(&self, seat_id: &str) {
+        let Some(mut connection) = self.stores.connection() else {
+            return;
+        };
+        let _: Result<(), _> = redis::cmd("HDEL")
+            .arg(&self.seats_key)
+            .arg(seat_id)
+            .query(&mut connection);
+        let _: Result<(), _> = redis::cmd("SREM")
+            .arg(&self.unclaimed_key)
+            .arg(seat_id)
+            .query(&mut connection);
+    }
+
+    fn unclaimed_count(&self) -> i64 {
+        let Some(mut connection) = self.stores.connection() else {
+            return 0;
+        };
+        redis::cmd("SCARD")
+            .arg(&self.unclaimed_key)
+            .query(&mut connection)
+            .unwrap_or(0)
+    }
+
+    fn count(&self) -> i64 {
+        let Some(mut connection) = self.stores.connection() else {
+            return 0;
+        };
+        redis::cmd("HLEN")
+            .arg(&self.seats_key)
+            .query(&mut connection)
+            .unwrap_or(0)
+    }
+}
+
+/// The pre-started containers of one app definition, shared by the servers of a realm
+/// (`RedisDelegateProxyStore`).
+///
+/// They live in the hash `shinyproxy_{realmId}__delegate_proxies_{specId}`; the proxy inside is stored with
+/// the internal JSON view, like the proxies of the realm.
+#[derive(Debug, Clone)]
+pub struct RedisDelegateProxyStore {
+    stores: RedisStores,
+    key: String,
+}
+
+impl RedisDelegateProxyStore {
+    /// The delegate proxy store of an app definition.
+    pub fn new(stores: RedisStores, spec_id: &str) -> Self {
+        let key = format!("{}__delegate_proxies_{spec_id}", stores.prefix);
+        RedisDelegateProxyStore { stores, key }
+    }
+
+    /// The key of the hash (used by tests).
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+
+    /// The JSON document of a delegate proxy.
+    fn document(delegate_proxy: &crate::service::sharing::DelegateProxy) -> serde_json::Value {
+        serde_json::json!({
+            "proxy": delegate_proxy.proxy.internal_json(),
+            "seatIds": delegate_proxy.seat_ids,
+            "delegateProxyStatus": match delegate_proxy.status {
+                crate::service::sharing::DelegateProxyStatus::Pending => "Pending",
+                crate::service::sharing::DelegateProxyStatus::Available => "Available",
+                crate::service::sharing::DelegateProxyStatus::ToRemove => "ToRemove",
+            },
+            "proxySpecHash": delegate_proxy.proxy_spec_hash,
+        })
+    }
+
+    /// Reads a delegate proxy back.
+    fn parse(&self, document: &str) -> Option<crate::service::sharing::DelegateProxy> {
+        let value: serde_json::Value = serde_json::from_str(document).ok()?;
+        let proxy = crate::model::proxy::Proxy::from_internal_json(
+            &self.stores.registry,
+            value.get("proxy")?,
+        )
+        .ok()?;
+        let status = match value
+            .get("delegateProxyStatus")
+            .and_then(|value| value.as_str())
+        {
+            Some("Available") => crate::service::sharing::DelegateProxyStatus::Available,
+            Some("ToRemove") => crate::service::sharing::DelegateProxyStatus::ToRemove,
+            _ => crate::service::sharing::DelegateProxyStatus::Pending,
+        };
+        let seat_ids = value
+            .get("seatIds")
+            .and_then(|value| value.as_array())
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(|value| value.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Some(crate::service::sharing::DelegateProxy {
+            proxy,
+            seat_ids,
+            status,
+            proxy_spec_hash: value
+                .get("proxySpecHash")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .to_string(),
+        })
+    }
+}
+
+impl crate::service::sharing::DelegateProxyStore for RedisDelegateProxyStore {
+    fn add_delegate_proxy(&self, delegate_proxy: crate::service::sharing::DelegateProxy) {
+        self.update_delegate_proxy(delegate_proxy);
+    }
+
+    fn update_delegate_proxy(&self, delegate_proxy: crate::service::sharing::DelegateProxy) {
+        let Some(mut connection) = self.stores.connection() else {
+            return;
+        };
+        let document = RedisDelegateProxyStore::document(&delegate_proxy).to_string();
+        let _: Result<(), _> = redis::cmd("HSET")
+            .arg(&self.key)
+            .arg(&delegate_proxy.proxy.id)
+            .arg(document)
+            .query(&mut connection);
+    }
+
+    fn remove_delegate_proxy(&self, delegate_proxy_id: &str) {
+        let Some(mut connection) = self.stores.connection() else {
+            return;
+        };
+        let _: Result<(), _> = redis::cmd("HDEL")
+            .arg(&self.key)
+            .arg(delegate_proxy_id)
+            .query(&mut connection);
+    }
+
+    fn delegate_proxy(
+        &self,
+        delegate_proxy_id: &str,
+    ) -> Option<crate::service::sharing::DelegateProxy> {
+        let mut connection = self.stores.connection()?;
+        let document: Option<String> = redis::cmd("HGET")
+            .arg(&self.key)
+            .arg(delegate_proxy_id)
+            .query(&mut connection)
+            .unwrap_or_default();
+        document.and_then(|document| self.parse(&document))
+    }
+
+    fn all_delegate_proxies(&self) -> Vec<crate::service::sharing::DelegateProxy> {
+        let Some(mut connection) = self.stores.connection() else {
+            return Vec::new();
+        };
+        let documents: Vec<String> = redis::cmd("HVALS")
+            .arg(&self.key)
+            .query(&mut connection)
+            .unwrap_or_default();
+        let mut all: Vec<crate::service::sharing::DelegateProxy> = documents
+            .iter()
+            .filter_map(|document| self.parse(document))
+            .collect();
+        all.sort_by(|left, right| left.proxy.id.cmp(&right.proxy.id));
+        all
     }
 }
 

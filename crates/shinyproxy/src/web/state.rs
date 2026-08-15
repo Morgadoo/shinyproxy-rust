@@ -369,10 +369,20 @@ impl AppState {
                 )));
             }
 
-            let seats: Arc<dyn containerproxy::service::SeatStore> =
-                Arc::new(containerproxy::service::MemorySeatStore::new());
-            let delegates: Arc<dyn containerproxy::service::DelegateProxyStore> =
-                Arc::new(containerproxy::service::MemoryDelegateProxyStore::new());
+            // with `store-mode: Redis` the servers of the realm share their pre-started containers
+            let (seats, delegates): (
+                Arc<dyn containerproxy::service::SeatStore>,
+                Arc<dyn containerproxy::service::DelegateProxyStore>,
+            ) = match &redis_stores {
+                Some(stores) => (
+                    Arc::new(stores.seat_store(&spec.id)),
+                    Arc::new(stores.delegate_proxy_store(&spec.id)),
+                ),
+                None => (
+                    Arc::new(containerproxy::service::MemorySeatStore::new()),
+                    Arc::new(containerproxy::service::MemoryDelegateProxyStore::new()),
+                ),
+            };
             let wait_time =
                 containerproxy::service::ProxySharingDispatcher::seat_wait_time(&settings)
                     .map_err(StateError::Configuration)?;
