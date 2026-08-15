@@ -34,6 +34,11 @@
 //!
 //! `--measure-start-cycles N` measures something else entirely: how long the server needs to start an app and
 //! to stop it again, N times, which is the number a user feels when opening an app.
+//!
+//! For the `index` and `api` targets every connection logs in as its own user session, because a servlet
+//! container serialises the requests of *one* session (Undertow locks the session per request), which would
+//! measure the session lock instead of the page. The `app` target necessarily shares the session of the user
+//! that owns the app.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -129,16 +134,15 @@ struct Counters {
 }
 
 /// Runs the load and prints the report.
-pub async fn run(options: Options) -> anyhow::Result<()> {
-    // the cookie jar is kept, because the WebSocket client needs the session cookie
+/// A client that is logged in, together with its session cookie.
+async fn logged_in_client(options: &Options) -> anyhow::Result<(reqwest::Client, String)> {
     let jar = Arc::new(reqwest::cookie::Jar::default());
     let client = reqwest::Client::builder()
         .cookie_provider(jar.clone())
         .redirect(reqwest::redirect::Policy::none())
-        .pool_max_idle_per_host(options.connections * 2)
+        .pool_max_idle_per_host(options.connections.max(1) * 2)
         .build()?;
 
-    // log in
     let login = client
         .get(format!("{}/login", options.base_url))
         .send()
@@ -161,6 +165,19 @@ pub async fn run(options: Options) -> anyhow::Result<()> {
         .send()
         .await?;
 
+    let cookie = {
+        use reqwest::cookie::CookieStore;
+        let url: reqwest::Url = options.base_url.parse()?;
+        jar.cookies(&url)
+            .and_then(|value| value.to_str().ok().map(str::to_string))
+            .unwrap_or_default()
+    };
+    Ok((client, cookie))
+}
+
+pub async fn run(options: Options) -> anyhow::Result<()> {
+    let (client, cookie) = logged_in_client(&options).await?;
+
     // how long the server needs to start an app and to stop it again
     if options.start_cycles > 0 {
         return measure_start_cycles(&client, &options).await;
@@ -170,13 +187,6 @@ pub async fn run(options: Options) -> anyhow::Result<()> {
     let (proxy_id, _) = start_app(&client, &options).await?;
     println!("app {proxy_id} is up, starting the load");
 
-    let cookie = {
-        use reqwest::cookie::CookieStore;
-        let url: reqwest::Url = options.base_url.parse()?;
-        jar.cookies(&url)
-            .and_then(|value| value.to_str().ok().map(str::to_string))
-            .unwrap_or_default()
-    };
     let counters = Arc::new(Counters::default());
     let deadline = Instant::now() + options.duration;
 
@@ -201,8 +211,16 @@ pub async fn run(options: Options) -> anyhow::Result<()> {
         Target::Api => format!("{}/api/proxy", options.base_url),
     };
     let latencies = Arc::new(std::sync::Mutex::new(Vec::<u64>::new()));
-    for _ in 0..options.connections {
-        let client = client.clone();
+    for connection in 0..options.connections {
+        // a session of its own for the pages and the API (see the note at the top of this file)
+        let client = match options.target {
+            Target::App => client.clone(),
+            Target::Index | Target::Api => {
+                let (client, _) = logged_in_client(&options).await?;
+                let _ = connection;
+                client
+            }
+        };
         let url = target_url.clone();
         let counters = counters.clone();
         let latencies = latencies.clone();

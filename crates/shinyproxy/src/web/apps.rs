@@ -92,14 +92,11 @@ pub async fn app_page(
     let spec = state.specs.spec(&app_name).cloned();
     let proxy = find_user_proxy(&state, user.as_ref(), &app_name, &instance);
 
-    // no access and no running app -> the Java implementation forwards to /error with 403
+    // no access (or no such app) and no running app: Spring's access denied handler answers with the API
+    // document, whatever the request asked for (verified against the Java implementation)
     let Some(spec) = spec.filter(|spec| state.can_access(user.as_ref(), spec)) else {
         if proxy.is_none() {
-            return (
-                StatusCode::FORBIDDEN,
-                error_page(&state, StatusCode::FORBIDDEN),
-            )
-                .into_response();
+            return forbidden_document();
         }
         return render_app_page(
             &state,
@@ -837,10 +834,12 @@ pub async fn api_route(
     session: tower_sessions::Session,
     request: Request,
 ) -> Response {
+    // unlike `/app_proxy/**` (which the browser code of the app page watches for the "stopped" document),
+    // this route answers a target the user may not use with the access denied document of Spring
     let context = state.context_path_with_slash();
     let prefix = format!("{context}api/route/");
     let Some(rest) = request.uri().path().strip_prefix(&prefix) else {
-        return app_stopped_response();
+        return forbidden_document();
     };
     let (target_id, sub_path) = match rest.split_once('/') {
         Some((target_id, sub_path)) => (target_id.to_string(), sub_path.to_string()),
@@ -848,13 +847,13 @@ pub async fn api_route(
     };
 
     let Some(proxy) = find_proxy_by_target(&state, user.as_ref(), &target_id) else {
-        return app_stopped_response();
+        return forbidden_document();
     };
     if proxy.status.is_unavailable() {
-        return app_stopped_response();
+        return forbidden_document();
     }
     let Some(resolved) = state.router.resolve(&proxy, &sub_path) else {
-        return app_stopped_response();
+        return forbidden_document();
     };
     let url = resolved.url(request.uri().query());
     forward_to_app(&state, &proxy, request, &url, &session, user.as_ref()).await
@@ -1077,6 +1076,15 @@ fn app_stopped_api_response() -> Response {
     (
         StatusCode::GONE,
         Json(json!({"status": "fail", "data": "app_stopped_or_non_existent"})),
+    )
+        .into_response()
+}
+
+/// The document Spring's access denied handler produces (403 with the API envelope).
+pub fn forbidden_document() -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(json!({"status": "fail", "data": "forbidden"})),
     )
         .into_response()
 }

@@ -52,7 +52,7 @@ proxy:
 "##;
 
 #[tokio::test]
-async fn health_endpoints_are_public() {
+async fn health_endpoints_are_public_on_the_management_port() {
     let instance = TestInstance::start(CONFIG).await;
     let client = instance.client();
 
@@ -61,19 +61,29 @@ async fn health_endpoints_are_public() {
         "/actuator/health/liveness",
         "/actuator/health/readiness",
     ] {
+        // no session is needed on the management port
         let response = client
-            .get(instance.url(path))
+            .get(instance.management_url(path))
             .send()
             .await
             .expect("request");
         assert_eq!(response.status(), 200, "{path}");
         let json: serde_json::Value = response.json().await.expect("json");
         assert_eq!(json["status"], "UP", "{path}");
+
+        // and the endpoints are *not* on the application port, because `management.server.port` is set
+        // (the Java implementation defaults it to 9090, so it behaves the same way)
+        let response = client
+            .get(instance.url(path))
+            .send()
+            .await
+            .expect("request");
+        assert_eq!(response.status(), 404, "{path} must not be on the app port");
     }
 
     // the readiness probe names the app recovery component, like the Java health indicator
     let json: serde_json::Value = client
-        .get(instance.url("/actuator/health/readiness"))
+        .get(instance.management_url("/actuator/health/readiness"))
         .send()
         .await
         .expect("request")
@@ -91,7 +101,7 @@ async fn recyclable_reports_activity() {
     let client = instance.client();
 
     let json: serde_json::Value = client
-        .get(instance.url("/actuator/recyclable"))
+        .get(instance.management_url("/actuator/recyclable"))
         .send()
         .await
         .expect("request")
@@ -146,7 +156,7 @@ async fn recyclable_reports_activity() {
     let mut connections = 0;
     for _ in 0..25 {
         let json: serde_json::Value = client
-            .get(instance.url("/actuator/recyclable"))
+            .get(instance.management_url("/actuator/recyclable"))
             .send()
             .await
             .expect("request")
@@ -167,7 +177,7 @@ async fn recyclable_reports_activity() {
     drop(socket);
     for _ in 0..25 {
         let json: serde_json::Value = client
-            .get(instance.url("/actuator/recyclable"))
+            .get(instance.management_url("/actuator/recyclable"))
             .send()
             .await
             .expect("request")
@@ -180,7 +190,7 @@ async fn recyclable_reports_activity() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     let json: serde_json::Value = client
-        .get(instance.url("/actuator/recyclable"))
+        .get(instance.management_url("/actuator/recyclable"))
         .send()
         .await
         .expect("request")
@@ -199,7 +209,7 @@ async fn prometheus_exposes_the_metrics_of_a_start_and_stop() {
 
     // the metrics of every app definition exist before an app started
     let body = client
-        .get(instance.url("/actuator/prometheus"))
+        .get(instance.management_url("/actuator/prometheus"))
         .send()
         .await
         .expect("request")
@@ -250,7 +260,7 @@ async fn prometheus_exposes_the_metrics_of_a_start_and_stop() {
     let mut body = String::new();
     for _ in 0..25 {
         body = client
-            .get(instance.url("/actuator/prometheus"))
+            .get(instance.management_url("/actuator/prometheus"))
             .send()
             .await
             .expect("request")
@@ -298,7 +308,7 @@ async fn prometheus_exposes_the_metrics_of_a_start_and_stop() {
     );
     for _ in 0..25 {
         body = client
-            .get(instance.url("/actuator/prometheus"))
+            .get(instance.management_url("/actuator/prometheus"))
             .send()
             .await
             .expect("request")
@@ -387,7 +397,7 @@ async fn prometheus_counts_the_users_that_are_logged_in() {
     // nobody is logged in yet
     let body = instance
         .client()
-        .get(instance.url("/actuator/prometheus"))
+        .get(instance.management_url("/actuator/prometheus"))
         .send()
         .await
         .expect("request")
@@ -417,7 +427,7 @@ async fn prometheus_counts_the_users_that_are_logged_in() {
 
     let body = instance
         .client()
-        .get(instance.url("/actuator/prometheus"))
+        .get(instance.management_url("/actuator/prometheus"))
         .send()
         .await
         .expect("request")
@@ -436,7 +446,7 @@ async fn prometheus_counts_the_users_that_are_logged_in() {
         .expect("index request");
     let body = instance
         .client()
-        .get(instance.url("/actuator/prometheus"))
+        .get(instance.management_url("/actuator/prometheus"))
         .send()
         .await
         .expect("request")
@@ -457,7 +467,7 @@ async fn prometheus_counts_the_users_that_are_logged_in() {
         .expect("logout");
     let body = instance
         .client()
-        .get(instance.url("/actuator/prometheus"))
+        .get(instance.management_url("/actuator/prometheus"))
         .send()
         .await
         .expect("request")

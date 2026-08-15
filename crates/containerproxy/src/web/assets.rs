@@ -48,7 +48,10 @@ pub struct Templates;
 /// Cache header used for assets served under the instance id prefix.
 const LONG_CACHE: &str = "public, max-age=31536000, immutable";
 /// Cache header used for assets served without the instance id prefix.
-const SHORT_CACHE: &str = "no-cache";
+///
+/// Spring Security writes these headers for every answer of the server, including the assets; only the
+/// instance-id-prefixed URLs (which change with every configuration) may be cached forever.
+const SHORT_CACHE: &str = "no-cache, no-store, max-age=0, must-revalidate";
 
 /// Serves an embedded asset.
 ///

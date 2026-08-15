@@ -1,0 +1,522 @@
+{
+  "implementation": "Java ShinyProxy 3.2.4",
+  "recorded_at": "2026-08-15T08:31:37.660232167Z",
+  "answers": {
+    "about-page": {
+      "status": 200,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "content-type": "text/html;charset=utf-8",
+        "expires": "0",
+        "pragma": "no-cache",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "<title>Parity</title>\nid=\"admin\"\nid=\"appDetails\"\nid=\"appDetailsModal\"\nid=\"appInstances\"\nid=\"instanceNameField\"\nid=\"maxInstances\"\nid=\"modal\"\nid=\"navbar\"\nid=\"navbar-collapse\"\nid=\"newInstanceForm\"\nid=\"reportIssueForm\"\nid=\"reportIssueMessage\"\nid=\"reportIssueModal\"\nid=\"switchInstancesModal\"\nid=\"usedInstances\"\nname=\"reportIssueMessage\"\nname=\"viewport\""
+    },
+    "actuator-health": {
+      "status": 404,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "content-type": "application/json",
+        "expires": "0",
+        "pragma": "no-cache",
+        "set-cookie": "JSESSIONID=<id>; Path=/; HttpOnly; SameSite=Lax",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "{\n  \"data\": \"not found\",\n  \"status\": \"error\"\n}"
+    },
+    "actuator-recyclable": {
+      "status": 404,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "content-type": "application/json",
+        "expires": "0",
+        "pragma": "no-cache",
+        "set-cookie": "JSESSIONID=<id>; Path=/; HttpOnly; SameSite=Lax",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "{\n  \"data\": \"not found\",\n  \"status\": \"error\"\n}"
+    },
+    "admin-data-admin": {
+      "status": 200,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "content-type": "application/json",
+        "expires": "0",
+        "pragma": "no-cache",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "{\n  \"data\": [],\n  \"status\": \"success\"\n}"
+    },
+    "admin-data-user": {
+      "status": 410,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "content-type": "application/json;charset=utf-8",
+        "expires": "0",
+        "pragma": "no-cache",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "{\n  \"data\": \"shinyproxy_authentication_required\",\n  \"status\": \"fail\"\n}"
+    },
+    "admin-page-admin": {
+      "status": 200,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "content-type": "text/html;charset=utf-8",
+        "expires": "0",
+        "pragma": "no-cache",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "<title>Parity</title>\nid=\"admin\"\nid=\"adminStoppedApps\"\nid=\"adminStoppingApps\"\nid=\"allApps\"\nid=\"appDetails\"\nid=\"appDetailsModal\"\nid=\"appInstances\"\nid=\"instanceNameField\"\nid=\"maxInstances\"\nid=\"modal\"\nid=\"navbar\"\nid=\"navbar-collapse\"\nid=\"newInstanceForm\"\nid=\"reportIssueForm\"\nid=\"reportIssueMessage\"\nid=\"reportIssueModal\"\nid=\"switchInstancesModal\"\nid=\"usedInstances\"\nname=\"reportIssueMessage\"\nname=\"viewport\""
+    },
+    "admin-page-user": {
+      "status": 403,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "content-type": "application/json",
+        "expires": "0",
+        "pragma": "no-cache",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "{\n  \"data\": \"forbidden\",\n  \"status\": \"fail\"\n}"
+    },
+    "api-proxies-anonymous": {
+      "status": 410,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "content-type": "application/json;charset=utf-8",
+        "expires": "0",
+        "pragma": "no-cache",
+        "set-cookie": "JSESSIONID=<id>; Path=/; HttpOnly; SameSite=Lax",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "{\n  \"data\": \"shinyproxy_authentication_required\",\n  \"status\": \"fail\"\n}"
+    },
+    "api-proxies-user": {
+      "status": 200,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "content-type": "application/json",
+        "expires": "0",
+        "pragma": "no-cache",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "{\n  \"data\": [],\n  \"status\": \"success\"\n}"
+    },
+    "api-proxy-details-unknown": {
+      "status": 410,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "content-type": "application/json",
+        "expires": "0",
+        "pragma": "no-cache",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "{\n  \"data\": \"app_stopped_or_non_existent\",\n  \"status\": \"fail\"\n}"
+    },
+    "api-proxy-status-unknown": {
+      "status": 200,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "content-type": "application/json",
+        "expires": "0",
+        "pragma": "no-cache",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "{\n  \"data\": {\n    \"containers\": [],\n    \"createdTimestamp\": 0,\n    \"displayName\": null,\n    \"id\": \"does-not-exist\",\n    \"runtimeValues\": {},\n    \"specId\": null,\n    \"startupTimestamp\": 0,\n    \"status\": \"Stopped\",\n    \"targetId\": null,\n    \"userId\": null\n  },\n  \"status\": \"success\"\n}"
+    },
+    "api-proxy-status-watch-invalid-timeout": {
+      "status": 200,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "content-type": "application/json",
+        "expires": "0",
+        "pragma": "no-cache",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "{\n  \"data\": {\n    \"containers\": [],\n    \"createdTimestamp\": 0,\n    \"displayName\": null,\n    \"id\": \"does-not-exist\",\n    \"runtimeValues\": {},\n    \"specId\": null,\n    \"startupTimestamp\": 0,\n    \"status\": \"Stopped\",\n    \"targetId\": null,\n    \"userId\": null\n  },\n  \"status\": \"success\"\n}"
+    },
+    "api-proxy-unknown": {
+      "status": 403,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "content-type": "application/json",
+        "expires": "0",
+        "pragma": "no-cache",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "{\n  \"data\": \"forbidden\",\n  \"status\": \"fail\"\n}"
+    },
+    "api-route-unknown": {
+      "status": 403,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "expires": "0",
+        "pragma": "no-cache",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "<35 bytes>"
+    },
+    "api-spec-no-access": {
+      "status": 403,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "content-type": "application/json",
+        "expires": "0",
+        "pragma": "no-cache",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "{\n  \"data\": \"forbidden\",\n  \"status\": \"fail\"\n}"
+    },
+    "api-spec-unknown": {
+      "status": 403,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "content-type": "application/json",
+        "expires": "0",
+        "pragma": "no-cache",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "{\n  \"data\": \"forbidden\",\n  \"status\": \"fail\"\n}"
+    },
+    "api-spec-user": {
+      "status": 200,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "content-type": "application/json",
+        "expires": "0",
+        "pragma": "no-cache",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "{\n  \"data\": {\n    \"description\": \"Application which demonstrates the basics of a Shiny app\",\n    \"displayName\": \"Hello Application\",\n    \"id\": \"01_hello\",\n    \"logoClasses\": null,\n    \"logoHeight\": null,\n    \"logoStyle\": null,\n    \"logoWidth\": null\n  },\n  \"status\": \"success\"\n}"
+    },
+    "api-specs-admin": {
+      "status": 200,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "content-type": "application/json",
+        "expires": "0",
+        "pragma": "no-cache",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "{\n  \"data\": [\n    {\n      \"description\": \"Application which demonstrates the basics of a Shiny app\",\n      \"displayName\": \"Hello Application\",\n      \"id\": \"01_hello\",\n      \"logoClasses\": null,\n      \"logoHeight\": null,\n      \"logoStyle\": null,\n      \"logoWidth\": null\n    },\n    {\n      \"description\": null,\n      \"displayName\": \"Admin Application\",\n      \"id\": \"02_admin_only\",\n      \"logoClasses\": null,\n      \"logoHeight\": null,\n      \"logoStyle\": null,\n      \"logoWidth\": null\n    }\n  ],\n  \"status\": \"success\"\n}"
+    },
+    "api-specs-anonymous": {
+      "status": 410,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "content-type": "application/json;charset=utf-8",
+        "expires": "0",
+        "pragma": "no-cache",
+        "set-cookie": "JSESSIONID=<id>; Path=/; HttpOnly; SameSite=Lax",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "{\n  \"data\": \"shinyproxy_authentication_required\",\n  \"status\": \"fail\"\n}"
+    },
+    "api-specs-user": {
+      "status": 200,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "content-type": "application/json",
+        "expires": "0",
+        "pragma": "no-cache",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "{\n  \"data\": [\n    {\n      \"description\": \"Application which demonstrates the basics of a Shiny app\",\n      \"displayName\": \"Hello Application\",\n      \"id\": \"01_hello\",\n      \"logoClasses\": null,\n      \"logoHeight\": null,\n      \"logoStyle\": null,\n      \"logoWidth\": null\n    }\n  ],\n  \"status\": \"success\"\n}"
+    },
+    "api-start-no-access": {
+      "status": 403,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "content-type": "application/json",
+        "expires": "0",
+        "pragma": "no-cache",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "{\n  \"data\": \"forbidden\",\n  \"status\": \"fail\"\n}"
+    },
+    "api-start-unknown-spec": {
+      "status": 403,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "content-type": "application/json",
+        "expires": "0",
+        "pragma": "no-cache",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "{\n  \"data\": \"forbidden\",\n  \"status\": \"fail\"\n}"
+    },
+    "api-status-invalid": {
+      "status": 403,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "content-type": "application/json",
+        "expires": "0",
+        "pragma": "no-cache",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "{\n  \"data\": \"forbidden\",\n  \"status\": \"fail\"\n}"
+    },
+    "api-status-unknown": {
+      "status": 403,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "content-type": "application/json",
+        "expires": "0",
+        "pragma": "no-cache",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "{\n  \"data\": \"forbidden\",\n  \"status\": \"fail\"\n}"
+    },
+    "api-transfer-unknown": {
+      "status": 403,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "content-type": "application/json",
+        "expires": "0",
+        "pragma": "no-cache",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "{\n  \"data\": \"forbidden\",\n  \"status\": \"fail\"\n}"
+    },
+    "app-page": {
+      "status": 200,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "content-type": "text/html;charset=utf-8",
+        "expires": "0",
+        "pragma": "no-cache",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "<title>Hello Application</title>\nid=\"appCrashed\"\nid=\"appDetails\"\nid=\"appDetailsModal\"\nid=\"appInstances\"\nid=\"appPage\"\nid=\"appPaused\"\nid=\"appStopped\"\nid=\"appTransferred\"\nid=\"changeUserIdForm\"\nid=\"iframeinsert\"\nid=\"instanceNameField\"\nid=\"loading\"\nid=\"maxInstances\"\nid=\"modal\"\nid=\"navbar\"\nid=\"navbar-collapse\"\nid=\"newInstanceForm\"\nid=\"parameterForm\"\nid=\"pausingApp\"\nid=\"reconnecting\"\nid=\"reloadFailed\"\nid=\"reportIssueForm\"\nid=\"reportIssueMessage\"\nid=\"reportIssueModal\"\nid=\"resumingApp\"\nid=\"retryInXSeconds\"\nid=\"retryNow\"\nid=\"selectAllWarning\"\nid=\"startFailed\"\nid=\"startFailedMessage\"\nid=\"stoppingApp\"\nid=\"switchInstancesModal\"\nid=\"usedInstances\"\nid=\"userIdField\"\nid=\"userLoggedOut\"\nname=\"reportIssueMessage\"\nname=\"viewport\""
+    },
+    "app-page-no-access": {
+      "status": 403,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "content-type": "application/json",
+        "expires": "0",
+        "pragma": "no-cache",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "{\n  \"data\": \"forbidden\",\n  \"status\": \"fail\"\n}"
+    },
+    "app-page-unknown": {
+      "status": 403,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "content-type": "application/json",
+        "expires": "0",
+        "pragma": "no-cache",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "{\n  \"data\": \"forbidden\",\n  \"status\": \"fail\"\n}"
+    },
+    "app-proxy-unknown": {
+      "status": 410,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "content-type": "application/json;charset=utf-8",
+        "expires": "0",
+        "pragma": "no-cache",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "{\n  \"data\": \"app_stopped_or_non_existent\",\n  \"status\": \"fail\"\n}"
+    },
+    "app-proxy-unknown-anonymous": {
+      "status": 410,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "content-type": "application/json;charset=utf-8",
+        "expires": "0",
+        "pragma": "no-cache",
+        "set-cookie": "JSESSIONID=<id>; Path=/; HttpOnly; SameSite=Lax",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "{\n  \"data\": \"shinyproxy_authentication_required\",\n  \"status\": \"fail\"\n}"
+    },
+    "auth-error-page": {
+      "status": 200,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "content-type": "text/html;charset=utf-8",
+        "expires": "0",
+        "pragma": "no-cache",
+        "set-cookie": "JSESSIONID=<id>; Path=/; HttpOnly; SameSite=Lax",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "<title>Parity</title>\nname=\"viewport\""
+    },
+    "css": {
+      "status": 200,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "content-type": "text/css",
+        "expires": "0",
+        "pragma": "no-cache",
+        "set-cookie": "JSESSIONID=<id>; Path=/; HttpOnly; SameSite=Lax",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "<1 bytes of text/css>"
+    },
+    "favicon-without-path": {
+      "status": 302,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "expires": "0",
+        "location": "/login",
+        "pragma": "no-cache",
+        "set-cookie": "JSESSIONID=<id>; Path=/; HttpOnly; SameSite=Lax",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": ""
+    },
+    "heartbeat-unknown": {
+      "status": 410,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "content-type": "application/json",
+        "expires": "0",
+        "pragma": "no-cache",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "{\n  \"data\": \"app_stopped_or_non_existent\",\n  \"status\": \"fail\"\n}"
+    },
+    "index-admin": {
+      "status": 200,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "content-type": "text/html;charset=utf-8",
+        "expires": "0",
+        "pragma": "no-cache",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "<title>Parity</title>\ndata-app-id=\"01_hello\"\ndata-app-id=\"02_admin_only\"\nid=\"appDetails\"\nid=\"appDetailsModal\"\nid=\"appInstances\"\nid=\"applist\"\nid=\"changeUserIdForm\"\nid=\"instanceNameField\"\nid=\"maxInstances\"\nid=\"modal\"\nid=\"navbar\"\nid=\"navbar-collapse\"\nid=\"newInstanceForm\"\nid=\"reportIssueForm\"\nid=\"reportIssueMessage\"\nid=\"reportIssueModal\"\nid=\"switchInstancesModal\"\nid=\"usedInstances\"\nid=\"userIdField\"\nname=\"reportIssueMessage\"\nname=\"viewport\""
+    },
+    "index-anonymous": {
+      "status": 302,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "expires": "0",
+        "location": "/login",
+        "pragma": "no-cache",
+        "set-cookie": "JSESSIONID=<id>; Path=/; HttpOnly; SameSite=Lax",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": ""
+    },
+    "index-user": {
+      "status": 200,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "content-type": "text/html;charset=utf-8",
+        "expires": "0",
+        "pragma": "no-cache",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "<title>Parity</title>\ndata-app-id=\"01_hello\"\nid=\"appDetails\"\nid=\"appDetailsModal\"\nid=\"appInstances\"\nid=\"applist\"\nid=\"changeUserIdForm\"\nid=\"instanceNameField\"\nid=\"maxInstances\"\nid=\"modal\"\nid=\"navbar\"\nid=\"navbar-collapse\"\nid=\"newInstanceForm\"\nid=\"reportIssueForm\"\nid=\"reportIssueMessage\"\nid=\"reportIssueModal\"\nid=\"switchInstancesModal\"\nid=\"usedInstances\"\nid=\"userIdField\"\nname=\"reportIssueMessage\"\nname=\"viewport\""
+    },
+    "issue-without-app": {
+      "status": 400,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "content-type": "application/json",
+        "expires": "0",
+        "pragma": "no-cache",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "{\n  \"data\": \"Report issue is not configured\",\n  \"status\": \"fail\"\n}"
+    },
+    "login-page": {
+      "status": 200,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "content-type": "text/html;charset=utf-8",
+        "expires": "0",
+        "pragma": "no-cache",
+        "set-cookie": "JSESSIONID=<id>; Path=/; HttpOnly; SameSite=Lax",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "<title>Parity</title>\nid=\"password\"\nid=\"username\"\nname=\"_csrf\"\nname=\"password\"\nname=\"username\"\nname=\"viewport\""
+    },
+    "login-page-expired": {
+      "status": 200,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "content-type": "text/html;charset=utf-8",
+        "expires": "0",
+        "pragma": "no-cache",
+        "set-cookie": "JSESSIONID=<id>; Path=/; HttpOnly; SameSite=Lax",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "<title>Parity</title>\nid=\"password\"\nid=\"username\"\nname=\"_csrf\"\nname=\"password\"\nname=\"username\"\nname=\"viewport\""
+    },
+    "logout-success-page": {
+      "status": 200,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "content-type": "text/html;charset=utf-8",
+        "expires": "0",
+        "pragma": "no-cache",
+        "set-cookie": "JSESSIONID=<id>; Path=/; HttpOnly; SameSite=Lax",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "<title>Parity</title>\nname=\"viewport\""
+    },
+    "unknown-asset": {
+      "status": 404,
+      "headers": {
+        "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+        "content-type": "application/json",
+        "expires": "0",
+        "pragma": "no-cache",
+        "set-cookie": "JSESSIONID=<id>; Path=/; HttpOnly; SameSite=Lax",
+        "x-content-type-options": "nosniff",
+        "x-xss-protection": "0"
+      },
+      "body": "{\n  \"data\": \"not found\",\n  \"status\": \"error\"\n}"
+    }
+  }
+}

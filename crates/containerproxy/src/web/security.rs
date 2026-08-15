@@ -234,13 +234,11 @@ pub fn is_public_path(path: &str, instance_id: &str) -> bool {
     {
         return true;
     }
-    // assets, both with and without the instance id prefix
+    // the assets are public, both with and without the instance id prefix; `/favicon` is *not* (the Java
+    // implementation sends an unauthenticated request to the login page, verified with the parity fixture)
     let unprefixed = path
         .strip_prefix(&format!("/{instance_id}"))
         .unwrap_or(path);
-    if unprefixed == "/favicon" {
-        return true;
-    }
     super::assets::ASSET_PREFIXES
         .iter()
         .any(|prefix| unprefixed.starts_with(&format!("/{prefix}/")))
@@ -305,7 +303,6 @@ mod tests {
             "/js/shiny.common.js",
             "/webjars/jquery/3.7.1/jquery.min.js",
             "/abc123/js/shiny.common.js",
-            "/abc123/favicon",
             "/actuator/health",
             "/v3/api-docs",
             "/swagger-ui/index.html",
@@ -314,7 +311,17 @@ mod tests {
         ] {
             assert!(is_public_path(path, instance), "{path} must be public");
         }
-        for path in ["/", "/app/01_hello", "/api/proxy", "/admin", "/heartbeat/x"] {
+        for path in [
+            "/",
+            "/app/01_hello",
+            "/api/proxy",
+            "/admin",
+            "/heartbeat/x",
+            // the favicon of an app is not public: the Java implementation sends an unauthenticated
+            // request to the login page (verified with the parity fixture)
+            "/favicon",
+            "/abc123/favicon",
+        ] {
             assert!(!is_public_path(path, instance), "{path} must not be public");
         }
 

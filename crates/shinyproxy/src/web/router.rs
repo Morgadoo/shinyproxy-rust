@@ -120,25 +120,6 @@ pub fn router(state: Arc<AppState>) -> Router {
             &path("/admin/delegate-proxy"),
             axum::routing::delete(super::api::remove_delegate_proxies),
         )
-        // the actuator endpoints are also exposed on the public port, like
-        // management.endpoints.web.exposure.include of ShinyProxy does
-        .route(&path("/actuator/health"), get(super::management::health))
-        .route(
-            &path("/actuator/health/liveness"),
-            get(super::management::liveness),
-        )
-        .route(
-            &path("/actuator/health/readiness"),
-            get(super::management::readiness),
-        )
-        .route(
-            &path("/actuator/prometheus"),
-            get(super::management::prometheus),
-        )
-        .route(
-            &path("/actuator/recyclable"),
-            get(super::management::recyclable),
-        )
         // OpenID Connect: the login page sends the user to the provider, which sends them back to the
         // callback (the same paths as the Java implementation, so existing client registrations work)
         .route(
@@ -362,12 +343,25 @@ async fn authorize(
             return answer;
         }
         if is_admin_path(&path) && !state.is_admin(user.as_ref()) {
-            // Spring's access denied handler answers with the API document, whatever the request asked for
-            let mut answer = (
-                StatusCode::FORBIDDEN,
-                axum::Json(serde_json::json!({"status": "fail", "data": "forbidden"})),
-            )
-                .into_response();
+            // Spring's access denied handler answers with the API document, whatever the request asked for —
+            // except on the paths of `AuthenticationRequiredFilter`, which turns *any* access denial into the
+            // document that makes the browser code log the user in again (`/admin/data` is such a path)
+            let mut answer = if needs_authentication_answer(&path) {
+                (
+                    StatusCode::GONE,
+                    axum::Json(serde_json::json!({
+                        "status": "fail",
+                        "data": "shinyproxy_authentication_required"
+                    })),
+                )
+                    .into_response()
+            } else {
+                (
+                    StatusCode::FORBIDDEN,
+                    axum::Json(serde_json::json!({"status": "fail", "data": "forbidden"})),
+                )
+                    .into_response()
+            };
             add_headers(&state, &path, &mut answer);
             return answer;
         }
@@ -900,29 +894,33 @@ async fn static_asset(
 }
 
 async fn not_found(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
-    if wants_json(&headers) {
-        return (
-            StatusCode::NOT_FOUND,
-            axum::Json(serde_json::json!({"status": "fail", "data": "Not Found"})),
-        )
-            .into_response();
+    let _ = &state;
+    // the `ErrorController` of the Java implementation answers every unknown path with this document
+    let _ = &headers;
+    return (
+        StatusCode::NOT_FOUND,
+        axum::Json(serde_json::json!({"status": "error", "data": "not found"})),
+    )
+        .into_response();
+    #[allow(unreachable_code)]
+    {
+        let mut model = serde_json::Map::new();
+        model.insert("title".into(), serde_json::json!(state.resolve_title(None)));
+        model.insert("shortError".into(), serde_json::json!("Not found"));
+        model.insert(
+            "description".into(),
+            serde_json::json!("The requested page could not be found."),
+        );
+        model.insert(
+            "mainPage".into(),
+            serde_json::json!(state.context_path_with_slash()),
+        );
+        model.insert(
+            "contextPath".into(),
+            serde_json::json!(state.context_path_with_slash()),
+        );
+        (StatusCode::NOT_FOUND, render(&state, "error.html", model)).into_response()
     }
-    let mut model = serde_json::Map::new();
-    model.insert("title".into(), serde_json::json!(state.resolve_title(None)));
-    model.insert("shortError".into(), serde_json::json!("Not found"));
-    model.insert(
-        "description".into(),
-        serde_json::json!("The requested page could not be found."),
-    );
-    model.insert(
-        "mainPage".into(),
-        serde_json::json!(state.context_path_with_slash()),
-    );
-    model.insert(
-        "contextPath".into(),
-        serde_json::json!(state.context_path_with_slash()),
-    );
-    (StatusCode::NOT_FOUND, render(&state, "error.html", model)).into_response()
 }
 
 /// Renders a template, turning failures into a plain error response (and a log line).

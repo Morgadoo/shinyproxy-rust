@@ -30,7 +30,9 @@ lettre.workspace = true
 url.workspace = true
 uuid.workspace = true
 mime_guess.workspace = true
+once_cell.workspace = true
 percent-encoding.workspace = true
+regex.workspace = true
 axum.workspace = true
 axum-extra.workspace = true
 minijinja.workspace = true
@@ -49,6 +51,7 @@ tracing-appender.workspace = true
 time.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
 proptest.workspace = true
 redis.workspace = true
 jsonwebtoken.workspace = true
@@ -57,7 +60,6 @@ rand_old = { package = "rand", version = "0.8" }
 base64.workspace = true
 tracing-subscriber.workspace = true
 insta.workspace = true
-regex.workspace = true
 reqwest.workspace = true
 rstest.workspace = true
 tempfile.workspace = true
@@ -67,3 +69,7 @@ testapp = { path = "../testapp" }
 [build-dependencies]
 # the build script stamps the binary with the build time
 time = { workspace = true }
+
+[[bench]]
+name = "pages"
+harness = false

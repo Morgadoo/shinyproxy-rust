@@ -467,7 +467,8 @@ async fn assets_are_served_with_and_without_the_instance_prefix() {
             .headers()
             .get("cache-control")
             .and_then(|value| value.to_str().ok()),
-        Some("no-cache")
+        // Spring Security writes the same no-store headers for the assets as for every other answer
+        Some("no-cache, no-store, max-age=0, must-revalidate")
     );
 
     // unknown assets produce the error page

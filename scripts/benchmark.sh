@@ -273,6 +273,10 @@ lines = [
     f"Every load phase ran for {seconds} seconds with {connections} connections; the WebSocket phase held"
     f" {websockets} connections open. The app start/stop numbers are the median of {cycles} cycles.",
     "",
+    "The `index` and `api` phases give every connection its own user session, because a servlet container"
+    " serialises the requests of one session; the proxy phases necessarily share the session of the user that"
+    " owns the app.",
+    "",
 ]
 
 if java is None:

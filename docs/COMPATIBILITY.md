@@ -247,6 +247,7 @@ The report is down to four differences, all of them without behavioural meaning:
 | A failed login does not re-issue the session cookie | The session already exists, so nothing changes for the browser |
 | One error answer has `content-type: application/json` where Java says `application/json;charset=UTF-8` | JSON is UTF-8 by definition (RFC 8259) |
 | The cookie that ends a session says `Max-Age=0` with a date in the past, Java says `Expires=Thu, 01-Jan-1970` | Both delete the cookie |
+| `/api/route/{unknown}` answers 403 with the API envelope; Java lets the servlet container write its default body (35 bytes, no content type) | Both refuse the request with 403; the envelope is easier for a client to read |
 
 Everything else the report found has been fixed; the list is in the commit that introduced the script.
 

@@ -145,10 +145,24 @@ async fn admin_pages_render_for_administrators() {
 
     // normal users may not see the admin pages
     let user = instance.login("jack", "password").await;
-    for path in ["/admin", "/admin/about", "/admin/data"] {
+    for path in ["/admin", "/admin/about"] {
         let response = user.get(instance.url(path)).send().await.expect("request");
         assert_eq!(response.status(), 403, "{path}");
+        let body: serde_json::Value = response.json().await.expect("json");
+        assert_eq!(body["status"], "fail");
+        assert_eq!(body["data"], "forbidden");
     }
+
+    // `/admin/data` is one of the paths of `AuthenticationRequiredFilter`, which turns any access denial
+    // into the document that makes the browser code log the user in again (verified against Java)
+    let response = user
+        .get(instance.url("/admin/data"))
+        .send()
+        .await
+        .expect("request");
+    assert_eq!(response.status(), 410);
+    let body: serde_json::Value = response.json().await.expect("json");
+    assert_eq!(body["data"], "shinyproxy_authentication_required");
 
     instance.stop();
 }

@@ -437,7 +437,7 @@ async fn the_seats_are_reported_as_metrics() {
 
     let body = instance
         .client()
-        .get(instance.url("/actuator/prometheus"))
+        .get(instance.management_url("/actuator/prometheus"))
         .send()
         .await
         .expect("request")
@@ -459,7 +459,7 @@ async fn the_seats_are_reported_as_metrics() {
     start_app(&instance, &jack).await;
     let body = instance
         .client()
-        .get(instance.url("/actuator/prometheus"))
+        .get(instance.management_url("/actuator/prometheus"))
         .send()
         .await
         .expect("request")

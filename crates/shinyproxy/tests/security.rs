@@ -246,12 +246,14 @@ async fn every_route_checks_who_is_asking() {
             Expected::Forbidden,
             Expected::Ok,
         ),
+        // `/admin/data` is one of the paths of `AuthenticationRequiredFilter`, so any access denial (also of
+        // a user that is logged in but not an administrator) answers its document instead of 403
         (
             "/admin/data",
             "GET",
             Expected::Unauthenticated,
-            Expected::Forbidden,
-            Expected::Forbidden,
+            Expected::Unauthenticated,
+            Expected::Unauthenticated,
             Expected::Ok,
         ),
         (
@@ -270,17 +272,10 @@ async fn every_route_checks_who_is_asking() {
             Expected::Forbidden,
             Expected::Ok,
         ),
-        // public endpoints
+        // public endpoints; the actuator lives on the management port (`tests/actuator.rs` checks that it is
+        // *not* on the application port, exactly as in the Java implementation)
         (
-            "/actuator/health",
-            "GET",
-            Expected::Ok,
-            Expected::Ok,
-            Expected::Ok,
-            Expected::Ok,
-        ),
-        (
-            "/actuator/prometheus",
+            "/js/shiny.app.js",
             "GET",
             Expected::Ok,
             Expected::Ok,

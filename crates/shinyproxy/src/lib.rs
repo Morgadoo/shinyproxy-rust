@@ -28,6 +28,7 @@
 
 pub mod config_schema;
 pub mod logging;
+pub mod parity;
 pub mod runtime_values;
 pub mod spec_provider;
 pub mod web;

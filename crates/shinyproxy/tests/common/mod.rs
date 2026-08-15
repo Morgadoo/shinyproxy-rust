@@ -33,10 +33,16 @@ use tempfile::TempDir;
 pub struct TestInstance {
     /// Base URL of the server, e.g. `http://127.0.0.1:34567`.
     pub base_url: String,
+    /// Base URL of the management server (`management.server.port` in production).
+    ///
+    /// The actuator endpoints live *only* there, exactly as in the Java implementation, which defaults
+    /// `management.server.port` to 9090.
+    pub management_base_url: String,
     /// The server state (useful for assertions on the configuration).
     pub state: Arc<AppState>,
     _directory: TempDir,
     handle: tokio::task::JoinHandle<()>,
+    management_handle: tokio::task::JoinHandle<()>,
 }
 
 /// A port range that no other test instance uses.
@@ -129,11 +135,25 @@ impl TestInstance {
             }
         });
 
+        // the management endpoints are served on their own port, as in production
+        let management_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let management_address = management_listener.local_addr().expect("address");
+        let management_router = shinyproxy::web::management::router(state.clone());
+        let management_handle = tokio::spawn(async move {
+            if let Err(error) = axum::serve(management_listener, management_router).await {
+                eprintln!("test management server stopped: {error}");
+            }
+        });
+
         TestInstance {
             base_url: format!("http://{address}"),
+            management_base_url: format!("http://{management_address}"),
             state,
             _directory: directory,
             handle,
+            management_handle,
         }
     }
 
@@ -166,6 +186,11 @@ impl TestInstance {
     /// Full URL of a path.
     pub fn url(&self, path: &str) -> String {
         format!("{}{path}", self.base_url)
+    }
+
+    /// A URL of the management server (`/actuator/**`).
+    pub fn management_url(&self, path: &str) -> String {
+        format!("{}{path}", self.management_base_url)
     }
 
     /// Logs a user in and returns the client that holds the session.
@@ -217,6 +242,7 @@ impl TestInstance {
     /// Stops the server.
     pub fn stop(self) {
         self.handle.abort();
+        self.management_handle.abort();
     }
 }
 
