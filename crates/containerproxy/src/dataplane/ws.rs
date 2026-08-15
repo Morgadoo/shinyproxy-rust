@@ -172,6 +172,17 @@ where
                     break;
                 }
             }
+            // The client is gone. A well-behaved app answers the close frame (which was forwarded as
+            // bytes) and closes its side first, as RFC 6455 asks of servers — waiting for that keeps the
+            // TIME_WAIT on the app instead of on the proxy, which matters when many short-lived
+            // connections are opened (the proxy would otherwise run out of ephemeral ports towards the
+            // app). Only an app that does not close within a second is shut down actively.
+            for _ in 0..20 {
+                if closed.load(Ordering::SeqCst) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
             closed.store(true, Ordering::SeqCst);
             let mut writer = upstream_write.lock().await;
             let _ = writer.shutdown().await;

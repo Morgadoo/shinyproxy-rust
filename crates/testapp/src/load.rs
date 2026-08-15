@@ -516,8 +516,12 @@ async fn websocket_churn(
         options.base_url.replace("http://", "ws://")
     );
 
+    // a handful of workers with a small pause per iteration: the point is the cost of one handshake, not a
+    // SYN storm (thousands of unpaced connects exhaust the ephemeral ports of the *client* and make servers
+    // shed connections, which measures nothing)
+    let workers = options.connections.min(8);
     let mut tasks = Vec::new();
-    for _ in 0..options.connections {
+    for _ in 0..workers {
         let url = url.clone();
         let cookie = cookie.to_string();
         let counters = counters.clone();
@@ -525,6 +529,7 @@ async fn websocket_churn(
         tasks.push(tokio::spawn(async move {
             use futures::{SinkExt, StreamExt};
             while Instant::now() < deadline {
+                tokio::time::sleep(Duration::from_millis(2)).await;
                 let started = Instant::now();
                 let request = match tokio_tungstenite::tungstenite::http::Request::builder()
                     .uri(&url)
@@ -573,6 +578,8 @@ async fn websocket_churn(
                     }
                     Err(_) => {
                         counters.errors.fetch_add(1, Ordering::Relaxed);
+                        // do not turn a hiccup into a storm
+                        tokio::time::sleep(Duration::from_millis(100)).await;
                     }
                 }
             }

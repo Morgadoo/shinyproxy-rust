@@ -175,10 +175,12 @@ benchmark_one() { # name, command...
     phase api "$CONNECTIONS" 0 api
     phase big "$CONNECTIONS" 0 big
     phase upload "$CONNECTIONS" 0 upload
-    phase ws-churn "$CONNECTIONS" 0 churn
 
     # the proxy path again, this time with WebSocket connections held open
     phase app "$CONNECTIONS" "$WEBSOCKETS" ws
+
+    # the churn runs last, so a connection storm cannot poison another phase
+    phase ws-churn "$CONNECTIONS" 0 churn
 
     metric "$metrics" rss_under_load_mb "$(( $(rss_kb "$pid") / 1024 ))"
 
