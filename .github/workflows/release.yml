@@ -82,6 +82,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # GHCR repository names must be lowercase; github.repository keeps the owner's casing.
+      - name: Image name
+        run: echo "IMAGE_NAME=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
@@ -91,14 +95,14 @@ jobs:
           build-args: |
             GIT_COMMIT=${{ github.sha }}
           tags: |
-            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
-            ghcr.io/${{ github.repository }}:latest
+            ${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+            ${{ env.IMAGE_NAME }}:latest
 
   release:
     name: GitHub release
     needs: [binaries, image]
     runs-on: ubuntu-latest
-    if: github.event_name == 'push'
+    if: always() && github.event_name == 'push' && needs.binaries.result == 'success'
     steps:
       - uses: actions/download-artifact@v4
         with:
