@@ -86,6 +86,17 @@ Tracks the 13 Java integration test classes (see `src/test/java`) that must have
 * `panic = "abort"` is **not** used in the release profile: a panic inside one request/task must not take the
   whole server down (Undertow/Spring behaves the same way).
 
+## Java comparison tooling
+
+| Tool | What it does |
+| --- | --- |
+| `cargo test -p shinyproxy --test parity` | Replays 42 recorded answers of the Java implementation (fixture in `crates/shinyproxy/tests/fixtures/parity/`) and fails on any difference that is not an accepted deviation. Needs no JVM. |
+| `cargo run -p shinyproxy --example record-parity` | Records that fixture from a running Java ShinyProxy. |
+| `scripts/cross-validate.sh` | Runs one scenario list (including a real app, its container labels and proxied traffic) against both implementations and diffs the answers → `docs/generated/cross-validation.md`. |
+| `scripts/benchmark.sh` | Measures startup, memory, app start/stop and the throughput and latency of three request paths against both implementations → `docs/generated/benchmark.md`. |
+| `scripts/load-test.sh` | The soak run (long load with many WebSocket connections), also usable against the Java jar. |
+| `cargo bench --workspace` | Criterion micro-benchmarks of the hot paths of this implementation. |
+
 ## Sign-off: every Java source has a Rust counterpart
 
 The Java implementation consisted of 37 files in ShinyProxy (`src/main/java/eu/openanalytics/shinyproxy`) and
