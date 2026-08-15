@@ -40,14 +40,16 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
-
-    let (raw, settings) = shinyproxy::load_config(LoadOptions::from_process())?;
+    // the configuration decides how the server logs (`logging.*`, `proxy.log-as-json`), so it is loaded
+    // before logging starts; problems while loading it are reported on stderr
+    let (raw, settings) = match shinyproxy::load_config(LoadOptions::from_process()) {
+        Ok(loaded) => loaded,
+        Err(error) => {
+            eprintln!("Configuration error: {error}");
+            std::process::exit(1);
+        }
+    };
+    let _log_guard = shinyproxy::logging::init(&settings);
     match &raw.path {
         Some(path) => tracing::info!("Using configuration file {}", path.display()),
         None => {

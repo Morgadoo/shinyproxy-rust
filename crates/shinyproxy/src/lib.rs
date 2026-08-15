@@ -27,6 +27,7 @@
 #![forbid(unsafe_code)]
 
 pub mod config_schema;
+pub mod logging;
 pub mod runtime_values;
 pub mod spec_provider;
 pub mod web;

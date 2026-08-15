@@ -164,6 +164,16 @@ types. Allow-listed static types: `java.lang.System.getenv`, `java.lang.String.v
 | Issue reports | The mail mentions the log files of the app, using the same paths | ✅ |
 | S3 log storage (`container-log-s3-*`) | Not implemented yet; only the filesystem storage exists | ⬜ |
 
+## Logging
+
+| Topic | Behaviour | Status |
+| --- | --- | --- |
+| `proxy.log-as-json` | Writes the same JSON documents as `logstash-logback-encoder`: `@timestamp` (ISO-8601 with milliseconds and offset), `@version`, `message`, `logger_name`, `thread_name`, `level`, `level_value` (the SLF4J numbers) and the fields of the event | ✅ |
+| `logging.file.name` | The log is written to that file *and* to the console, as Spring Boot's file appender does; the directory is created when needed | 🟨 rotation policies are not implemented |
+| `logging.level.<logger>` | Sets levels, with `root` for everything; the logger names are the module paths of this implementation (`containerproxy::service`), and `RUST_LOG` overrides the configuration | 🟨 |
+| Log lines of the lifecycle | The messages of the proxy lifecycle match, with the `[user: x] [proxyId: y]` style suffixes of the structured logger | 🟨 not every message is byte identical |
+| `logging.requestdump` | Not implemented | ⬜ |
+
 ## Not yet implemented
 
 Everything in [PROGRESS.md](PROGRESS.md) that is not marked ✅. Properties whose behaviour is not

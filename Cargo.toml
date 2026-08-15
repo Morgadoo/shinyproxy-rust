@@ -75,6 +75,7 @@ indexmap = { version = "2", features = ["serde"] }
 # --- observability ---
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt", "std"] }
+tracing-appender = "0.2"
 
 # --- dev/test ---
 insta = { version = "1", features = ["json", "yaml", "redactions"] }
