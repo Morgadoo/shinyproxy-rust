@@ -221,7 +221,7 @@ async fn admin_pages() {
     // the About page contains the build information of this binary, which changes with every build
     let html = page(&instance, &client, "/admin/about").await;
     let html = regex::Regex::new(
-        r#"(?m)^(\s*)<td class="admin-monospace">(?:0\.1\.0 \(rustc|--spring|\d+ (?:bytes|KB|MB|GB)).*$"#,
+        r#"(?m)^(\s*)<td class="admin-monospace">(?:0\.1\.0 \(compatible|--spring|\d+ (?:bytes|KB|MB|GB)).*$"#,
     )
     .expect("regex")
     .replace_all(&html, r#"$1<td class="admin-monospace">{build-information}</td>"#)

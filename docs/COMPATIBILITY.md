@@ -228,3 +228,19 @@ types. Allow-listed static types: `java.lang.System.getenv`, `java.lang.String.v
 Everything in [PROGRESS.md](PROGRESS.md) that is not marked ✅. Properties whose behaviour is not
 implemented yet are still parsed and validated, and are listed with their target phase in
 [CONFIGURATION.md](CONFIGURATION.md).
+
+## Version scheme
+
+The crate version is `0.x` (semver for a young code base), and every binary reports the ShinyProxy version its
+behaviour was verified against:
+
+```
+$ shinyproxy --version
+shinyproxy 0.1.0 (Rust implementation, compatible with ShinyProxy 3.2.4)
+commit 758357a, built 2026-08-15T05:06:06Z
+```
+
+The same information is on `/admin/about` (where the Java implementation shows the JVM details) and in the
+`shinyproxy_absolute_apps_running`-style metrics through the `shinyproxy_instance` label. Releases are tagged
+`v{crate version}`; the compatibility version (`containerproxy::COMPATIBLE_WITH_JAVA_VERSION`) is bumped when
+the behaviour of a newer ShinyProxy release has been ported and verified.
