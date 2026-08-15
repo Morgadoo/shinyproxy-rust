@@ -682,7 +682,7 @@ pub async fn app_direct(
     let context = state.context_path_with_slash();
     let path = request.uri().path().to_string();
 
-    let Some(info) = AppRequestInfo::parse(&path, &context) else {
+    let Some(info) = AppRequestInfo::parse(&path, context) else {
         return (StatusCode::FORBIDDEN, "Forbidden\n").into_response();
     };
 

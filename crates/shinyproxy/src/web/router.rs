@@ -210,7 +210,7 @@ async fn app_recovery_filter(
 
 /// Redirects `/{context-path}` to `/{context-path}/`.
 async fn redirect_to_index(State(state): State<Arc<AppState>>) -> Response {
-    found(&state.context_path_with_slash())
+    found(state.context_path_with_slash())
 }
 
 /// The current user of a request, resolved from the session.
@@ -548,7 +548,7 @@ async fn login_page(
         .into_response();
     }
     if !state.auth.uses_login_form() {
-        return found(&state.context_path_with_slash());
+        return found(state.context_path_with_slash());
     }
 
     let mut data = SessionData::load(&session).await;
@@ -636,7 +636,7 @@ async fn login_submit(
             ))
             .into_response()
         }
-        Err(AuthError::NoFormLogin) => found(&context_path),
+        Err(AuthError::NoFormLogin) => found(context_path),
         Err(error) => {
             tracing::info!(
                 "Authentication failure [user: {}] [error: {error}]",
