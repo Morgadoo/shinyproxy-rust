@@ -28,6 +28,7 @@
 pub mod bearer;
 pub mod custom_header;
 pub mod ldap;
+pub mod msgraph;
 pub mod none;
 pub mod openid;
 pub mod simple;
@@ -231,6 +232,13 @@ pub fn create(settings: &Settings) -> Result<Arc<dyn AuthBackend>, CreateError> 
             webservice::WebServiceAuthenticationBackend::new(settings)
                 .map_err(CreateError::Configuration)?,
         )),
+        // SAML needs signing and encryption of assertions, which this implementation does not do yet
+        "saml" => Err(CreateError::Configuration(
+            "authentication backend 'saml' is not implemented by this implementation yet; use \
+             'proxy.authentication: openid' when your identity provider supports OpenID Connect \
+             (most do), or keep the Java implementation for SAML (see docs/COMPATIBILITY.md)"
+                .to_string(),
+        )),
         // ShinyProxy 3 removed the Keycloak backend; users migrate to `openid`
         "keycloak" => Err(CreateError::Configuration(
             "authentication backend 'keycloak' was removed in ShinyProxy 3: use \
@@ -290,9 +298,19 @@ mod tests {
         assert!(backend.has_authorization());
 
         let settings: Settings =
-            serde_yaml_ng::from_str("proxy:\n  authentication: saml\n").unwrap();
+            serde_yaml_ng::from_str("proxy:\n  authentication: something-else\n").unwrap();
         let error = create(&settings).unwrap_err();
         assert!(error.to_string().contains("not supported yet"), "{error}");
+
+        // SAML has its own message, which points at the alternatives
+        let settings: Settings =
+            serde_yaml_ng::from_str("proxy:\n  authentication: saml\n").unwrap();
+        let error = create(&settings).unwrap_err().to_string();
+        assert!(
+            error.contains("not implemented by this implementation yet"),
+            "{error}"
+        );
+        assert!(error.contains("openid"), "{error}");
     }
 
     #[test]

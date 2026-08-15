@@ -60,6 +60,8 @@ pub struct AppState {
     pub openid: Option<Arc<containerproxy::auth::openid::OpenIdAuthenticationBackend>>,
     /// Validates bearer tokens of API clients (`proxy.oauth2.*`), when configured.
     pub bearer: Option<Arc<containerproxy::auth::bearer::BearerTokenAuthenticator>>,
+    /// Fetches the groups of a user from Microsoft Graph (`proxy.ms-graph.*`), when configured.
+    pub ms_graph: Option<Arc<containerproxy::auth::msgraph::MicrosoftGraphGroupFetcher>>,
     /// The template engine.
     pub templates: TemplateEngine,
     /// Security headers added to every response.
@@ -139,6 +141,16 @@ impl AppState {
                 .as_ref()
                 .map(std::path::PathBuf::from),
         )?;
+        // groups from Microsoft Graph replace the groups of the token when configured
+        let ms_graph =
+            match containerproxy::auth::msgraph::MicrosoftGraphGroupFetcher::from_settings(
+                &settings,
+            ) {
+                Some(Ok(fetcher)) => Some(fetcher),
+                Some(Err(error)) => return Err(auth::CreateError::Configuration(error).into()),
+                None => None,
+            };
+
         let security_headers = SecurityHeaders::from_settings(&settings);
 
         let settings = Arc::new(settings);
@@ -203,6 +215,7 @@ impl AppState {
                 &settings,
             )
             .map(Arc::new),
+            ms_graph: ms_graph.map(Arc::new),
             templates,
             security_headers,
             pause_supported: backend.supports_pause(),

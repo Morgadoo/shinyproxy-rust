@@ -149,6 +149,21 @@ pub async fn callback(
             return auth_error(&state);
         }
     };
+    // Microsoft Graph replaces the groups of the token (the Java authorities mapper does the same, and
+    // warns when the `oid` claim is missing)
+    if let Some(fetcher) = &state.ms_graph {
+        match id_claims.get("oid").and_then(|value| value.as_str()) {
+            Some(object_id) => user.groups = fetcher.groups(object_id).await,
+            None => {
+                tracing::warn!(
+                    "Required claim 'oid' not found, make sure to include the 'profile' scope - \
+                     continuing without groups"
+                );
+                user.groups = Vec::new();
+            }
+        }
+    }
+
     // the tokens are attributes of the user, so that expressions can use them (as in Java, where
     // `oidcUser.accessToken` exists) and so that apps receive SHINYPROXY_OIDC_ACCESS_TOKEN
     if let Some(access_token) = &tokens.access_token {

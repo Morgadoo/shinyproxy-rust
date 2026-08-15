@@ -198,7 +198,8 @@ types. Allow-listed static types: `java.lang.System.getenv`, `java.lang.String.v
 | `oauth2` bearer tokens | `proxy.oauth2.{resource-id,jwks-url,username-attribute,roles-claim}` next to any backend: the JWT must be signed by a key of the JWKS (cached for five minutes), be valid now (with Spring's 60 seconds of clock skew), carry the resource id in its audience and contain the user name claim; the roles claim provides the groups | ✅ |
 | `ldap` | One or more providers (`proxy.ldap.url` or `proxy.ldap[i].url`), authentication by binding as the user (`user-dn-pattern`, or a lookup with `user-search-base`/`user-search-filter` and the manager account), groups from a `group-search-filter` search (`(uniqueMember={0})` by default) using the `cn` of the results, `starttls` (`true`/`simple`/`external`), and DN/filter escaping | ✅ |
 | `keycloak` | Removed in ShinyProxy 3; the server refuses to start with a message that explains the migration to `openid` | ✅ |
-| `saml`, `ms-graph` groups | Not implemented yet; the server refuses to start with the list of supported backends | ⬜ |
+| `ms-graph` groups | `proxy.ms-graph.{client-id,client-secret,token-url,tenant-id,api-url,scopes}`: with OpenID Connect the groups of the token are replaced by the display names of `/v1.0/{tenant}/users/{oid}/memberOf` (client credentials token cached until it expires), and a missing `oid` claim or an API failure logs the Java warning and continues without groups | ✅ |
+| `saml` | Not implemented; the server refuses to start with a message that points at OpenID Connect (most identity providers support both) or at the Java implementation | 🟨 documented gap |
 
 ## Not yet implemented
 
