@@ -231,6 +231,13 @@ pub fn create(settings: &Settings) -> Result<Arc<dyn AuthBackend>, CreateError> 
             webservice::WebServiceAuthenticationBackend::new(settings)
                 .map_err(CreateError::Configuration)?,
         )),
+        // ShinyProxy 3 removed the Keycloak backend; users migrate to `openid`
+        "keycloak" => Err(CreateError::Configuration(
+            "authentication backend 'keycloak' was removed in ShinyProxy 3: use \
+             'proxy.authentication: openid' with the endpoints of your Keycloak realm (auth-url, \
+             token-url, jwks-url, client-id, client-secret and roles-claim)"
+                .to_string(),
+        )),
         other => Err(UnsupportedBackend {
             name: other.to_string(),
         }
@@ -286,6 +293,15 @@ mod tests {
             serde_yaml_ng::from_str("proxy:\n  authentication: saml\n").unwrap();
         let error = create(&settings).unwrap_err();
         assert!(error.to_string().contains("not supported yet"), "{error}");
+    }
+
+    #[test]
+    fn reports_the_removed_keycloak_backend() {
+        let settings: Settings =
+            serde_yaml_ng::from_str("proxy:\n  authentication: keycloak\n").unwrap();
+        let error = create(&settings).unwrap_err().to_string();
+        assert!(error.contains("was removed in ShinyProxy 3"), "{error}");
+        assert!(error.contains("proxy.authentication: openid"), "{error}");
     }
 
     #[test]

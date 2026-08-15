@@ -49,6 +49,12 @@ struct Provider {
     userinfo: Arc<serde_json::Value>,
     /// The authorization requests the provider received.
     requests: Arc<std::sync::Mutex<Vec<HashMap<String, String>>>>,
+    /// Lifetime of the access tokens (seconds).
+    access_token_lifetime: Arc<std::sync::atomic::AtomicI64>,
+    /// How often a refresh token was used.
+    refreshes: Arc<std::sync::atomic::AtomicUsize>,
+    /// Whether the refresh grant is refused (an expired session).
+    refuse_refresh: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Starts the fake provider and returns its address.
@@ -86,6 +92,9 @@ async fn start_provider(
         claims: Arc::new(claims),
         userinfo: Arc::new(userinfo),
         requests: Arc::new(std::sync::Mutex::new(Vec::new())),
+        access_token_lifetime: Arc::new(std::sync::atomic::AtomicI64::new(3600)),
+        refreshes: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        refuse_refresh: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -116,6 +125,30 @@ async fn start_provider(
             "/token",
             post(
                 |State(provider): State<Provider>, Form(form): Form<HashMap<String, String>>| async move {
+                    // the refresh grant answers with a new access token (or refuses)
+                    if form.get("grant_type").map(String::as_str) == Some("refresh_token") {
+                        provider
+                            .refreshes
+                            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        if provider
+                            .refuse_refresh
+                            .load(std::sync::atomic::Ordering::SeqCst)
+                        {
+                            return (
+                                axum::http::StatusCode::BAD_REQUEST,
+                                Json(serde_json::json!({"error": "invalid_grant"})),
+                            );
+                        }
+                        return (
+                            axum::http::StatusCode::OK,
+                            Json(serde_json::json!({
+                                "access_token": "the-refreshed-access-token",
+                                "refresh_token": "the-refresh-token",
+                                "token_type": "Bearer",
+                                "expires_in": 3600,
+                            })),
+                        );
+                    }
                     if form.get("code").map(String::as_str) != Some("the-code") {
                         return (
                             axum::http::StatusCode::BAD_REQUEST,
@@ -160,7 +193,9 @@ async fn start_provider(
                             "access_token": "the-access-token",
                             "refresh_token": "the-refresh-token",
                             "token_type": "Bearer",
-                            "expires_in": 3600,
+                            "expires_in": provider
+                                .access_token_lifetime
+                                .load(std::sync::atomic::Ordering::SeqCst),
                             "id_token": id_token,
                         })),
                     )
@@ -687,4 +722,166 @@ fn now_plus(seconds: i64) -> i64 {
         .expect("time")
         .as_secs() as i64
         + seconds
+}
+
+/// Logs a user in through the whole flow and returns the client that holds the session.
+async fn login(instance: &TestInstance, provider: &Provider) -> common::TestClient {
+    let client = instance.client();
+    follow_to_provider(&client, instance).await;
+    let request = provider
+        .requests
+        .lock()
+        .expect("lock")
+        .last()
+        .cloned()
+        .expect("request");
+    let redirect_uri = request.get("redirect_uri").cloned().expect("redirect uri");
+    let state = request.get("state").cloned().expect("state");
+    let response = client
+        .get(format!("{redirect_uri}?code=the-code&state={state}"))
+        .send()
+        .await
+        .expect("callback request");
+    assert_eq!(response.status(), 303, "the login must succeed");
+    client
+}
+
+#[tokio::test]
+async fn the_access_token_is_refreshed_when_it_expires() {
+    let (address, provider, provider_task) = start_provider(
+        serde_json::json!({"email": "jack@example.com", "sub": "jack", "groups": ["scientists"]}),
+        serde_json::json!({}),
+    )
+    .await;
+    // an access token that is already inside the refresh window (40 seconds)
+    provider
+        .access_token_lifetime
+        .store(20, std::sync::atomic::Ordering::SeqCst);
+
+    let instance = TestInstance::start(&config(&address, "")).await;
+    let client = login(&instance, &provider).await;
+    let refreshes_after_login = provider.refreshes.load(std::sync::atomic::Ordering::SeqCst);
+
+    // the index page is one of the pages that refresh the token
+    let response = client.get(instance.url("/")).send().await.expect("request");
+    assert_eq!(response.status(), 200);
+    assert!(
+        provider.refreshes.load(std::sync::atomic::Ordering::SeqCst) > refreshes_after_login,
+        "the token must be refreshed on the index page"
+    );
+
+    // the refreshed token reaches the apps
+    let started: serde_json::Value = client
+        .post(instance.url("/app_i/01_hello/_"))
+        .send()
+        .await
+        .expect("start request")
+        .json()
+        .await
+        .expect("json");
+    let proxy_id = started["data"]["id"].as_str().expect("id").to_string();
+    let status: serde_json::Value = client
+        .get(instance.url(&format!(
+            "/api/proxy/{proxy_id}/status?watch=true&timeout=15"
+        )))
+        .send()
+        .await
+        .expect("status request")
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(status["data"]["status"], "Up", "{status}");
+    let environment: std::collections::BTreeMap<String, String> = client
+        .get(instance.url(&format!("/app_proxy/{proxy_id}/env")))
+        .send()
+        .await
+        .expect("env request")
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(
+        environment
+            .get("SHINYPROXY_OIDC_ACCESS_TOKEN")
+            .map(String::as_str),
+        Some("the-refreshed-access-token")
+    );
+
+    // the front-end endpoint that keeps the session alive answers success
+    let json: serde_json::Value = client
+        .get(instance.url("/refresh-openid"))
+        .send()
+        .await
+        .expect("request")
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(json["status"], "success");
+
+    instance.stop();
+    provider_task.abort();
+}
+
+#[tokio::test]
+async fn a_session_ends_when_the_token_cannot_be_refreshed() {
+    let (address, provider, provider_task) = start_provider(
+        serde_json::json!({"email": "jack@example.com", "sub": "jack", "groups": ["scientists"]}),
+        serde_json::json!({}),
+    )
+    .await;
+    provider
+        .access_token_lifetime
+        .store(20, std::sync::atomic::Ordering::SeqCst);
+
+    let instance = TestInstance::start(&config(&address, "")).await;
+    let client = login(&instance, &provider).await;
+
+    // the provider refuses the refresh token, so the session ends
+    provider
+        .refuse_refresh
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let response = client.get(instance.url("/")).send().await.expect("request");
+    assert_eq!(response.status(), 303);
+    assert_eq!(
+        response
+            .headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok()),
+        Some("/login?error=expired")
+    );
+
+    instance.stop();
+    provider_task.abort();
+}
+
+#[tokio::test]
+async fn the_session_survives_a_refused_refresh_when_configured() {
+    let (address, provider, provider_task) = start_provider(
+        serde_json::json!({"email": "jack@example.com", "sub": "jack", "groups": ["scientists"]}),
+        serde_json::json!({}),
+    )
+    .await;
+    provider
+        .access_token_lifetime
+        .store(20, std::sync::atomic::Ordering::SeqCst);
+
+    let instance = TestInstance::start(&config(
+        &address,
+        "    ignore-session-expire: true
+",
+    ))
+    .await;
+    let client = login(&instance, &provider).await;
+    provider
+        .refuse_refresh
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+
+    let response = client.get(instance.url("/")).send().await.expect("request");
+    assert_eq!(
+        response.status(),
+        200,
+        "proxy.openid.ignore-session-expire keeps the session alive"
+    );
+
+    instance.stop();
+    provider_task.abort();
 }

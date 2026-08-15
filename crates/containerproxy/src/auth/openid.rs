@@ -219,6 +219,35 @@ impl OpenIdAuthenticationBackend {
         })
     }
 
+    /// Refreshes the access token with a refresh token (the token endpoint again).
+    pub async fn refresh(&self, refresh_token: &str) -> Result<TokenResponse, AuthError> {
+        let form: Vec<(&str, String)> = vec![
+            ("grant_type", "refresh_token".to_string()),
+            ("refresh_token", refresh_token.to_string()),
+            ("client_id", self.client_id.clone()),
+        ];
+
+        let client = reqwest::Client::new();
+        let mut request = client.post(&self.token_url).form(&form);
+        if let Some(secret) = &self.client_secret {
+            request = request.basic_auth(&self.client_id, Some(secret));
+        }
+
+        let response = request.send().await.map_err(|error| {
+            AuthError::Backend(format!("cannot reach the token endpoint: {error}"))
+        })?;
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(AuthError::Backend(format!(
+                "the token endpoint refused the refresh token ({status}): {body}"
+            )));
+        }
+        serde_json::from_str(&body).map_err(|error| {
+            AuthError::Backend(format!("invalid token response: {error} ({body})"))
+        })
+    }
+
     /// Reads the claims of an id token, verifying its signature when a JWKS endpoint is configured.
     pub async fn id_token_claims(
         &self,

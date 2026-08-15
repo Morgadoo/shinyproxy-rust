@@ -149,6 +149,7 @@ pub fn router(state: Arc<AppState>) -> Router {
             &path(containerproxy::auth::openid::CALLBACK_PATH),
             get(super::oidc::callback),
         )
+        .route(&path("/refresh-openid"), get(super::oidc::refresh_openid))
         .route(&path("/issue"), post(super::issue::report_issue))
         .route(&path("/v3/api-docs"), get(super::openapi::api_docs))
         .route(
@@ -297,6 +298,22 @@ async fn authorize(
         }
     }
 
+    // the access token of an OpenID Connect session is refreshed on the pages the Java filter matches
+    if data.user.is_some()
+        && state.openid.is_some()
+        && refreshes_openid(&path)
+        && !super::oidc::refresh_if_needed(&state, &session, &mut data).await
+    {
+        data.user = None;
+        data.store(&session).await;
+        let _ = session.flush().await;
+        return Redirect::to(&format!(
+            "{}login?error=expired",
+            state.context_path_with_slash()
+        ))
+        .into_response();
+    }
+
     let user = data.user.clone();
     request.extensions_mut().insert(CurrentUser(user.clone()));
 
@@ -338,6 +355,14 @@ async fn authorize(
         headers.insert(name.clone(), value.clone());
     }
     response
+}
+
+/// Whether the access token is refreshed for this path (`OpenIdReAuthorizeFilter.REQUEST_MATCHER`).
+fn refreshes_openid(path: &str) -> bool {
+    path == "/"
+        || path == "/refresh-openid"
+        || path.starts_with("/app/")
+        || path.starts_with("/app_i/")
 }
 
 /// Whether a request may be remembered as the page to open after logging in.

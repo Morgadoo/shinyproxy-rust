@@ -385,6 +385,16 @@ pub struct OpenIdSettings {
     pub jwks_signature_algorithm: Option<String>,
 }
 
+impl OpenIdSettings {
+    /// Whether the session survives an access token that cannot be refreshed
+    /// (`proxy.openid.ignore-session-expire`, default false).
+    pub fn ignore_session_expire(&self) -> bool {
+        self.ignore_session_expire
+            .map(|value| value.0)
+            .unwrap_or(false)
+    }
+}
+
 /// `proxy.ldap` accepts a single provider or a list of providers.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]

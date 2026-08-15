@@ -203,3 +203,80 @@ fn openid_backend(state: &AppState) -> Option<&OpenIdAuthenticationBackend> {
 fn auth_error(state: &AppState) -> Response {
     Redirect::to(&format!("{}auth-error", state.context_path_with_slash())).into_response()
 }
+
+/// Refreshes the access token of a session when it is about to expire (`OpenIdReAuthorizeFilter`).
+///
+/// Returns `false` when the session has to be invalidated (the provider refused the refresh token and
+/// `proxy.openid.ignore-session-expire` is not set), which logs the user out.
+pub async fn refresh_if_needed(
+    state: &AppState,
+    session: &Session,
+    data: &mut SessionData,
+) -> bool {
+    let Some(backend) = openid_backend(state) else {
+        return true;
+    };
+    let Some(tokens) = data.oidc_tokens.clone() else {
+        // the session has no tokens (e.g. it was recovered from Redis without them)
+        return state.settings.proxy.openid.ignore_session_expire();
+    };
+
+    // 40 seconds of clock skew, like the filter of the Java implementation (60 seconds would refresh a
+    // token that is valid for one minute on every request)
+    let skew = 40_000;
+    let expired = tokens
+        .expires_at
+        .map(|expires_at| containerproxy::model::proxy::now_millis() + skew >= expires_at)
+        .unwrap_or(false);
+    if !expired {
+        return true;
+    }
+
+    let Some(refresh_token) = tokens.refresh_token.clone() else {
+        return state.settings.proxy.openid.ignore_session_expire();
+    };
+
+    match backend.refresh(&refresh_token).await {
+        Ok(refreshed) => {
+            let user_id = data
+                .user
+                .as_ref()
+                .map(|user| user.id.clone())
+                .unwrap_or_default();
+            tracing::debug!("OpenID access token refreshed [user: {user_id}]");
+            let access_token = refreshed.access_token.clone().or(tokens.access_token);
+            if let (Some(user), Some(token)) = (data.user.as_mut(), access_token.clone()) {
+                user.attributes
+                    .insert("accessToken".to_string(), serde_json::json!(token));
+            }
+            data.oidc_tokens = Some(OidcTokens {
+                access_token,
+                refresh_token: refreshed.refresh_token.or(Some(refresh_token)),
+                expires_at: refreshed.expires_in.map(|seconds| {
+                    containerproxy::model::proxy::now_millis() + seconds.max(0) * 1000
+                }),
+            });
+            data.store(session).await;
+            true
+        }
+        Err(error) => {
+            if state.settings.proxy.openid.ignore_session_expire() {
+                tracing::debug!(
+                    "OpenID access token expired, internal session stays active ({error})"
+                );
+                true
+            } else {
+                tracing::info!(
+                    "OpenID access token could not be refreshed, ending the session: {error}"
+                );
+                false
+            }
+        }
+    }
+}
+
+/// `GET /refresh-openid` — the front-end calls this while an app is open, so that the session of a user
+/// who is watching an app does not expire (`refreshOpenidEnabled`).
+pub async fn refresh_openid() -> Response {
+    axum::Json(serde_json::json!({"status": "success"})).into_response()
+}
