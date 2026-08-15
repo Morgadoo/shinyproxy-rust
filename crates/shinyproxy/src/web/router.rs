@@ -888,39 +888,21 @@ async fn static_asset(
         return serve_favicon(&state, Some(spec_id), user.as_ref());
     }
     if !assets::exists(&path) {
-        return not_found(State(state.clone()), HeaderMap::new()).await;
+        return not_found().await;
     }
     assets::serve(&path, cacheable)
 }
 
-async fn not_found(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
-    let _ = &state;
-    // the `ErrorController` of the Java implementation answers every unknown path with this document
-    let _ = &headers;
-    return (
+/// The answer for a path that does not exist.
+///
+/// The `ErrorController` of the Java implementation answers every unknown path with this document, whatever
+/// the request asked for (verified with the parity fixture).
+async fn not_found() -> Response {
+    (
         StatusCode::NOT_FOUND,
         axum::Json(serde_json::json!({"status": "error", "data": "not found"})),
     )
-        .into_response();
-    #[allow(unreachable_code)]
-    {
-        let mut model = serde_json::Map::new();
-        model.insert("title".into(), serde_json::json!(state.resolve_title(None)));
-        model.insert("shortError".into(), serde_json::json!("Not found"));
-        model.insert(
-            "description".into(),
-            serde_json::json!("The requested page could not be found."),
-        );
-        model.insert(
-            "mainPage".into(),
-            serde_json::json!(state.context_path_with_slash()),
-        );
-        model.insert(
-            "contextPath".into(),
-            serde_json::json!(state.context_path_with_slash()),
-        );
-        (StatusCode::NOT_FOUND, render(&state, "error.html", model)).into_response()
-    }
+        .into_response()
 }
 
 /// Renders a template, turning failures into a plain error response (and a log line).

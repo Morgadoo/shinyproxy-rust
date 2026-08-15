@@ -251,6 +251,24 @@ The report is down to four differences, all of them without behavioural meaning:
 
 Everything else the report found has been fixed; the list is in the commit that introduced the script.
 
+## Parity checked by the test suite
+
+Next to the end-to-end cross validation there is a *recorded* comparison: the answers of the Java
+implementation to 42 scenarios live in `crates/shinyproxy/tests/fixtures/parity/java-3.2.4.json`, and
+`cargo test -p shinyproxy --test parity` replays them against this implementation on every test run (see
+[TESTING.md](TESTING.md#parity-with-the-java-implementation-checked-by-cargo-test)). The behaviours it pinned
+down, which this implementation follows:
+
+| Behaviour | Detail |
+| --- | --- |
+| The actuator endpoints | Only on the management port (`management.server.port`, which ShinyProxy defaults to 9090); the application port answers 404 |
+| `/favicon` | Not public: an unauthenticated request is sent to the login page |
+| An unknown path | `404` with `{"status":"error","data":"not found"}` (the document of Spring's error controller), whatever the request asked for |
+| Access denied | `403` with `{"status":"fail","data":"forbidden"}`, also for `/app/{spec}` of an app the user may not use or that does not exist |
+| `/admin/data`, `/api/**`, `/app_proxy/**`, `/heartbeat/*`, `/issue` | Any access denial (also of a user who is logged in but lacks the rights) answers `410` with `shinyproxy_authentication_required`, because `AuthenticationRequiredFilter` covers those paths |
+| `/api/route/{unknown}` | `403`, unlike `/app_proxy/{unknown}` which answers `410` |
+| Static assets | Carry the same `Cache-Control: no-cache, no-store, max-age=0, must-revalidate` as every other answer; only the instance-id-prefixed URLs are cacheable |
+
 ## Performance
 
 Both implementations, on the same machine (30 seconds, 50 WebSocket connections, 16 HTTP connections through

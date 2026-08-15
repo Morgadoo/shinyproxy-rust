@@ -1094,32 +1094,6 @@ fn app_stopped_response() -> Response {
     app_stopped_api_response()
 }
 
-fn error_page(state: &AppState, status: StatusCode) -> Response {
-    let mut model = serde_json::Map::new();
-    model.insert("title".into(), json!(state.resolve_title(None)));
-    model.insert(
-        "shortError".into(),
-        json!(match status {
-            StatusCode::FORBIDDEN => "Forbidden",
-            StatusCode::NOT_FOUND => "Not found",
-            _ => "An error occurred",
-        }),
-    );
-    model.insert(
-        "description".into(),
-        json!("You do not have access to this page or application."),
-    );
-    model.insert("mainPage".into(), json!(state.context_path_with_slash()));
-    model.insert("contextPath".into(), json!(state.context_path_with_slash()));
-    match state.templates.render(
-        "error.html",
-        minijinja::Value::from_serialize(serde_json::Value::Object(model)),
-    ) {
-        Ok(html) => axum::response::Html(html).into_response(),
-        Err(_) => "Forbidden\n".into_response(),
-    }
-}
-
 /// Status values that end a `watch` request.
 pub fn is_final_status(status: ProxyStatus) -> bool {
     matches!(

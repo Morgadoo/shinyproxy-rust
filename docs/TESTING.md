@@ -80,6 +80,51 @@ passwords, unknown users and an unreachable directory.
 No service needed: `crates/shinyproxy/tests/openid.rs` runs a fake provider in process (an RSA key, a JWKS
 endpoint, a token endpoint with the refresh grant), so the whole flow is tested with real RS256 tokens.
 
+## Parity with the Java implementation, checked by `cargo test`
+
+`crates/shinyproxy/tests/fixtures/parity/java-3.2.4.json` holds the answers the Java ShinyProxy 3.2.4 gave to
+42 scenarios (the pages, the API, the proxy paths, the operational endpoints and the assets, asked as an
+anonymous visitor, as a user and as an administrator). `cargo test -p shinyproxy --test parity` replays those
+scenarios against this implementation, normalises both sides the same way (ids, timestamps, hosts and cookies
+are replaced; JSON keys are sorted; HTML is reduced to its markers) and fails on any difference that is not
+listed in `shinyproxy::parity::ACCEPTED_DIFFERENCES`.
+
+No JVM and no container runtime are needed for the replay, so the parity check runs in every `cargo test`.
+Re-record the fixture when a scenario is added or when the normalisation changes:
+
+```sh
+cargo run -p shinyproxy --example record-parity -- --write-config /tmp/parity.yml
+java -jar shinyproxy-3.2.4-exec.jar --spring.config.location=/tmp/parity.yml &
+cargo run -p shinyproxy --example record-parity --     --base-url http://127.0.0.1:8091 --implementation "Java ShinyProxy 3.2.4"     --out crates/shinyproxy/tests/fixtures/parity/java-3.2.4.json
+```
+
+`scripts/cross-validate.sh` does the same thing for the scenarios that need a *running app* (containers,
+labels, environment, proxied traffic); it needs both implementations and Docker, and writes
+`docs/generated/cross-validation.md`.
+
+## Benchmarks
+
+Two levels:
+
+```sh
+# end to end, this implementation against the Java one, on the same machine
+./scripts/build-test-image.sh
+./scripts/benchmark.sh /path/to/shinyproxy-3.2.4-exec.jar   # writes docs/generated/benchmark.md
+
+# micro-benchmarks of the hot paths of this implementation (criterion)
+cargo bench -p spel --bench expressions
+cargo bench -p containerproxy --bench engine
+cargo bench -p shinyproxy --bench pages
+```
+
+`scripts/benchmark.sh` measures startup, resident memory, how long starting and stopping an app takes, and
+throughput plus latency of three paths (the reverse proxy, a page the server renders itself, the JSON API),
+with and without WebSocket connections held open. The numbers of the last run are in
+[COMPATIBILITY.md](COMPATIBILITY.md#performance) and [generated/benchmark.md](generated/benchmark.md).
+
+The criterion benchmarks are for tracking regressions in this implementation; the two stacks cannot be
+compared function by function, which is why the Java comparison is end to end.
+
 ## Load and soak
 
 `scripts/load-test.sh` starts a server with the Docker backend, opens a number of WebSocket connections

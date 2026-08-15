@@ -45,6 +45,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Test
         run: cargo test --workspace --all-targets
+      - name: The benchmarks keep compiling
+        run: cargo bench --workspace --no-run
 
   docker:
     name: Test (Docker backend)
