@@ -70,6 +70,9 @@ uuid = { version = "1", features = ["v4", "serde"] }
 redis = { version = "0.27", default-features = false, features = ["sentinel", "tokio-comp"] }
 regex = "1"
 json-patch = "3"
+# the process wide crypto provider of rustls has to be chosen explicitly, because the dependency tree brings
+# both `ring` (ldap3) and `aws-lc-rs` (the AWS client)
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 jsonwebtoken = "9"
 k8s-openapi = { version = "0.23", features = ["v1_30"] }
 kube = { version = "0.96", default-features = false, features = ["client", "rustls-tls", "runtime"] }

@@ -145,6 +145,9 @@ impl AppState {
     /// Asynchronous because some container backends (Kubernetes) connect to their API when they are
     /// created.
     pub async fn new(raw: RawConfig, settings: Settings) -> Result<Self, StateError> {
+        // TLS clients (Kubernetes, AWS, LDAP, OpenID Connect) need a chosen crypto provider
+        containerproxy::install_crypto_provider();
+
         let identifiers =
             Identifiers::from_config(&raw, std::env::var("SP_KUBE_POD_NAME").ok().as_deref());
         let specs = ShinyProxySpecProvider::from_settings(&settings)?;

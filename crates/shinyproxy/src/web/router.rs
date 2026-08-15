@@ -314,6 +314,11 @@ async fn authorize(
         .into_response();
     }
 
+    // using a session keeps it alive: Spring Session writes `lastAccessedTime` on every request, while
+    // `tower-sessions` only moves the expiry when the session is *modified*. Without this, a user that is
+    // active for longer than `spring.session.timeout` would suddenly be logged out (found by the soak run).
+    keep_session_alive(&state, &session);
+
     let user = data.user.clone();
     // the session service counts the users that are logged in (`absolute_users_logged_in`) and those that
     // used their session in the last minute; with Redis sessions the counts are scanned from Redis instead
@@ -390,6 +395,18 @@ fn add_headers(state: &AppState, _path: &str, response: &mut Response) {
         for (name, value) in no_cache_headers() {
             headers.entry(name).or_insert(value);
         }
+    }
+}
+
+/// Moves the expiry of the session forward, because the session is being used.
+///
+/// Spring Session writes the last access time of a session on every request, so a session that is used never
+/// expires; `tower-sessions` only moves the expiry when a handler changes the session. Setting the expiry
+/// marks the session as modified, so the store keeps it alive for another `spring.session.timeout`.
+fn keep_session_alive(state: &AppState, session: &Session) {
+    let timeout = state.settings.spring.session.timeout_duration();
+    if let Ok(timeout) = time::Duration::try_from(timeout) {
+        session.set_expiry(Some(tower_sessions::Expiry::OnInactivity(timeout)));
     }
 }
 

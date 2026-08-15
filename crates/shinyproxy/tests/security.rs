@@ -27,6 +27,8 @@
 
 mod common;
 
+use std::time::Duration;
+
 use common::{TestClient, TestInstance};
 
 const CONFIG: &str = r##"
@@ -847,6 +849,47 @@ proxy:
             "the API must not expose the container environment to {user}: {body}"
         );
     }
+
+    instance.stop();
+}
+
+#[tokio::test]
+async fn a_session_that_is_used_does_not_expire() {
+    // a very short session timeout, so the test does not have to wait 30 minutes
+    let instance =
+        TestInstance::start(&format!("{CONFIG}\nspring:\n  session:\n    timeout: 2s\n")).await;
+
+    let jack = instance.login("jack", "password").await;
+    // the session is used every 400 ms for two and a half timeouts
+    for _ in 0..12 {
+        let response = jack
+            .get(instance.url("/api/proxy"))
+            .header("Accept", "application/json")
+            .send()
+            .await
+            .expect("api request");
+        assert_eq!(
+            response.status(),
+            200,
+            "a session that is used must stay valid"
+        );
+        tokio::time::sleep(Duration::from_millis(400)).await;
+    }
+
+    // a session that is not used expires (this is what `spring.session.timeout` is for)
+    let jeff = instance.login("jeff", "password").await;
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    let response = jeff
+        .get(instance.url("/api/proxy"))
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .expect("api request");
+    assert_eq!(
+        response.status(),
+        410,
+        "a session that was not used must expire"
+    );
 
     instance.stop();
 }

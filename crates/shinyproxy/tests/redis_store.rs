@@ -550,9 +550,10 @@ async fn two_servers_share_their_sessions() {
         .send()
         .await
         .expect("api request");
+    // the API answers an unauthenticated request the way `AuthenticationRequiredFilter` does
     assert_eq!(
         response.status(),
-        401,
+        410,
         "the session must be gone on the second server too"
     );
 

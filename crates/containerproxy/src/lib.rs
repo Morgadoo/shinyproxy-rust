@@ -28,6 +28,19 @@
 
 #![forbid(unsafe_code)]
 
+/// Chooses the cryptography provider of `rustls` for this process.
+///
+/// The dependency tree contains both `ring` (through the LDAP client) and `aws-lc-rs` (through the AWS
+/// client), so `rustls` refuses to pick one by itself; `ring` is installed here, once, before any TLS
+/// connection is made. Callers that build a TLS client should call this first (`AppState::new` does).
+pub fn install_crypto_provider() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        // an error means another provider was already installed, which is just as good
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+}
+
 pub mod auth;
 pub mod backend;
 pub mod config;

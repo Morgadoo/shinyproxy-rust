@@ -264,8 +264,11 @@ the proxy to the same app; `scripts/load-test.sh`):
 | Latency p50 / p99 | 0.9 ms / 1.9 ms | 1.5 ms / 6.5 ms |
 | Errors | 0 | 0 |
 
-A 30 minute soak with 200 WebSocket connections and 32 HTTP connections held ~18 000 requests per second
-without a single error and with stable memory.
+A 30 minute soak with 200 WebSocket connections and 32 HTTP connections held ~16 000 requests per second
+(28.9 million requests in total) with stable memory (18 MB after startup, 39 MB at the end), no panics and no
+WebSocket errors. The soak found one real bug, which is fixed: a session that was *used* still expired after
+`spring.session.timeout`, because the session layer only moves the expiry when a handler changes the session,
+while Spring Session writes the last access time on every request.
 
 ## Dependency advisories
 
