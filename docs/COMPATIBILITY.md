@@ -250,6 +250,30 @@ The report is down to four differences, all of them without behavioural meaning:
 
 Everything else the report found has been fixed; the list is in the commit that introduced the script.
 
+## Performance
+
+Both implementations, on the same machine (30 seconds, 50 WebSocket connections, 16 HTTP connections through
+the proxy to the same app; `scripts/load-test.sh`):
+
+| | this implementation | Java ShinyProxy 3.2.4 |
+| --- | --- | --- |
+| Startup until the first answer | 0.2 s | 4.6 s |
+| Resident memory after startup | 18 MB | 343 MB |
+| Resident memory under load | 31 MB | 446 MB |
+| Requests per second through the proxy | 17 300 | 9 100 |
+| Latency p50 / p99 | 0.9 ms / 1.9 ms | 1.5 ms / 6.5 ms |
+| Errors | 0 | 0 |
+
+A 30 minute soak with 200 WebSocket connections and 32 HTTP connections held ~18 000 requests per second
+without a single error and with stable memory.
+
+## Dependency advisories
+
+`cargo audit` runs in CI. One advisory is accepted and documented in `.cargo/audit.toml`: the Marvin attack in
+the `rsa` crate (RUSTSEC-2023-0071), which has no fixed release and is only reachable through the RSA based
+authentication handshake of MySQL — that is, when `proxy.usage-stats-url` points at a MySQL database. Three
+unmaintained (not vulnerable) crates of the Kubernetes and AWS clients are accepted as well.
+
 ## Version scheme
 
 The crate version is `0.x` (semver for a young code base), and every binary reports the ShinyProxy version its
