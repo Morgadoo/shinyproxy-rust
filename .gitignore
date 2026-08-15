@@ -1,4 +1,6 @@
 /target/
+# insta writes rejected snapshots next to the accepted ones
+*.snap.new
 /shinyproxy.log
 /application.yml
 /.project
