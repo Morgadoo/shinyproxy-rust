@@ -86,6 +86,7 @@ Property names are matched leniently: `port-range-start`, `portRangeStart` and `
 | `proxy.ecs.cloud-watch-group-prefix` | value | planned (P12) |
 | `proxy.ecs.cloud-watch-region` | value | planned (P12) |
 | `proxy.ecs.cloud-watch-stream-prefix` | value | planned (P12) |
+| `proxy.ecs.container-protocol` | value | planned (P12) |
 | `proxy.ecs.default-repository-credentials-parameter` | value | planned (P12) |
 | `proxy.ecs.enable-cloud-watch` | value | planned (P12) |
 | `proxy.ecs.internal-networking` | value | planned (P12) |

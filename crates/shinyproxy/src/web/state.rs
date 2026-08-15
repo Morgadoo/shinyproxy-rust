@@ -338,6 +338,18 @@ impl AppState {
             _ => None,
         };
 
+        // ECS Fargate refuses some app definitions; the check happens at startup, as in Java
+        if settings
+            .proxy
+            .container_backend()
+            .eq_ignore_ascii_case("ecs")
+        {
+            for spec in specs.specs() {
+                containerproxy::backend::ecs::EcsConfig::validate_spec(spec)
+                    .map_err(StateError::Configuration)?;
+            }
+        }
+
         // apps with `minimum-seats-available` keep containers running that the users share
         let mut sharing_scalers = Vec::new();
         for spec in specs.specs() {

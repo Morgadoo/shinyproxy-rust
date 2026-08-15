@@ -19,7 +19,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 | P9 | UI parity completion | ✅ | parameters (validation, form, conversion, runtime values), admin pages, `/grafana/**`, my-apps modes, template groups, logos, notification message, body classes, hide-navbar and landing page; every page is locked down by an HTML snapshot |
 | P10 | Operational features (logs, metrics, timeouts, stats) | ✅ | release timers (heartbeat timeout, max lifetime, logout), management server (health/readiness/recyclable/prometheus on `management.server.port`), Micrometer-compatible metrics, container log collection, `proxy.log-as-json` + `logging.*`, CSV and SQL usage statistics collectors. Documented gaps: S3 log storage, InfluxDB collector, `logging.requestdump`, attribute expressions |
 | P11 | Authentication backends (OIDC, LDAP, SAML, ...) | 🟨 | `none`, `simple`, `custom-header`, `webservice`, `openid` (auth-code flow, PKCE, JWKS, token refresh, ms-graph groups), `ldap` (verified against a real OpenLDAP) and oauth2 bearer tokens; `saml` and `keycloak` fail at startup with explicit migration messages |
-| P12 | High availability (Redis), Kubernetes, ECS, proxy sharing | 🟨 | Redis proxy/heartbeat/port stores, the leader election and the Kubernetes backend work (verified against a real Redis and a real k3s cluster); Redis sessions (`spring.session.store-type: redis`, shared across the servers of a realm) with the logged-in/active user gauges; the version check of rolling updates (`RedisCheckLatestConfigService`); and the pre-initialized, shared containers (memory seat store); the ECS backend and the Redis seat store remain |
+| P12 | High availability (Redis), Kubernetes, ECS, proxy sharing | 🟨 | Redis proxy/heartbeat/port stores, the leader election and the Kubernetes backend work (verified against a real Redis and a real k3s cluster); Redis sessions (`spring.session.store-type: redis`, shared across the servers of a realm) with the logged-in/active user gauges; the version check of rolling updates (`RedisCheckLatestConfigService`); and the pre-initialized, shared containers (memory seat store); and the ECS backend (unit tested, needs validation against a real AWS account); the Redis seat store remains |
 | P13 | Java decommission & packaging | ⬜ | |
 | P14 | Validation & hardening | ⬜ | |
 
@@ -30,7 +30,7 @@ service and are enabled with `SP_TEST_DOCKER=1`, `SP_TEST_LDAP=1` and `SP_TEST_R
 
 | Suite | Tests | Notes |
 | --- | --- | --- |
-| `containerproxy` unit | 246 | config tree/schema/loader/settings/warnings, canonical YAML, identifiers |
+| `containerproxy` unit | 290 | config tree/schema/loader/settings/warnings, canonical YAML, identifiers |
 | `containerproxy` golden | 2 | canonical YAML + SHA-1 vs Java reference output |
 | `containerproxy` dataplane (end to end) | 6 | streamed bodies, header forwarding, WebSocket + heartbeats, cache headers, injection, crashed app |
 | `shinyproxy` proxy sharing (end to end) | 7 | containers pre-started before anybody logs in, users claiming seats instantly, several users on one container, containers that may not be re-used, waiting and failing without a seat, removal through the admin endpoint, the seat metrics and the startup validations |

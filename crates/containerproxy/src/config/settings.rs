@@ -653,6 +653,8 @@ pub struct EcsSettings {
     pub default_repository_credentials_parameter: Option<String>,
     pub privileged: Option<FlexBool>,
     pub internal_networking: Option<FlexBool>,
+    /// Protocol used to reach the apps (`http` by default).
+    pub container_protocol: Option<String>,
 }
 
 /// `proxy.usage-stats[]`

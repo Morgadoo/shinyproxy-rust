@@ -26,6 +26,7 @@
 //! `IContainerBackend`.
 
 pub mod docker;
+pub mod ecs;
 pub mod kubernetes;
 pub mod local;
 pub mod ports;
@@ -209,26 +210,33 @@ pub async fn create_async(
         .container_backend()
         .to_ascii_lowercase()
         .replace(['-', '_'], "");
-    if name != "kubernetes" {
-        return create(settings, context);
+    match name.as_str() {
+        "kubernetes" => {
+            let config = kubernetes::KubernetesConfig::from_settings(settings)
+                .map_err(CreateError::Configuration)?;
+            let mut backend =
+                kubernetes::KubernetesBackend::connect(config, context.registry.clone()).await?;
+            if let Some(access_check) = context.access_check.clone() {
+                backend = backend.with_access_check(access_check);
+            }
+            Ok(Arc::new(backend))
+        }
+        "ecs" => {
+            let config =
+                ecs::EcsConfig::from_settings(settings).map_err(CreateError::Configuration)?;
+            let backend = ecs::EcsBackend::connect(config, context.registry.clone()).await?;
+            Ok(Arc::new(backend))
+        }
+        _ => create(settings, context),
     }
-
-    let config = kubernetes::KubernetesConfig::from_settings(settings)
-        .map_err(CreateError::Configuration)?;
-    let mut backend =
-        kubernetes::KubernetesBackend::connect(config, context.registry.clone()).await?;
-    if let Some(access_check) = context.access_check.clone() {
-        backend = backend.with_access_check(access_check);
-    }
-    Ok(Arc::new(backend))
 }
 
 /// The configured container backend is not implemented yet.
 #[derive(Debug, thiserror::Error)]
 #[error(
     "container backend '{name}' is not supported yet by this implementation \
-     (supported: docker, docker-swarm, kubernetes, local); see docs/PROGRESS.md for the phase that \
-     adds it"
+     (supported: docker, docker-swarm, kubernetes, ecs, local); see docs/PROGRESS.md for the phase \
+     that adds it"
 )]
 pub struct UnsupportedBackend {
     /// The configured value of `proxy.container-backend`.
@@ -312,10 +320,10 @@ pub fn create(
             )?))
         }
         "local" => Ok(Arc::new(local::LocalBackend::new(settings, port_allocator))),
-        // the Kubernetes client connects asynchronously; see `create_async`
-        "kubernetes" => Err(CreateError::Configuration(
-            "the kubernetes backend must be created with backend::create_async".to_string(),
-        )),
+        // these clients connect asynchronously; see `create_async`
+        other @ ("kubernetes" | "ecs") => Err(CreateError::Configuration(format!(
+            "the {other} backend must be created with backend::create_async"
+        ))),
         other => Err(UnsupportedBackend {
             name: other.to_string(),
         }
@@ -348,9 +356,9 @@ mod tests {
     #[test]
     fn reports_unsupported_backends() {
         let settings: Settings =
-            serde_yaml_ng::from_str("proxy:\n  container-backend: ecs\n").unwrap();
+            serde_yaml_ng::from_str("proxy:\n  container-backend: nonsense\n").unwrap();
         let error = create(&settings, context()).unwrap_err();
-        assert!(error.to_string().contains("ecs"), "{error}");
+        assert!(error.to_string().contains("nonsense"), "{error}");
         assert!(error.to_string().contains("not supported yet"), "{error}");
     }
 

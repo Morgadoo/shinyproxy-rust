@@ -388,6 +388,7 @@ static ENGINE_KEYS: &[KeyDef] = {
         ),
         scalar("proxy.ecs.privileged", Planned("P12")),
         scalar("proxy.ecs.internal-networking", Planned("P12")),
+        scalar("proxy.ecs.container-protocol", Planned("P12")),
     ]
 };
 
