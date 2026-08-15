@@ -146,6 +146,16 @@ types. Allow-listed static types: `java.lang.System.getenv`, `java.lang.String.v
 | Logout | The apps of the user are stopped when `stop-on-logout` of the app, or `proxy.default-stop-proxy-on-logout` (true by default), says so | ✅ |
 | Release strategy | Apps are stopped (`StopProxyReleaseStrategy`); pausing instead of stopping exists in the service (`ReleaseStrategy::Pause`) but ShinyProxy never selects it, as in Java | ✅ |
 
+## Management endpoints and metrics
+
+| Topic | Behaviour | Status |
+| --- | --- | --- |
+| Management server | Served on `management.server.port` (9090 by default), like Spring Boot; the health, prometheus and recyclable endpoints are also exposed on the public port, as `management.endpoints.web.exposure.include` of ShinyProxy does | ✅ |
+| `/actuator/health[/liveness,/readiness]` | Same JSON; readiness is `DOWN` (503) while app recovery runs, with the `appRecovery` component | ✅ |
+| `/actuator/recyclable` | `{"isRecyclable": ..., "activeConnections": n}` with the number of open WebSocket tunnels, and false while a proxy action is in progress | ✅ |
+| `/actuator/prometheus` | Same metric names, label keys and values as the Micrometer registry: `appStarts`/`appStops`/`appCrashes`/`startFailed`/`userLogins`/`userLogouts`/`authFailed` counters (`_total`), `absolute_apps_running` and `appInfo` gauges (with the Java status values 1/10/20/30/40/50/100), `startupTime`/`usageTime`/`imagePullTime`/`containerScheduleTime`/`containerStartupTime`/`applicationStartupTime` summaries, the `shinyproxy_instance`/`shinyproxy_realm` labels and the `proxy.usage-stats-micrometer-prefix` prefix | ✅ |
+| Micrometer histogram buckets | Only `_count` and `_sum` are exposed for timers (no quantiles/histograms, which Java only publishes when configured) | 🟨 |
+
 ## Not yet implemented
 
 Everything in [PROGRESS.md](PROGRESS.md) that is not marked ✅. Properties whose behaviour is not

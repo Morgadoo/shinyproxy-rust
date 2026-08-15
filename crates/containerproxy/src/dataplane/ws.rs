@@ -70,6 +70,7 @@ pub async fn proxy_upgrade(
                         return;
                     }
                 };
+                observer.opened();
                 if let Err(error) = tunnel(
                     hyper_util::rt::TokioIo::new(client),
                     hyper_util::rt::TokioIo::new(upstream),
@@ -105,6 +106,9 @@ pub fn is_pong(buffer: &[u8]) -> bool {
 pub trait TunnelObserver: Send + Sync + 'static {
     /// The app answered a ping (or traffic was seen), which counts as a heartbeat.
     fn heartbeat(&self);
+
+    /// The tunnel was opened (used to count the open connections).
+    fn opened(&self) {}
 
     /// The tunnel was closed.
     fn closed(&self) {}

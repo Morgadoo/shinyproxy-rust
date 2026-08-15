@@ -597,6 +597,14 @@ impl TunnelObserver for HeartbeatObserver {
     fn heartbeat(&self) {
         self.state.heartbeats.update(&self.proxy_id, now_millis());
     }
+
+    fn opened(&self) {
+        self.state.websockets.opened();
+    }
+
+    fn closed(&self) {
+        self.state.websockets.closed();
+    }
 }
 
 /// Whether the iframe script has to be injected: navigations of HTML pages only.

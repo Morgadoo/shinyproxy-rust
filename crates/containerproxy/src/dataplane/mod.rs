@@ -251,3 +251,58 @@ mod tests {
             .is_none());
     }
 }
+
+/// Counts the open WebSocket tunnels (`WebSocketCounterService`).
+///
+/// `/actuator/recyclable` reports the count, so that a deployment does not replace a server that still
+/// has users connected to an app.
+#[derive(Debug, Default)]
+pub struct WebSocketCounter {
+    open: std::sync::atomic::AtomicUsize,
+}
+
+impl WebSocketCounter {
+    /// A counter without connections.
+    pub fn new() -> Self {
+        WebSocketCounter::default()
+    }
+
+    /// A tunnel was opened.
+    pub fn opened(&self) {
+        self.open.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// A tunnel was closed.
+    pub fn closed(&self) {
+        // never go below zero, even when a close is reported twice
+        let _ = self.open.fetch_update(
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+            |current| Some(current.saturating_sub(1)),
+        );
+    }
+
+    /// The number of open tunnels.
+    pub fn count(&self) -> usize {
+        self.open.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+#[cfg(test)]
+mod counter_tests {
+    use super::WebSocketCounter;
+
+    #[test]
+    fn counts_open_tunnels() {
+        let counter = WebSocketCounter::new();
+        assert_eq!(counter.count(), 0);
+        counter.opened();
+        counter.opened();
+        assert_eq!(counter.count(), 2);
+        counter.closed();
+        assert_eq!(counter.count(), 1);
+        counter.closed();
+        counter.closed();
+        assert_eq!(counter.count(), 0, "the count never goes below zero");
+    }
+}

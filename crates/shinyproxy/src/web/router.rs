@@ -120,6 +120,25 @@ pub fn router(state: Arc<AppState>) -> Router {
             &path("/admin/delegate-proxy"),
             axum::routing::delete(super::api::remove_delegate_proxies),
         )
+        // the actuator endpoints are also exposed on the public port, like
+        // management.endpoints.web.exposure.include of ShinyProxy does
+        .route(&path("/actuator/health"), get(super::management::health))
+        .route(
+            &path("/actuator/health/liveness"),
+            get(super::management::liveness),
+        )
+        .route(
+            &path("/actuator/health/readiness"),
+            get(super::management::readiness),
+        )
+        .route(
+            &path("/actuator/prometheus"),
+            get(super::management::prometheus),
+        )
+        .route(
+            &path("/actuator/recyclable"),
+            get(super::management::recyclable),
+        )
         .route(&path("/issue"), post(super::issue::report_issue))
         .route(&path("/v3/api-docs"), get(super::openapi::api_docs))
         .route(
@@ -436,6 +455,12 @@ async fn login_submit(
     match state.auth.authenticate(&credentials) {
         Ok(user) => {
             tracing::info!("User logged in [user: {}]", user.id);
+            state
+                .proxies
+                .events()
+                .publish(containerproxy::events::Event::UserLoggedIn {
+                    user_id: user.id.clone(),
+                });
             // a new session id after login prevents session fixation
             let _ = session.cycle_id().await;
             let target = data
@@ -459,6 +484,12 @@ async fn login_submit(
                 "Authentication failure [user: {}] [error: {error}]",
                 credentials.username
             );
+            state
+                .proxies
+                .events()
+                .publish(containerproxy::events::Event::AuthenticationFailed {
+                    user_id: credentials.username.clone(),
+                });
             Redirect::to(&format!("{context_path}login?error=true")).into_response()
         }
     }

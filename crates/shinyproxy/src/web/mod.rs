@@ -25,6 +25,7 @@ pub mod admin;
 pub mod api;
 pub mod apps;
 pub mod issue;
+pub mod management;
 pub mod model;
 pub mod monitoring;
 pub mod openapi;

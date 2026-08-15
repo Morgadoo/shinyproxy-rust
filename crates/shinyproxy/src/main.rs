@@ -78,6 +78,26 @@ async fn main() -> anyhow::Result<()> {
     // with the startup page (as the Java AppRecoveryFilter does)
     state.spawn_startup_tasks();
 
+    // the management server (actuator) listens on its own port, as Spring Boot does
+    let management_port = state.settings.management.port();
+    let management_address = format!("{bind_address}:{management_port}");
+    match tokio::net::TcpListener::bind(&management_address).await {
+        Ok(listener) => {
+            tracing::info!(
+                "Management endpoints available on http://{management_address}/actuator"
+            );
+            let management = shinyproxy::web::management::router(state.clone());
+            tokio::spawn(async move {
+                if let Err(error) = axum::serve(listener, management).await {
+                    tracing::warn!("management server stopped: {error}");
+                }
+            });
+        }
+        Err(error) => {
+            tracing::warn!("cannot start the management server on {management_address}: {error}")
+        }
+    }
+
     let app = shinyproxy::web::server::build(state.clone());
 
     let address = format!("{bind_address}:{port}");

@@ -27,7 +27,7 @@ use std::sync::Arc;
 use containerproxy::auth::{self, AuthBackend, AuthenticatedUser};
 use containerproxy::backend::{self, ContainerBackend, PortAllocator};
 use containerproxy::config::{RawConfig, Settings};
-use containerproxy::dataplane::ProxyRouter;
+use containerproxy::dataplane::{ProxyRouter, WebSocketCounter};
 use containerproxy::events::EventBus;
 use containerproxy::model::runtime_value::{RuntimeValue, RuntimeValueRegistry};
 use containerproxy::model::spec::ProxySpec;
@@ -37,6 +37,7 @@ use containerproxy::service::{
 };
 use containerproxy::spec::expression::{ExpressionContextBuilder, SpelResolver};
 use containerproxy::spec::SpecProvider;
+use containerproxy::stat::Metrics;
 use containerproxy::store::{HeartbeatStore, MemoryHeartbeatStore, MemoryProxyStore, ProxyStore};
 use containerproxy::web::{SecurityHeaders, TemplateEngine};
 
@@ -75,6 +76,10 @@ pub struct AppState {
     pub recovery: Arc<AppRecoveryService>,
     /// Releases apps that are inactive or too old.
     pub release: Arc<ReleaseService>,
+    /// Usage statistics of this server (`/actuator/prometheus`).
+    pub metrics: Arc<Metrics>,
+    /// Open WebSocket tunnels (`/actuator/recyclable`).
+    pub websockets: Arc<WebSocketCounter>,
     /// All known runtime value keys (engine + ShinyProxy).
     pub runtime_values: RuntimeValueRegistry,
     /// Cached logo data URIs, keyed by the configured URL.
@@ -151,6 +156,18 @@ impl AppState {
             EventBus::new(),
         ));
 
+        let metrics = Arc::new(Metrics::new(
+            settings.proxy.usage_stats_micrometer_prefix.as_deref(),
+            &identifiers,
+        ));
+        for spec in specs.specs() {
+            let indexes: Vec<i64> = spec
+                .container_specs
+                .iter()
+                .map(|container| container.index)
+                .collect();
+            metrics.register_spec(&spec.id, &indexes);
+        }
         let release = Arc::new(ReleaseService::new(
             &settings,
             proxies.clone(),
@@ -172,6 +189,8 @@ impl AppState {
             router: Arc::new(ProxyRouter::new()),
             recovery,
             release,
+            metrics,
+            websockets: Arc::new(WebSocketCounter::new()),
             backend,
             runtime_values: (*runtime_values).clone(),
             logo_cache: dashmap::DashMap::new(),
@@ -184,6 +203,9 @@ impl AppState {
     /// `AppRecoveryFilter`. Called by `main` and by the test harness, so that both go through the same
     /// startup sequence.
     pub fn spawn_startup_tasks(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
+        // the metrics follow the events of the server (this needs a runtime, hence not in `new`)
+        self.metrics.subscribe(self.proxies.events());
+
         let state = self.clone();
         tokio::spawn(async move {
             let recovered = state

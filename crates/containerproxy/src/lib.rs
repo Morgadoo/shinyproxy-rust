@@ -36,6 +36,7 @@ pub mod events;
 pub mod model;
 pub mod service;
 pub mod spec;
+pub mod stat;
 pub mod store;
 pub mod util;
 pub mod web;
