@@ -21,7 +21,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 | P11 | Authentication backends (OIDC, LDAP, SAML, ...) | 🟨 | `none`, `simple`, `custom-header`, `webservice`, `openid` (auth-code flow, PKCE, JWKS, token refresh, ms-graph groups), `ldap` (verified against a real OpenLDAP) and oauth2 bearer tokens; `saml` and `keycloak` fail at startup with explicit migration messages |
 | P12 | High availability (Redis), Kubernetes, ECS, proxy sharing | ✅ | Redis proxy/heartbeat/port stores, the leader election and the Kubernetes backend work (verified against a real Redis and a real k3s cluster); Redis sessions (`spring.session.store-type: redis`, shared across the servers of a realm) with the logged-in/active user gauges; the version check of rolling updates (`RedisCheckLatestConfigService`); and the pre-initialized, shared containers (memory seat store); the ECS backend (unit tested, needs validation against a real AWS account) and the Redis seat store |
 | P13 | Java decommission & packaging | ✅ | the Java sources, the Maven build and the Java CI workflow are removed (the templates and assets live in `assets/`, the demo configuration in `examples/`), README and docs rewritten (`MIGRATION.md`, `TESTING.md`), the configuration reference states what is really implemented, `Dockerfile` + `.dockerignore` (124 MB image, verified serving the demo configuration), the binary is stamped with the commit and the build time, CI runs the Docker/Kubernetes/Redis/LDAP suites and builds the image, and `release.yml` publishes binaries with checksums and a multi-arch image |
-| P14 | Validation & hardening | ⬜ | |
+| P14 | Validation & hardening | ✅ | cross validation against the Java jar (report in `generated/cross-validation.md`, four cosmetic differences left), the security review (route × role matrix and the classic weaknesses), robustness (property tests plus nasty URLs and bodies), the chaos checks, the load and soak runs (numbers in `COMPATIBILITY.md`) and the sign-off table below |
 
 ## Test inventory
 
@@ -80,3 +80,71 @@ Tracks the 13 Java integration test classes (see `src/test/java`) that must have
 * Pinned to Rust **1.97.1** (`rust-toolchain.toml`); the plan mentioned 1.90 but 1.97.1 is the current stable.
 * `panic = "abort"` is **not** used in the release profile: a panic inside one request/task must not take the
   whole server down (Undertow/Spring behaves the same way).
+
+## Sign-off: every Java source has a Rust counterpart
+
+The Java implementation consisted of 37 files in ShinyProxy (`src/main/java/eu/openanalytics/shinyproxy`) and
+248 files in the ContainerProxy engine it bundled. They map onto this repository as follows; a row that is not
+ported says why.
+
+### ShinyProxy
+
+| Java | Rust |
+| --- | --- |
+| `AppRequestInfo` | `shinyproxy::web::apps::AppRequestInfo` |
+| `AuthenticationRequiredFilter` | `shinyproxy::web::router::{needs_authentication_answer, authorize}` |
+| `controllers/AdminController` | `shinyproxy::web::admin` |
+| `controllers/AppController` | `shinyproxy::web::apps` (`/app/**`, `/app_i/**`, `/app_proxy/**`) |
+| `controllers/AppDirectController` | `shinyproxy::web::apps::app_direct` |
+| `controllers/BaseController` | `shinyproxy::web::model::prepare_model` |
+| `controllers/DelegateProxyAdminController` | `shinyproxy::web::api::remove_delegate_proxies` |
+| `controllers/HeartbeatController` | `shinyproxy::web::apps::{heartbeat, heartbeat_info}` |
+| `controllers/IndexController` | `shinyproxy::web::router::index` |
+| `controllers/IssueController` | `shinyproxy::web::issue` |
+| `controllers/ProxyApiController` | `shinyproxy::web::api` |
+| `controllers/dto/*` | the request and answer types next to their handlers (`shinyproxy::web::{api,issue}`) |
+| `external/ExternalAppSpecExtension[Provider]` | `shinyproxy::spec_provider` (the `external` spec extension) |
+| `monitoring/Monitoring{Controller,Service}` | `shinyproxy::web::monitoring` (`/grafana/**`) |
+| `runtimevalues/*` (9 files) | `shinyproxy::runtime_values` |
+| `ShinyProxyConfiguration` | `shinyproxy::config_schema` + `containerproxy::config` |
+| `ShinyProxyIframeScriptInjector` | `containerproxy::dataplane::inject` |
+| `ShinyProxySpecExtension[Provider]`, `ShinyProxySpecProvider` | `shinyproxy::spec_provider` |
+| `ShinyProxyTestStrategy` | `containerproxy::service::proxy_service::wait_until_reachable` |
+| `Thymeleaf` | `containerproxy::web::templates` (MiniJinja) |
+| `UISecurityConfig` | `shinyproxy::web::router::authorize` + `containerproxy::web::security` |
+| `UserAndAppNameAndInstanceNameProxyIndex` | `containerproxy::store` (the lookups of `ProxyStore`) |
+
+### ContainerProxy
+
+| Java package | Rust |
+| --- | --- |
+| `model/runtime/runtimevalues` (28) | `containerproxy::model::runtime_value` |
+| `service` (21) | `containerproxy::service::{proxy_service,release,recovery,logs,leader,sessions,sharing,identifier,runtime_values,parameters}` |
+| `util` (19) | `containerproxy::{util, web::security, dataplane}` |
+| `event` (15) | `containerproxy::events` |
+| `model/spec` (10) | `containerproxy::model::spec` |
+| `model/runtime` (10) | `containerproxy::model::proxy` |
+| `backend/dispatcher/proxysharing` (+ stores, 19) | `containerproxy::service::sharing` (memory and Redis stores) |
+| `log` (8) | `containerproxy::service::logs` + `shinyproxy::logging` |
+| `backend/kubernetes` (7) | `containerproxy::backend::kubernetes` |
+| `auth/impl` (7) | `containerproxy::auth::{simple,none,ldap,openid,webservice,custom_header,bearer}` |
+| `stat/impl` (6) | `containerproxy::stat::{collectors,prometheus}` |
+| `security` (6) | `containerproxy::web::security` + `shinyproxy::web::router` |
+| `ui` (5) | `shinyproxy::web::{router,admin,issue}` and the templates in `assets/` |
+| `spec/expression` (5) | `spel` + `containerproxy::spec::expression` |
+| `service/hearbeat` (5) | `containerproxy::dataplane::ws` (client pings) + `containerproxy::service::release` |
+| `backend/ecs` (5) | `containerproxy::backend::ecs` |
+| `api`, `api/dto` (8) | `shinyproxy::web::{api,openapi}` |
+| `backend/strategy` (6) | `containerproxy::backend::ports` (the port allocation strategies) |
+| `backend/docker` (3) | `containerproxy::backend::{docker,swarm}` |
+| `backend/dispatcher` (3) | `containerproxy::service::proxy_service` (the dispatcher is chosen per app definition) |
+| `service/session` (4) | `containerproxy::service::sessions` + `containerproxy::store::RedisSessionStore` |
+| `service/leader` (4) | `containerproxy::service::leader` (including the version check of rolling updates) |
+| `model/store` (6) | `containerproxy::store` (memory and Redis) |
+| `stat` (2), `spec` (3), `backend` (2) | `containerproxy::{stat,spec,backend}` |
+| `auth/impl/saml` (5) | **not ported**: SAML authentication; the server refuses to start with `authentication: saml` and points at `openid` |
+| Spring plumbing (`ContainerProxyApplication`, `*Configuration`, `*AutoConfiguration`, ...) | not applicable: there is no dependency injection container; the wiring is `shinyproxy::web::AppState` |
+
+The features inside these files that are deliberately not implemented (S3 log storage, the InfluxDB collector,
+request dumping, ECS validated only by unit tests, ...) are listed in
+[COMPATIBILITY.md](COMPATIBILITY.md).
