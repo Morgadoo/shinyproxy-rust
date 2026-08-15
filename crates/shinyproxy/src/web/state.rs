@@ -56,6 +56,8 @@ pub struct AppState {
     pub specs: ShinyProxySpecProvider,
     /// The authentication backend.
     pub auth: Arc<dyn AuthBackend>,
+    /// The OpenID Connect backend, when it is the configured one (the endpoints of the flow need it).
+    pub openid: Option<Arc<containerproxy::auth::openid::OpenIdAuthenticationBackend>>,
     /// The template engine.
     pub templates: TemplateEngine,
     /// Security headers added to every response.
@@ -119,6 +121,15 @@ impl AppState {
             Identifiers::from_config(&raw, std::env::var("SP_KUBE_POD_NAME").ok().as_deref());
         let specs = ShinyProxySpecProvider::from_settings(&settings)?;
         let auth = auth::create(&settings)?;
+        // the OpenID Connect endpoints need the backend itself, not just the trait
+        let openid = if auth.name() == containerproxy::auth::openid::NAME {
+            Some(Arc::new(
+                containerproxy::auth::openid::OpenIdAuthenticationBackend::new(&settings)
+                    .map_err(auth::CreateError::Configuration)?,
+            ))
+        } else {
+            None
+        };
         let templates = TemplateEngine::new(
             settings
                 .proxy
@@ -185,6 +196,7 @@ impl AppState {
             identifiers,
             specs,
             auth,
+            openid,
             templates,
             security_headers,
             pause_supported: backend.supports_pause(),

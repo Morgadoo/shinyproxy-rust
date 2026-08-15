@@ -28,6 +28,7 @@ pub mod issue;
 pub mod management;
 pub mod model;
 pub mod monitoring;
+pub mod oidc;
 pub mod openapi;
 pub mod router;
 pub mod server;

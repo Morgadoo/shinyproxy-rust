@@ -192,7 +192,15 @@ pub fn is_public_path(path: &str, instance_id: &str) -> bool {
         "/favicon.ico",
         "/saml/metadata",
     ];
-    const PUBLIC_PREFIXES: &[&str] = &["/signin/", "/actuator/", "/v3/api-docs", "/swagger-ui/"];
+    const PUBLIC_PREFIXES: &[&str] = &[
+        "/signin/",
+        "/actuator/",
+        "/v3/api-docs",
+        "/swagger-ui/",
+        // the endpoints of the OpenID Connect flow (Spring permits `/oauth2/**` and `/login/oauth2/**`)
+        "/oauth2/",
+        "/login/oauth2/",
+    ];
 
     if PUBLIC.contains(&path) {
         return true;
@@ -278,6 +286,8 @@ mod tests {
             "/actuator/health",
             "/v3/api-docs",
             "/swagger-ui/index.html",
+            "/oauth2/authorization/shinyproxy",
+            "/login/oauth2/code/shinyproxy",
         ] {
             assert!(is_public_path(path, instance), "{path} must be public");
         }

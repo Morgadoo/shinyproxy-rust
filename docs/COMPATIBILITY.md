@@ -193,7 +193,9 @@ types. Allow-listed static types: `java.lang.System.getenv`, `java.lang.String.v
 | `simple` | `proxy.users` with plain and bcrypt passwords, `{noop}` prefixes, groups as a list or a scalar | ✅ |
 | `custom-header` | `proxy.custom-header.{username-header-name,groups-header-name}` (default `REMOTE_USER`); the header decides the user on every request, a request without it is sent to `/auth-error`, and a missing groups header logs the same security warning as Java | ✅ |
 | `webservice` | `proxy.webservice.{authentication-url,authentication-request-body,groups-expression}`; the body is the Java format string (`%s` for the name and the password), 4xx means invalid credentials, and the JSON answer is available to expressions as `json` | ✅ |
-| `openid`, `ldap`, `saml`, `keycloak`, `oauth2` bearer tokens, `ms-graph` groups | Not implemented yet; the server refuses to start with the list of supported backends | ⬜ |
+| `openid` | The authorization code flow with the Java URLs (`/oauth2/authorization/shinyproxy`, `/login/oauth2/code/shinyproxy`), `proxy.openid.{auth-url,token-url,jwks-url,userinfo-url,client-id,client-secret,scopes,include-default-scopes,username-attribute,roles-claim,with-pkce,jwks-signature-algorithm,logout-url}`, id token verification against the JWKS with nonce and audience checks, groups from the roles claim of the id token *and* the user info (including the "string containing a JSON list" shape), the `emails` array of Azure AD B2C, and `SHINYPROXY_OIDC_ACCESS_TOKEN` for the apps | ✅ |
+| `openid` token refresh | The access token is stored in the session, but it is not refreshed yet (`OpenIdReAuthorizeFilter`), so a session outlives its access token | 🟨 |
+| `ldap`, `saml`, `keycloak`, `oauth2` bearer tokens, `ms-graph` groups | Not implemented yet; the server refuses to start with the list of supported backends | ⬜ |
 
 ## Not yet implemented
 

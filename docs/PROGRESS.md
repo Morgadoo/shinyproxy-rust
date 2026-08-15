@@ -31,6 +31,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 | `containerproxy` golden | 2 | canonical YAML + SHA-1 vs Java reference output |
 | `containerproxy` dataplane (end to end) | 6 | streamed bodies, header forwarding, WebSocket + heartbeats, cache headers, injection, crashed app |
 | `shinyproxy` docker backend (end to end, `SP_TEST_DOCKER=1`) | 4 | container create request (labels, env, published ports), HTTP + WebSocket proxying, stop/cleanup, pause/resume, app recovery after a restart and the instanceId check |
+| `shinyproxy` OpenID Connect (end to end) | 4 | the whole flow against a fake provider with real RS256 id tokens (redirects, code exchange, verification, user info, groups, access token in the app), a wrong state, roles claims of every shape, PKCE |
 | `shinyproxy` authentication backends (end to end) | 4 | header based authentication (headers decide the user per request, no login page, API access, admin groups), the default header name, web service authentication against a fake service (groups from the answer, wrong credentials), and its startup validation |
 | `shinyproxy` container logs (end to end) | 2 | files created with the Java names, the output of the app collected, the paths in an issue report, disabled without a path |
 | `shinyproxy` actuator & metrics (end to end) | 4 | health/liveness/readiness, recyclable with an open WebSocket, the Prometheus output of a start/stop cycle, the management server |

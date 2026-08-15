@@ -237,7 +237,7 @@ impl ProxyService {
                 .cloned()
                 .unwrap_or_else(|| Container::new(container_spec.index));
 
-            let environment = self.container_environment(&proxy, container_spec);
+            let environment = self.container_environment(&proxy, container_spec, Some(user));
             let labels = self.container_labels(&proxy, &container, container_spec);
 
             let started = self
@@ -520,8 +520,21 @@ impl ProxyService {
         &self,
         proxy: &Proxy,
         container_spec: &crate::model::spec::ContainerSpec,
+        user: Option<&UserContext>,
     ) -> BTreeMap<String, String> {
         let mut environment = proxy.runtime_values.environment();
+
+        // the OpenID Connect access token of the user, as `customizeContainerEnv` adds it
+        if let Some(token) = user
+            .and_then(|user| user.attributes.get("accessToken"))
+            .and_then(|token| token.as_str())
+            .filter(|token| !token.is_empty())
+        {
+            environment.insert(
+                crate::auth::openid::ACCESS_TOKEN_ENV_VAR.to_string(),
+                token.to_string(),
+            );
+        }
 
         if let Some(path) = container_spec.env_file.as_str() {
             match std::fs::read_to_string(path) {

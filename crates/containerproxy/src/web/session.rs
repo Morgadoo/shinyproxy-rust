@@ -50,6 +50,36 @@ pub struct SessionData {
     /// Whether the user pressed "sign out" (Java: `SP_USER_INITIATED_LOGOUT`), which decides whether a
     /// destroyed session counts as a logout or as an expiry.
     pub user_initiated_logout: bool,
+    /// The state of an OpenID Connect authorization request that is in flight.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oidc_request: Option<OidcRequest>,
+    /// The tokens the OpenID Connect provider issued for this session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oidc_tokens: Option<OidcTokens>,
+}
+
+/// The values of an OpenID Connect authorization request that has not come back yet.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OidcRequest {
+    /// The `state` parameter, which the provider echoes.
+    pub state: String,
+    /// The `nonce` the id token must contain.
+    pub nonce: String,
+    /// The PKCE verifier, when PKCE is used.
+    pub verifier: Option<String>,
+    /// The redirect URI that was sent, which the token request must repeat.
+    pub redirect_uri: String,
+}
+
+/// The tokens of an authenticated OpenID Connect session.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OidcTokens {
+    /// The access token, which apps receive in `SHINYPROXY_OIDC_ACCESS_TOKEN`.
+    pub access_token: Option<String>,
+    /// The refresh token.
+    pub refresh_token: Option<String>,
+    /// When the access token expires (epoch millis).
+    pub expires_at: Option<i64>,
 }
 
 impl SessionData {
@@ -157,6 +187,8 @@ mod tests {
     #[test]
     fn csrf_tokens_are_compared_exactly() {
         let data = SessionData {
+            oidc_request: None,
+            oidc_tokens: None,
             csrf_token: Some("abc".into()),
             ..Default::default()
         };
@@ -169,6 +201,8 @@ mod tests {
     #[test]
     fn session_data_round_trips_through_json() {
         let data = SessionData {
+            oidc_request: None,
+            oidc_tokens: None,
             user: Some(AuthenticatedUser::new("jack", vec!["scientists".into()])),
             csrf_token: Some("token".into()),
             auth_success_url: Some("/app/01_hello".into()),

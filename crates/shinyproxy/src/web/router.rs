@@ -139,6 +139,16 @@ pub fn router(state: Arc<AppState>) -> Router {
             &path("/actuator/recyclable"),
             get(super::management::recyclable),
         )
+        // OpenID Connect: the login page sends the user to the provider, which sends them back to the
+        // callback (the same paths as the Java implementation, so existing client registrations work)
+        .route(
+            &path(containerproxy::auth::openid::AUTHORIZATION_PATH),
+            get(super::oidc::start_authorization),
+        )
+        .route(
+            &path(containerproxy::auth::openid::CALLBACK_PATH),
+            get(super::oidc::callback),
+        )
         .route(&path("/issue"), post(super::issue::report_issue))
         .route(&path("/v3/api-docs"), get(super::openapi::api_docs))
         .route(
@@ -420,6 +430,15 @@ async fn login_page(
     session: Session,
     Query(query): Query<HashMap<String, String>>,
 ) -> Response {
+    if state.auth.name() == containerproxy::auth::openid::NAME {
+        // the Java login page redirects to the provider
+        return Redirect::to(&format!(
+            "{}{}",
+            state.context_path(),
+            containerproxy::auth::openid::AUTHORIZATION_PATH
+        ))
+        .into_response();
+    }
     if !state.auth.uses_login_form() {
         return Redirect::to(&state.context_path_with_slash()).into_response();
     }
@@ -808,7 +827,7 @@ fn render(
     }
 }
 
-fn urlencode(value: &str) -> String {
+pub(crate) fn urlencode(value: &str) -> String {
     use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
     // the unreserved characters of RFC 3986 are left alone, like Spring's UriUtils
     const UNRESERVED: &AsciiSet = &NON_ALPHANUMERIC
