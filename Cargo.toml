@@ -49,6 +49,7 @@ rust-embed = { version = "8", features = ["include-exclude", "interpolate-folder
 mime_guess = "2"
 tower-sessions = { version = "0.14", default-features = false, features = ["axum-core", "memory-store"] }
 ammonia = "4"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "postgres", "mysql", "any", "chrono"] }
 bollard = { version = "0.19", default-features = false, features = ["ssl", "http", "pipe"] }
 lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1", "tokio1-rustls", "rustls-native-certs", "ring"] }
 bcrypt = "0.17"

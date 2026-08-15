@@ -72,6 +72,20 @@ async fn main() -> anyhow::Result<()> {
         state.auth.name()
     );
 
+    // the usage statistics collectors (`proxy.usage-stats-url`)
+    match containerproxy::stat::collectors::create_collectors(&state.settings).await {
+        Ok(collectors) => {
+            let service = std::sync::Arc::new(
+                containerproxy::stat::collectors::UsageStatsService::new(collectors),
+            );
+            service.subscribe(state.proxies.events());
+        }
+        Err(error) => {
+            tracing::error!("Configuration error: {error}");
+            anyhow::bail!(error.to_string());
+        }
+    }
+
     // the backend is checked before the server starts: an unusable backend (e.g. a daemon that is not
     // part of a swarm) is a fatal error, exactly as in the Java implementation
     state.backend.initialize().await?;

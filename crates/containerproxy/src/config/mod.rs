@@ -35,5 +35,5 @@ pub mod warnings;
 pub use flex::{FlexBool, FlexI64, FlexString, StringList};
 pub use loader::{load, ConfigError, LoadOptions, RawConfig, CONFIG_FILENAME, DEMO_PROFILE};
 pub use schema::{KeyDef, KeyKind, Schema, Support};
-pub use settings::{ProxySettings, ServerSettings, Settings, SpringSettings};
+pub use settings::{HikariSettings, ProxySettings, ServerSettings, Settings, SpringSettings};
 pub use warnings::{validate, Diagnostic, Severity};

@@ -174,6 +174,17 @@ types. Allow-listed static types: `java.lang.System.getenv`, `java.lang.String.v
 | Log lines of the lifecycle | The messages of the proxy lifecycle match, with the `[user: x] [proxyId: y]` style suffixes of the structured logger | 🟨 not every message is byte identical |
 | `logging.requestdump` | Not implemented | ⬜ |
 
+## Usage statistics
+
+| Topic | Behaviour | Status |
+| --- | --- | --- |
+| `proxy.usage-stats-url` selection | Same rules as `StatCollectorFactory`: `micrometer`, a path ending in `.csv`, a `jdbc:` URL, and the same error message for anything else | ✅ |
+| CSV collector | Same columns (`event_time`, `username`, `type`, `data` plus one per `usage-stats-attributes`), every value quoted, appending to an existing file | ✅ |
+| SQL collector (`jdbc:`) | The JDBC URL is translated to the driver URL (`jdbc:postgresql:` → `postgres:`, `jdbc:mysql:`, `jdbc:sqlite:`), the table is created with the Java DDL, extra attribute columns are added to an existing table, and the rows are the same; `proxy.usage-stats-hikari.*` maps onto the connection pool | ✅ |
+| Recorded events | `Login`, `Logout`, `ProxyStart` and `ProxyStop`, as in `AbstractDbCollector` (which also ignores failed starts and failed logins) | ✅ |
+| Attribute expressions | The names become columns; evaluating `usage-stats-attributes[].expression` per event lands with the remaining SpEL context work | 🟨 |
+| InfluxDB (`/write?db=`) | Not implemented; the server refuses to start with a clear message instead of ignoring the setting | 🟨 |
+
 ## Not yet implemented
 
 Everything in [PROGRESS.md](PROGRESS.md) that is not marked ✅. Properties whose behaviour is not

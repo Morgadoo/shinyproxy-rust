@@ -27,6 +27,7 @@
 //! the `shinyproxy_instance` and `shinyproxy_realm` labels, and `proxy.usage-stats-micrometer-prefix`
 //! prefixes every name.
 
+pub mod collectors;
 pub mod prometheus;
 
 use std::collections::BTreeMap;
