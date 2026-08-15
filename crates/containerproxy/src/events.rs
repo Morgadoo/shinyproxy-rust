@@ -60,6 +60,14 @@ pub enum Event {
     UserLoggedOut { user_id: String, expired: bool },
     /// An authentication attempt failed (`AuthFailedEvent`).
     AuthenticationFailed { user_id: String },
+    /// A user gave the seat of a shared container back (`SeatReleasedEvent`).
+    SeatReleased {
+        spec_id: String,
+        seat_id: String,
+        proxy_id: String,
+        /// Whether the app crashed, which means the container cannot be re-used.
+        crashed: bool,
+    },
 }
 
 impl Event {
@@ -88,6 +96,7 @@ impl Event {
             Event::UserLoggedIn { .. } => "UserLogin",
             Event::UserLoggedOut { .. } => "UserLogout",
             Event::AuthenticationFailed { .. } => "AuthFailed",
+            Event::SeatReleased { .. } => "SeatReleased",
         }
     }
 }

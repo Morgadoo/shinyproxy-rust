@@ -414,10 +414,54 @@ fn app_stopped() -> Response {
 
 /// `DELETE /admin/delegate-proxy` — removes the pre-initialized containers (admin only).
 ///
-/// Container pre-initialization lands in P12; until then the endpoint answers successfully because there
-/// is nothing to remove, which is also what a deployment without pre-initialization does in Java.
-pub async fn remove_delegate_proxies(State(_state): State<Arc<AppState>>) -> Response {
+/// `?id=` removes one container, `?specId=` every container of one app definition, and without parameters
+/// every pre-initialized container. The containers are only marked here: they disappear as soon as their
+/// seats are free, which is what `RemoveDelegateProxiesEvent` does in the Java implementation.
+pub async fn remove_delegate_proxies(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<DelegateProxyQuery>,
+) -> Response {
+    for scaler in &state.sharing_scalers {
+        if let Some(spec_id) = query.spec_id.as_deref() {
+            if scaler.spec().id != spec_id {
+                continue;
+            }
+        }
+        match query.id.as_deref() {
+            Some(id) => {
+                if scaler
+                    .delegate_proxies()
+                    .iter()
+                    .any(|delegate| delegate.proxy.id == id)
+                {
+                    tracing::info!(
+                        "Received external request to remove DelegateProxy [specId: {}] \
+                         [delegateProxyId: {id}]",
+                        scaler.spec().id
+                    );
+                    scaler.mark_for_removal(id);
+                }
+            }
+            None => scaler.mark_all_for_removal(),
+        }
+    }
+
+    // the containers that are free are removed right away, so that the answer is not just a promise
+    for scaler in &state.sharing_scalers {
+        scaler.cleanup().await;
+    }
     success(serde_json::Value::Null)
+}
+
+/// The parameters of `DELETE /admin/delegate-proxy`.
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(default)]
+pub struct DelegateProxyQuery {
+    /// One container.
+    pub id: Option<String>,
+    /// Every container of one app definition.
+    #[serde(rename = "specId")]
+    pub spec_id: Option<String>,
 }
 
 /// `GET /admin/data` — the proxies of all users (admin only).

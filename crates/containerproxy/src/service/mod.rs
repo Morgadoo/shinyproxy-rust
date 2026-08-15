@@ -30,6 +30,7 @@ pub mod recovery;
 pub mod release;
 pub mod runtime_values;
 pub mod sessions;
+pub mod sharing;
 
 pub use identifier::Identifiers;
 pub use leader::{LatestConfigService, LeaderService, MemoryLeaderService, RedisLeaderService};
@@ -43,3 +44,8 @@ pub use recovery::AppRecoveryService;
 pub use release::{ReleaseService, ReleaseStrategy};
 pub use runtime_values::{PortMappings, RuntimeValueService};
 pub use sessions::{MemorySessionService, RedisSessionService, SessionService, ACTIVE_WINDOW};
+pub use sharing::{
+    DelegateProxy, DelegateProxyStatus, DelegateProxyStore, MemoryDelegateProxyStore,
+    MemorySeatStore, ProxySharingDispatcher, ProxySharingScaler, ProxySharingSpecExtension, Seat,
+    SeatStore,
+};

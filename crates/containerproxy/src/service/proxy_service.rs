@@ -82,6 +82,8 @@ pub struct ProxyService {
     actions_in_progress: DashMap<String, ()>,
     /// When the last proxy was stopped, used by `is_busy` (`/actuator/recyclable`).
     last_stop: DashMap<(), i64>,
+    /// The dispatchers of the app definitions that use pre-started, shared containers.
+    sharing: DashMap<String, Arc<crate::service::sharing::ProxySharingDispatcher>>,
     shutting_down: AtomicBool,
 }
 
@@ -115,8 +117,31 @@ impl ProxyService {
             events,
             actions_in_progress: DashMap::new(),
             last_stop: DashMap::new(),
+            sharing: DashMap::new(),
             shutting_down: AtomicBool::new(false),
         }
+    }
+
+    /// How long a container may take to answer (`proxy.container-wait-timeout`).
+    fn container_wait_timeout(&self) -> Duration {
+        Duration::from_millis(self.settings.proxy.container_wait_timeout_ms().max(0) as u64)
+    }
+
+    /// Registers the dispatcher of an app definition that uses shared containers.
+    pub fn register_sharing(
+        &self,
+        spec_id: impl Into<String>,
+        dispatcher: Arc<crate::service::sharing::ProxySharingDispatcher>,
+    ) {
+        self.sharing.insert(spec_id.into(), dispatcher);
+    }
+
+    /// The dispatcher of an app definition, when it uses shared containers.
+    pub fn sharing_dispatcher(
+        &self,
+        spec_id: &str,
+    ) -> Option<Arc<crate::service::sharing::ProxySharingDispatcher>> {
+        self.sharing.get(spec_id).map(|entry| entry.value().clone())
     }
 
     /// The event bus, so that callers can subscribe.
@@ -231,14 +256,54 @@ impl ProxyService {
             proxy.id
         );
 
+        // an app with pre-started containers does not start a container: the user claims a seat of one of
+        // the containers that are already running (`ProxySharingDispatcher`)
+        if let Some(dispatcher) = self.sharing_dispatcher(&resolved_spec.id) {
+            match dispatcher.start_proxy(proxy.clone()).await {
+                Ok(seated) => {
+                    proxy = seated;
+                    if self.cleanup_if_stopped(&proxy).await {
+                        return Err(StartError::NotFound(format!(
+                            "Proxy {} was stopped while starting",
+                            proxy.id
+                        )));
+                    }
+                    proxy.status = ProxyStatus::Up;
+                    proxy.startup_timestamp = now_millis();
+                    self.store.update_proxy(&proxy);
+                    self.heartbeats.update(&proxy.id, now_millis());
+                    tracing::info!(
+                        "Proxy activated [user: {}] [proxyId: {}]",
+                        user.user_id,
+                        proxy.id
+                    );
+                    self.events.publish(Event::ProxyStarted {
+                        proxy: Box::new(proxy.clone()),
+                        startup_time_ms: Some(now_millis() - started_at),
+                    });
+                    return Ok(proxy);
+                }
+                Err(error) => {
+                    self.fail_start_without_backend(&proxy, &error).await;
+                    return Err(StartError::Backend(error));
+                }
+            }
+        }
+
         for container_spec in &resolved_spec.container_specs {
             let container = proxy
                 .container(container_spec.index)
                 .cloned()
                 .unwrap_or_else(|| Container::new(container_spec.index));
 
-            let environment = self.container_environment(&proxy, container_spec, Some(user));
-            let labels = self.container_labels(&proxy, &container, container_spec);
+            let environment = container_environment(
+                &proxy,
+                container_spec,
+                user.attributes
+                    .get("accessToken")
+                    .and_then(|token| token.as_str()),
+            );
+            let labels = container_labels(&proxy, &container, container_spec);
 
             let started = self
                 .backend
@@ -272,7 +337,7 @@ impl ProxyService {
         }
 
         // the app has to answer before the proxy is considered up
-        if !self.wait_until_reachable(&proxy).await {
+        if !wait_until_reachable(&proxy, self.container_wait_timeout()).await {
             self.fail_start(&proxy, "Container did not respond in time")
                 .await;
             return Err(StartError::Timeout);
@@ -315,8 +380,28 @@ impl ProxyService {
         let stopping = proxy.with_status(ProxyStatus::Stopping);
         self.store.update_proxy(&stopping);
 
-        if let Err(error) = self.backend.stop_proxy(&stopping).await {
-            tracing::warn!("Failed to stop proxy [proxyId: {}]: {error}", proxy.id);
+        // an app that uses a shared container only gives its seat back; the container itself stays for the
+        // next user (the scaler decides what happens to it)
+        let shared = stopping
+            .spec_id
+            .as_deref()
+            .and_then(|spec_id| self.sharing_dispatcher(spec_id));
+        match shared {
+            Some(dispatcher) => {
+                if let Some(seat) = dispatcher.stop_proxy(&stopping) {
+                    self.events.publish(Event::SeatReleased {
+                        spec_id: stopping.spec_id.clone().unwrap_or_default(),
+                        seat_id: seat.id,
+                        proxy_id: stopping.id.clone(),
+                        crashed: reason == ProxyStopReason::Crashed,
+                    });
+                }
+            }
+            None => {
+                if let Err(error) = self.backend.stop_proxy(&stopping).await {
+                    tracing::warn!("Failed to stop proxy [proxyId: {}]: {error}", proxy.id);
+                }
+            }
         }
 
         let stopped = stopping.with_status(ProxyStatus::Stopped);
@@ -398,7 +483,7 @@ impl ProxyService {
                         resuming.targets.insert(mapping, target);
                     }
                 }
-                if !self.wait_until_reachable(&resuming).await {
+                if !wait_until_reachable(&resuming, self.container_wait_timeout()).await {
                     tracing::warn!(
                         "Proxy failed to resume: container did not respond in time [proxyId: {}]",
                         resuming.id
@@ -460,7 +545,7 @@ impl ProxyService {
             tracing::info!("Proxy failed: no targets available [proxyId: {}]", proxy.id);
             return false;
         }
-        self.probe_target(proxy).await
+        probe_target(proxy, self.container_wait_timeout()).await
     }
 
     /// Resolves the expressions of the app definition and adds the runtime values.
@@ -516,65 +601,6 @@ impl ProxyService {
     }
 
     /// Environment variables of a container: runtime values, `container-env-file` and `container-env`.
-    fn container_environment(
-        &self,
-        proxy: &Proxy,
-        container_spec: &crate::model::spec::ContainerSpec,
-        user: Option<&UserContext>,
-    ) -> BTreeMap<String, String> {
-        let mut environment = proxy.runtime_values.environment();
-
-        // the OpenID Connect access token of the user, as `customizeContainerEnv` adds it
-        if let Some(token) = user
-            .and_then(|user| user.attributes.get("accessToken"))
-            .and_then(|token| token.as_str())
-            .filter(|token| !token.is_empty())
-        {
-            environment.insert(
-                crate::auth::openid::ACCESS_TOKEN_ENV_VAR.to_string(),
-                token.to_string(),
-            );
-        }
-
-        if let Some(path) = container_spec.env_file.as_str() {
-            match std::fs::read_to_string(path) {
-                Ok(content) => {
-                    for line in content.lines() {
-                        let line = line.trim();
-                        if line.is_empty() || line.starts_with('#') {
-                            continue;
-                        }
-                        if let Some((name, value)) = line.split_once('=') {
-                            environment.insert(name.trim().to_string(), value.trim().to_string());
-                        }
-                    }
-                }
-                Err(error) => tracing::warn!("cannot read container-env-file {path}: {error}"),
-            }
-        }
-
-        if let Some(configured) = container_spec.env.value() {
-            for (name, value) in configured {
-                environment.insert(name.clone(), value.clone());
-            }
-        }
-
-        environment
-    }
-
-    /// Labels of a container: runtime values of the proxy and the container, plus `labels`.
-    fn container_labels(
-        &self,
-        proxy: &Proxy,
-        container: &Container,
-        container_spec: &crate::model::spec::ContainerSpec,
-    ) -> BTreeMap<String, String> {
-        let mut labels = container_spec.labels.value().cloned().unwrap_or_default();
-        labels.extend(proxy.runtime_values.labels());
-        labels.extend(container.runtime_values.labels());
-        labels
-    }
-
     /// Checks `proxy.max-total-instances` and the `max-total-instances` of the app.
     fn validate_capacity(&self, spec: &ProxySpec) -> Result<(), StartError> {
         const MESSAGE: &str =
@@ -592,58 +618,14 @@ impl ProxyService {
         Ok(())
     }
 
-    /// Waits until the app answers on its default target.
-    async fn wait_until_reachable(&self, proxy: &Proxy) -> bool {
-        let timeout =
-            Duration::from_millis(self.settings.proxy.container_wait_timeout_ms().max(0) as u64);
-        let deadline = tokio::time::Instant::now() + timeout;
-        loop {
-            if self.probe_target(proxy).await {
-                return true;
-            }
-            if tokio::time::Instant::now() >= deadline {
-                return false;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-    }
-
-    /// Sends a request to the default target and checks the status code, as `isProxyHealthy` does.
-    async fn probe_target(&self, proxy: &Proxy) -> bool {
-        let Some(target) = proxy.default_target() else {
-            return false;
-        };
-        let url = format!("{}/", target.trim_end_matches('/'));
-        let timeout =
-            Duration::from_millis(self.settings.proxy.container_wait_timeout_ms().max(0) as u64);
-        let client = match reqwest::Client::builder()
-            .timeout(timeout.max(Duration::from_millis(500)))
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-        {
-            Ok(client) => client,
-            Err(error) => {
-                tracing::warn!("cannot create http client: {error}");
-                return false;
-            }
-        };
-        match client.get(&url).send().await {
-            Ok(response) => {
-                let status = response.status().as_u16();
-                let acceptable = [200, 301, 302, 303, 307, 308].contains(&status);
-                if !acceptable {
-                    tracing::info!(
-                        "Proxy failed: HTTP connection attempt returned invalid status: {status} [proxyId: {}]",
-                        proxy.id
-                    );
-                }
-                acceptable
-            }
-            Err(error) => {
-                tracing::debug!("Proxy not (yet) reachable [proxyId: {}]: {error}", proxy.id);
-                false
-            }
-        }
+    /// Cleans up after a failed start of a shared app: no container of this server is involved.
+    async fn fail_start_without_backend(&self, proxy: &Proxy, message: &str) {
+        tracing::warn!("Proxy failed to start [proxyId: {}]: {message}", proxy.id);
+        self.store.remove_proxy(proxy);
+        self.heartbeats.remove(&proxy.id);
+        self.events.publish(Event::ProxyStartFailed {
+            proxy: Box::new(proxy.clone()),
+        });
     }
 
     /// Cleans up after a failed start: stop what exists, remove the proxy and publish the event.
@@ -691,5 +673,114 @@ impl ProxyService {
 impl From<BackendError> for StartError {
     fn from(error: BackendError) -> Self {
         StartError::Backend(error.to_string())
+    }
+}
+
+/// The environment of a container: the runtime values, `container-env-file` and `container-env`.
+///
+/// Shared with the scaler of the pre-started containers, which has no user and therefore no access token.
+pub fn container_environment(
+    proxy: &Proxy,
+    container_spec: &crate::model::spec::ContainerSpec,
+    access_token: Option<&str>,
+) -> BTreeMap<String, String> {
+    let mut environment = proxy.runtime_values.environment();
+
+    // the OpenID Connect access token of the user, as `customizeContainerEnv` adds it
+    if let Some(token) = access_token.filter(|token| !token.is_empty()) {
+        environment.insert(
+            crate::auth::openid::ACCESS_TOKEN_ENV_VAR.to_string(),
+            token.to_string(),
+        );
+    }
+
+    if let Some(path) = container_spec.env_file.as_str() {
+        match std::fs::read_to_string(path) {
+            Ok(content) => {
+                for line in content.lines() {
+                    let line = line.trim();
+                    if line.is_empty() || line.starts_with('#') {
+                        continue;
+                    }
+                    if let Some((name, value)) = line.split_once('=') {
+                        environment.insert(name.trim().to_string(), value.trim().to_string());
+                    }
+                }
+            }
+            Err(error) => tracing::warn!("cannot read container-env-file {path}: {error}"),
+        }
+    }
+
+    if let Some(configured) = container_spec.env.value() {
+        for (name, value) in configured {
+            environment.insert(name.clone(), value.clone());
+        }
+    }
+
+    environment
+}
+
+/// Labels of a container: runtime values of the proxy and the container, plus `labels`.
+pub fn container_labels(
+    proxy: &Proxy,
+    container: &Container,
+    container_spec: &crate::model::spec::ContainerSpec,
+) -> BTreeMap<String, String> {
+    let mut labels = container_spec.labels.value().cloned().unwrap_or_default();
+    labels.extend(proxy.runtime_values.labels());
+    labels.extend(container.runtime_values.labels());
+    labels
+}
+
+/// Waits until the app answers on its default target.
+///
+/// Shared with the scaler of the pre-started containers, which tests its containers the same way.
+pub async fn wait_until_reachable(proxy: &Proxy, timeout: Duration) -> bool {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        if probe_target(proxy, timeout).await {
+            return true;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Sends a request to the default target and checks the status code, as `isProxyHealthy` does.
+async fn probe_target(proxy: &Proxy, timeout: Duration) -> bool {
+    let Some(target) = proxy.default_target() else {
+        return false;
+    };
+    let url = format!("{}/", target.trim_end_matches('/'));
+    let client = match reqwest::Client::builder()
+        .timeout(timeout.max(Duration::from_millis(500)))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+    {
+        Ok(client) => client,
+        Err(error) => {
+            tracing::warn!("cannot create http client: {error}");
+            return false;
+        }
+    };
+    match client.get(&url).send().await {
+        Ok(response) => {
+            let status = response.status().as_u16();
+            let acceptable = [200, 301, 302, 303, 307, 308].contains(&status);
+            if !acceptable {
+                tracing::info!(
+                    "Proxy failed: HTTP connection attempt returned invalid status: {status} \
+                     [proxyId: {}]",
+                    proxy.id
+                );
+            }
+            acceptable
+        }
+        Err(error) => {
+            tracing::debug!("Proxy not (yet) reachable [proxyId: {}]: {error}", proxy.id);
+            false
+        }
     }
 }

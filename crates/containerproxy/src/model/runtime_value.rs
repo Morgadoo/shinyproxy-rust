@@ -566,6 +566,8 @@ runtime_value_key!(BACKEND_CONTAINER_NAME, "openanalytics.eu/sp-backend-containe
     label: false, annotation: false, env: false, api: false, required: false, container: true, kind: ValueKind::BackendContainerName);
 runtime_value_key!(SEAT_ID, "openanalytics.eu/sp-seat-id", "SHINYPROXY_SEAT_ID",
     label: false, annotation: true, env: false, api: false, required: false, container: false, kind: ValueKind::Str);
+runtime_value_key!(DELEGATE_PROXY, "openanalytics.eu/sp-delegate-proxy", "SHINYPROXY_DELEGATE_PROXY",
+    label: true, annotation: false, env: false, api: false, required: false, container: false, kind: ValueKind::Bool);
 
 /// All runtime value keys of the engine.
 pub static ENGINE_KEYS: &[&RuntimeValueKey] = &[
@@ -591,6 +593,7 @@ pub static ENGINE_KEYS: &[&RuntimeValueKey] = &[
     &PORT_MAPPINGS,
     &BACKEND_CONTAINER_NAME,
     &SEAT_ID,
+    &DELEGATE_PROXY,
 ];
 
 #[cfg(test)]

@@ -96,6 +96,8 @@ pub struct AppState {
     pub session_store: Option<containerproxy::store::RedisSessionStore>,
     /// Checks whether this server runs the latest configuration of the realm (`proxy.version`).
     pub latest_config: Option<Arc<containerproxy::service::LatestConfigService>>,
+    /// The scalers of the app definitions that use pre-started, shared containers.
+    pub sharing_scalers: Vec<Arc<containerproxy::service::ProxySharingScaler>>,
     /// Usage statistics of this server (`/actuator/prometheus`).
     pub metrics: Arc<Metrics>,
     /// Collects the output of the containers (`proxy.container-log-path`).
@@ -132,6 +134,9 @@ pub enum StateError {
     Templates(#[from] containerproxy::web::TemplateError),
     #[error("{0}")]
     Store(String),
+    /// A configuration that the Java implementation refuses as well.
+    #[error("{0}")]
+    Configuration(String),
 }
 
 impl AppState {
@@ -333,6 +338,61 @@ impl AppState {
             _ => None,
         };
 
+        // apps with `minimum-seats-available` keep containers running that the users share
+        let mut sharing_scalers = Vec::new();
+        for spec in specs.specs() {
+            let extension = containerproxy::service::ProxySharingSpecExtension::of(spec);
+            if !extension.enabled() {
+                continue;
+            }
+            extension
+                .validate(&spec.id)
+                .map_err(StateError::Configuration)?;
+            // pre-initialized containers cannot be recovered, exactly as in the Java implementation
+            if settings.proxy.recover_running_proxies() {
+                return Err(StateError::Configuration(format!(
+                    "Spec {} is invalid: cannot use pre-initialized containers together with \
+                     proxy.recover-running-proxies",
+                    spec.id
+                )));
+            }
+
+            let seats: Arc<dyn containerproxy::service::SeatStore> =
+                Arc::new(containerproxy::service::MemorySeatStore::new());
+            let delegates: Arc<dyn containerproxy::service::DelegateProxyStore> =
+                Arc::new(containerproxy::service::MemoryDelegateProxyStore::new());
+            let wait_time =
+                containerproxy::service::ProxySharingDispatcher::seat_wait_time(&settings)
+                    .map_err(StateError::Configuration)?;
+            let dispatcher = Arc::new(containerproxy::service::ProxySharingDispatcher::new(
+                spec.id.clone(),
+                seats.clone(),
+                delegates.clone(),
+                wait_time,
+            ));
+            proxies.register_sharing(spec.id.clone(), dispatcher.clone());
+
+            let pending = dispatcher.clone();
+            let scaler = Arc::new(containerproxy::service::ProxySharingScaler::new(
+                spec.clone(),
+                seats,
+                delegates,
+                backend.clone(),
+                settings.clone(),
+                &identifiers,
+                leader.clone(),
+                format!(
+                    "{}api/route/",
+                    match settings.server.context_path() {
+                        path if path.is_empty() => "/".to_string(),
+                        path => format!("{path}/"),
+                    }
+                ),
+                Arc::new(move || pending.pending_count() as i64),
+            ));
+            sharing_scalers.push(scaler);
+        }
+
         let release = Arc::new(ReleaseService::new(
             &settings,
             proxies.clone(),
@@ -367,6 +427,7 @@ impl AppState {
             redis_sessions,
             session_store,
             latest_config,
+            sharing_scalers,
             metrics,
             logs,
             websockets: Arc::new(WebSocketCounter::new()),
@@ -390,6 +451,33 @@ impl AppState {
             self.backend.clone(),
             self.leader.clone(),
         );
+
+        // the pre-started containers of the shared apps are created and removed by their scaler; the
+        // seats a user gives back are handled as the events come in
+        for scaler in &self.sharing_scalers {
+            scaler.clone().spawn();
+        }
+        if !self.sharing_scalers.is_empty() {
+            let state = self.clone();
+            let mut events = self.proxies.events().subscribe();
+            tokio::spawn(async move {
+                while let Ok(event) = events.recv().await {
+                    if let containerproxy::events::Event::SeatReleased {
+                        spec_id,
+                        seat_id,
+                        crashed,
+                        ..
+                    } = event
+                    {
+                        for scaler in &state.sharing_scalers {
+                            if scaler.spec().id == spec_id {
+                                scaler.seat_released(&seat_id, crashed).await;
+                            }
+                        }
+                    }
+                }
+            });
+        }
 
         // the counts of logged in users are refreshed on a timer when they come from Redis
         if let Some(sessions) = &self.redis_sessions {

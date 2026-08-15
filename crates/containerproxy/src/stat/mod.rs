@@ -233,6 +233,8 @@ impl Metrics {
             Event::UserLoggedIn { .. } => self.increment("userLogins", BTreeMap::new()),
             Event::UserLoggedOut { .. } => self.increment("userLogouts", BTreeMap::new()),
             Event::AuthenticationFailed { .. } => self.increment("authFailed", BTreeMap::new()),
+            // the seats of the shared containers are reported by the scaler, not per event
+            Event::SeatReleased { .. } => {}
             Event::NewProxy { proxy } => {
                 self.set_app_info(proxy, status_value(ProxyStatus::New));
             }

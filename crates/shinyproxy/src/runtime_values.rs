@@ -142,7 +142,7 @@ mod tests {
             Some("openanalytics.eu/sp-app-instance")
         );
         assert!(registry.by_env_var("SHINYPROXY_PROXY_ID").is_some());
-        assert_eq!(registry.keys().len(), 28);
+        assert_eq!(registry.keys().len(), 29);
     }
 
     #[test]

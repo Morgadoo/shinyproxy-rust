@@ -254,3 +254,26 @@ pub fn extract_csrf_token(html: &str) -> Option<String> {
     let end = rest.find('"')?;
     Some(rest[..end].to_string())
 }
+
+/// Loads a configuration and expects the server to refuse it, returning the error message.
+///
+/// Used by the tests of the startup validations (parameters, pre-initialized containers, ...).
+#[allow(dead_code)]
+pub async fn start_and_expect_error(yaml: &str) -> String {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let path = directory.path().join("application.yml");
+    std::fs::write(&path, yaml).expect("write configuration");
+
+    let options = LoadOptions {
+        args: vec![format!("--spring.config.location={}", path.display())],
+        ..LoadOptions::default()
+    };
+    let (raw, mut settings) = shinyproxy::load_config(options).expect("configuration loads");
+    if settings.proxy.container_backend.is_none() {
+        settings.proxy.container_backend = Some("local".to_string());
+    }
+    AppState::new(raw, settings)
+        .await
+        .expect_err("the configuration must be refused")
+        .to_string()
+}

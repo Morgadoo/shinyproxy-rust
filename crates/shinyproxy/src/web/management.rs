@@ -156,6 +156,26 @@ pub async fn prometheus(State(state): State<Arc<AppState>>) -> Response {
             count as f64,
         );
     }
+    // the seats of the apps with pre-initialized containers (`ProxySharingMicrometer`)
+    for scaler in &state.sharing_scalers {
+        let labels =
+            std::collections::BTreeMap::from([("spec_id".to_string(), scaler.spec().id.clone())]);
+        let seats = scaler.seats();
+        state.metrics.set_gauge(
+            "seats_unclaimed",
+            labels.clone(),
+            seats.unclaimed_count() as f64,
+        );
+        state.metrics.set_gauge(
+            "seats_claimed",
+            labels.clone(),
+            seats.claimed_count() as f64,
+        );
+        state
+            .metrics
+            .set_gauge("seats_creating", labels, scaler.pending_seats() as f64);
+    }
+
     if let Some(count) = state.sessions.active_users().await {
         state.metrics.set_gauge(
             "absolute_users_active",
