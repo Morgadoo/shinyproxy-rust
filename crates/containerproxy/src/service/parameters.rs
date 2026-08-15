@@ -215,7 +215,65 @@ pub fn validate_spec(spec: &ProxySpec) -> Result<(), String> {
         }
     }
 
+    validate_template(spec, parameters.template.as_deref())?;
+
     Ok(())
+}
+
+/// Thymeleaf constructs that a configuration provided template may not use.
+const THYMELEAF_CONSTRUCTS: &[&str] = &[
+    "th:each",
+    "th:text",
+    "th:utext",
+    "th:if",
+    "th:unless",
+    "th:with",
+    "th:attr",
+    "th:href",
+    "th:src",
+    "th:block",
+    "th:object",
+    "th:field",
+    "th:classappend",
+    "th:remove",
+    "th:inline",
+];
+
+/// Refuses a `parameters.template` that is written in Thymeleaf.
+///
+/// The Java implementation renders configuration provided templates with Thymeleaf; this implementation
+/// renders them with MiniJinja, which would silently emit the `th:` attributes as plain HTML. Failing at
+/// startup with the list of constructs found is friendlier than a broken form, and the conversion is
+/// documented in `docs/COMPATIBILITY.md`.
+fn validate_template(spec: &ProxySpec, template: Option<&str>) -> Result<(), String> {
+    let Some(template) = template else {
+        return Ok(());
+    };
+
+    let mut found: Vec<&str> = THYMELEAF_CONSTRUCTS
+        .iter()
+        .copied()
+        .filter(|construct| template.contains(construct))
+        .collect();
+    // `${...}` and `*{...}` are Thymeleaf expressions; `#{...}` is also valid in a ShinyProxy template
+    // (SpEL), so it is not reported
+    if template.contains("${") {
+        found.push("${...}");
+    }
+    if template.contains("*{") {
+        found.push("*{...}");
+    }
+    if found.is_empty() {
+        return Ok(());
+    }
+
+    Err(format!(
+        "Configuration error: error in parameters of spec '{}', error: the template uses Thymeleaf \
+         constructs ({}) which this implementation does not support; write the template with the \
+         MiniJinja syntax instead (see docs/COMPATIBILITY.md, section Templates)",
+        spec.id,
+        found.join(", ")
+    ))
 }
 
 /// Turns the values a user chose into the values the backend gets.
@@ -567,6 +625,31 @@ value-sets:
                 "{error}"
             );
         }
+    }
+
+    #[test]
+    fn refuses_thymeleaf_templates() {
+        let mut spec = build_spec(PARAMETERS);
+        let mut parameters = spec.parameters.clone().expect("parameters");
+        parameters.template = Some(
+            "<div th:each=\"parameter : ${parameterDefinitions}\">\n  <span th:text=\"${parameter.id}\"></span>\n</div>"
+                .to_string(),
+        );
+        spec.parameters = Some(parameters.clone());
+        let error = validate_spec(&spec).expect_err("thymeleaf is refused");
+        assert!(error.contains("th:each"), "{error}");
+        assert!(error.contains("th:text"), "{error}");
+        assert!(error.contains("${...}"), "{error}");
+        assert!(error.contains("MiniJinja"), "{error}");
+
+        // the MiniJinja version of the same template is accepted, including SpEL values
+        parameters.template = Some(
+            "{% for parameter in parameterDefinitions %}<span>{{ parameter.displayNameOrId }}</span>\
+             {% endfor %}<span>#{userId}</span>"
+                .to_string(),
+        );
+        spec.parameters = Some(parameters);
+        validate_spec(&spec).expect("valid");
     }
 
     #[test]

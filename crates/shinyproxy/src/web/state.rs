@@ -29,9 +29,11 @@ use containerproxy::backend::{self, ContainerBackend, PortAllocator};
 use containerproxy::config::{RawConfig, Settings};
 use containerproxy::dataplane::ProxyRouter;
 use containerproxy::events::EventBus;
-use containerproxy::model::runtime_value::RuntimeValueRegistry;
+use containerproxy::model::runtime_value::{RuntimeValue, RuntimeValueRegistry};
 use containerproxy::model::spec::ProxySpec;
-use containerproxy::service::{AppRecoveryService, Identifiers, ProxyService};
+use containerproxy::service::{
+    AllowedParametersForUser, AppRecoveryService, Identifiers, ParameterValues, ProxyService,
+};
 use containerproxy::spec::expression::{ExpressionContextBuilder, SpelResolver};
 use containerproxy::spec::SpecProvider;
 use containerproxy::store::{HeartbeatStore, MemoryHeartbeatStore, MemoryProxyStore, ProxyStore};
@@ -206,6 +208,107 @@ impl AppState {
             builder = builder.user(user.to_user_context());
         }
         SpelResolver::new(builder.build())
+    }
+
+    /// Whether a user may use a value set of the parameters of an app (`AccessControlEvaluationService`).
+    pub fn has_value_set_access(
+        &self,
+        user: Option<&AuthenticatedUser>,
+        spec: &ProxySpec,
+        access: Option<&containerproxy::model::spec::AccessControl>,
+    ) -> bool {
+        let Some(access) = access else {
+            // a value set without access control may be used by everyone
+            return true;
+        };
+
+        if access.has_strict_expression_access() {
+            let expression = access.strict_expression.clone().unwrap_or_default();
+            match self.resolver(user).boolean_expression(&expression) {
+                Ok(true) => {}
+                Ok(false) => return false,
+                Err(error) => {
+                    tracing::warn!(
+                        "cannot evaluate access-strict-expression of a value set of {}: {error}",
+                        spec.id
+                    );
+                    return false;
+                }
+            }
+        }
+
+        if access.is_open() {
+            return true;
+        }
+
+        if let Some(user) = user {
+            if access.groups().iter().any(|group| user.is_member_of(group)) {
+                return true;
+            }
+            if access
+                .users()
+                .iter()
+                .any(|allowed| self.username_equals(&user.id, allowed))
+            {
+                return true;
+            }
+        }
+
+        if access.has_expression_access() {
+            let expression = access.expression.clone().unwrap_or_default();
+            return match self.resolver(user).boolean_expression(&expression) {
+                Ok(value) => value,
+                Err(error) => {
+                    tracing::warn!(
+                        "cannot evaluate access-expression of a value set of {}: {error}",
+                        spec.id
+                    );
+                    false
+                }
+            };
+        }
+
+        false
+    }
+
+    /// The values, combinations and defaults of the parameters of an app for this user.
+    ///
+    /// `previous` are the values of the app that is being resumed, so that the form shows them again.
+    pub fn allowed_parameters(
+        &self,
+        user: Option<&AuthenticatedUser>,
+        spec: &ProxySpec,
+        previous: Option<&ParameterValues>,
+    ) -> AllowedParametersForUser {
+        containerproxy::service::allowed_parameters_for_user(spec, previous, &|access| {
+            self.has_value_set_access(user, spec, access)
+        })
+    }
+
+    /// Turns the parameters a user chose into the runtime values of the proxy.
+    pub fn parse_parameters(
+        &self,
+        user: Option<&AuthenticatedUser>,
+        spec: &ProxySpec,
+        provided: Option<&std::collections::BTreeMap<String, String>>,
+    ) -> Result<Vec<RuntimeValue>, containerproxy::service::InvalidParameters> {
+        let parsed =
+            containerproxy::service::parse_and_validate_request(spec, provided, &|access| {
+                self.has_value_set_access(user, spec, access)
+            })?;
+        Ok(match parsed {
+            Some((names, values)) => vec![
+                RuntimeValue::json(
+                    &containerproxy::model::runtime_value::PARAMETER_NAMES,
+                    names,
+                ),
+                RuntimeValue::json(
+                    &containerproxy::model::runtime_value::PARAMETER_VALUES,
+                    values,
+                ),
+            ],
+            None => Vec::new(),
+        })
     }
 
     /// Builds an expression resolver for a running proxy (custom app details, issue reports).

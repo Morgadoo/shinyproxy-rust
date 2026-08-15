@@ -113,6 +113,24 @@ types. Allow-listed static types: `java.lang.System.getenv`, `java.lang.String.v
 | App recovery | `proxy.recover-running-proxies[-from-different-config]`; the containers are found by their `openanalytics.eu/sp-*` labels, so a Java server and this implementation can take over each other's apps. While recovery runs every request (except `/actuator`) answers 503 with `startup.html` | ✅ |
 | Recovery of apps without a time zone label | A container is only recoverable when every required label is present, including `openanalytics.eu/sp-user-timezone`; apps started without a time zone (i.e. not through the UI) are therefore not recovered — identical to Java | 🟨 shared limitation |
 
+## Templates
+
+| Topic | Behaviour | Status |
+| --- | --- | --- |
+| Built-in pages | Ported from Thymeleaf to MiniJinja; the rendered HTML matches (including Thymeleaf's escaping, which keeps `/` readable in URLs) | ✅ |
+| `proxy.template-path` | Overrides of the built-in pages are read from the filesystem, with the same names as the Thymeleaf templates | ✅ |
+| `parameters.template` (configuration provided form) | Rendered with MiniJinja, with the same model as the built-in form (`parameterDefinitions`, `parameterValues`, `parameterDefaults`, `cleanedAppParameterDescriptions`, ...). Thymeleaf constructs (`th:*`, `${...}`, `*{...}`) are **refused at startup** with the list of constructs found, instead of silently emitting broken HTML | 🟨 deliberate deviation |
+
+## App parameters
+
+| Topic | Behaviour | Status |
+| --- | --- | --- |
+| Validation at startup | Same rules and messages as `ParametersService.init` (definitions, value sets, ids, blank display names/descriptions, all-or-no defaults, defaults that exist in a value set) | ✅ |
+| Choosing values | Same conversion of names to backend values, the same refusal of combinations that span value sets or use value sets the user may not access, and the same `SHINYPROXY_PARAMETER_NAMES`/`SHINYPROXY_PARAMETERS` runtime values | ✅ |
+| The form | Same values, allowed combinations (one-based indexes) and default selection, including "the values of the app being resumed win over the configured defaults" | ✅ |
+| Using values in an app definition | `#{proxy.getRuntimeObject('SHINYPROXY_PARAMETERS').backendValues['id']}` (in Java the runtime value is a Java object, so `.getValue('id')` also works there; this implementation exposes it as the JSON document) | 🟨 |
+| Choosing different values while resuming | The app is resumed with the values it was started with; passing new values while resuming lands with the rest of the resume flow | 🟨 |
+
 ## Not yet implemented
 
 Everything in [PROGRESS.md](PROGRESS.md) that is not marked ✅. Properties whose behaviour is not

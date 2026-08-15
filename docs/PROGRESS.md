@@ -16,7 +16,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 | P6 | Data plane (HTTP + WebSocket proxying, heartbeats) | ✅ | streaming HTTP forwarding, WebSocket tunnel with browser pings (Java semantics), iframe script injection, cache header modes, crash detection; app page + /app_proxy + heartbeat endpoints |
 | P7 | REST API parity | ✅ | all documented endpoints (specs, proxies, status+watch, transfer, details, admin pages/data, issue reporting, delegate-proxy, app_direct, api/route) plus the OpenAPI document; the Java integration test classes are all covered |
 | P8 | Docker & Docker Swarm backends | ✅ | bollard based `docker` and `docker-swarm` backends, app recovery with the startup page and the readiness gate; verified end to end against a real Docker daemon (see `crates/shinyproxy/tests/docker.rs`, `SP_TEST_DOCKER=1`) |
-| P9 | UI parity completion | ⬜ | |
+| P9 | UI parity completion | 🟨 | parameters (validation, form, conversion, runtime values) and the admin pages are done; remaining: my-apps modes/landing-page/logo details audit, `/grafana/**` proxy, HTML snapshot tests |
 | P10 | Operational features (logs, metrics, timeouts, stats) | ⬜ | |
 | P11 | Authentication backends (OIDC, LDAP, SAML, ...) | ⬜ | |
 | P12 | High availability (Redis), Kubernetes, ECS, proxy sharing | ⬜ | |
@@ -31,6 +31,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 | `containerproxy` golden | 2 | canonical YAML + SHA-1 vs Java reference output |
 | `containerproxy` dataplane (end to end) | 6 | streamed bodies, header forwarding, WebSocket + heartbeats, cache headers, injection, crashed app |
 | `shinyproxy` docker backend (end to end, `SP_TEST_DOCKER=1`) | 4 | container create request (labels, env, published ports), HTTP + WebSocket proxying, stop/cleanup, pause/resume, app recovery after a restart and the instanceId check |
+| `shinyproxy` parameters (end to end) | 6 | the form for two kinds of users, validation of chosen values, values reaching the app and the API, preselection when resuming, a configuration provided form, startup validation |
 | `shinyproxy` admin & api (end to end) | 9 | admin pages and assets, app transfer, custom app details, issue reporting validation, app_direct, api/route, delegate-proxy authorization |
 | `shinyproxy` app flow (end to end) | 5 | start app → status watch → app page → proxied HTTP/WebSocket → heartbeat → admin data → stop; ownership and limits |
 | `containerproxy` lifecycle (end to end) | 8 | real app processes: start/reachable/env vars/stop/cleanup, failed start, max instances, shutdown behaviour, events |

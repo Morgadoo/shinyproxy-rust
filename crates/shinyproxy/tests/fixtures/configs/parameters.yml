@@ -9,13 +9,14 @@ proxy:
     - id: parameterized
       container-image: openanalytics/shinyproxy-demo
       container-cmd: [ "R", "-e", "shinyproxy::run_01_hello()" ]
-      container-memory-limit: "#{proxy.getRuntimeValue('SHINYPROXY_PARAMETERS')}"
+      # the chosen values are available to expressions through the runtime value of the proxy
+      container-memory-limit: "#{proxy.getRuntimeObject('SHINYPROXY_PARAMETERS').backendValues['memory']}"
       parameters:
         definitions:
           - id: resources
             display-name: Resources
             description: The amount of resources for this app
-            default-value: 1 CPU core - 2G RAM
+            default-value: 1-2
             value-names:
               - value: 1-2
                 name: 1 CPU core - 2G RAM
@@ -23,6 +24,7 @@ proxy:
                 name: 2 CPU cores - 8G RAM
           - id: dataset
             display-name: Dataset
+            default-value: public
         value-sets:
           - name: default
             values:
@@ -34,7 +36,20 @@ proxy:
             values:
               resources: [ 1-2, 2-8 ]
               dataset: [ public, private ]
+        # configuration provided forms are written with the MiniJinja syntax in this implementation
+        # (Thymeleaf constructs are refused at startup); see docs/COMPATIBILITY.md
         template: |
-          <div th:each="parameter : ${parameterDefinitions}">
-            <span th:text="${parameter.displayNameOrId}"></span>
-          </div>
+          <form class="form-horizontal default-parameter-form">
+            {% for parameter in parameterDefinitions %}
+            <div class="form-group">
+              <label for="parameter-{{ parameter.id }}">{{ parameter.displayNameOrId }}</label>
+              <select class="form-control" id="parameter-{{ parameter.id }}" name="{{ parameter.id }}">
+                <option disabled selected>Select an option</option>
+                {% for value in parameterValues[parameter.id] %}
+                <option>{{ value }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            {% endfor %}
+            <button class="btn btn-success" type="submit">Start</button>
+          </form>

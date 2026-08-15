@@ -28,6 +28,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use containerproxy::spec::SpecProvider;
+
 use containerproxy::config::{LoadOptions, RawConfig, Settings};
 
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/configs");
@@ -256,10 +258,33 @@ fn parameters_configuration() {
         "scientists"
     );
     assert_eq!(parameters["value-sets"][0]["values"]["resources"][0], "1-2");
-    assert!(parameters["template"]
-        .as_str()
-        .expect("template")
-        .contains("th:each"));
+    // configuration provided forms use the MiniJinja syntax in this implementation; Thymeleaf constructs
+    // are refused at startup (see the parameters service)
+    let template = parameters["template"].as_str().expect("template");
+    assert!(
+        template.contains("{% for parameter in parameterDefinitions %}"),
+        "{template}"
+    );
+    assert!(!template.contains("th:"), "{template}");
+
+    // the app definitions of this configuration are usable, including the parameter validation
+    let provider = shinyproxy::spec_provider::ShinyProxySpecProvider::from_settings(&settings)
+        .expect("the parameters of the fixture are valid");
+    let spec = provider.spec("parameterized").expect("spec");
+    let parameters = spec.parameters.as_ref().expect("parameters");
+    assert_eq!(
+        parameters.ids(),
+        vec!["resources".to_string(), "dataset".to_string()]
+    );
+    assert_eq!(parameters.value_sets.len(), 2);
+    assert_eq!(
+        parameters.value_sets[1]
+            .access_control
+            .as_ref()
+            .map(|access| access.groups()),
+        Some(["scientists".to_string()].as_slice())
+    );
+    assert_eq!(parameters.value_sets[0].values_of("resources"), ["1-2"]);
 }
 
 #[test]

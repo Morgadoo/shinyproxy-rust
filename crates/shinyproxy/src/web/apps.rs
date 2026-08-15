@@ -45,6 +45,7 @@ use containerproxy::model::runtime_value::{
 };
 use containerproxy::model::spec::{CacheHeadersMode, ProxySpec};
 use containerproxy::service::runtime_values::parse_cache_headers_mode;
+use containerproxy::service::ParameterValues;
 use containerproxy::spec::SpecProvider;
 use futures::StreamExt;
 use serde::Deserialize;
@@ -193,10 +194,17 @@ fn render_app_page(
         },
     );
 
-    // parameters are implemented in P9; the model keys already exist so that the front-end works
+    // the parameter form: the values this user may choose, the allowed combinations and the selection
+    // to show (the values of the app being resumed win over the configured defaults)
     let parameters = spec.and_then(|spec| spec.parameters.as_ref());
-    match parameters {
-        Some(parameters) => {
+    match (spec, parameters) {
+        (Some(spec), Some(parameters)) => {
+            let previous: Option<ParameterValues> = proxy
+                .as_ref()
+                .and_then(|proxy| proxy.runtime_values.get(&runtime_value::PARAMETER_VALUES))
+                .and_then(|value| value.data.parse_json());
+            let allowed = state.allowed_parameters(user, spec, previous.as_ref());
+
             model.insert(
                 "parameterDefinitions".into(),
                 json!(parameters
@@ -210,9 +218,12 @@ fn render_app_page(
                     .collect::<Vec<_>>()),
             );
             model.insert("parameterIds".into(), json!(parameters.ids()));
-            model.insert("parameterValues".into(), json!({}));
-            model.insert("parameterDefaults".into(), json!([]));
-            model.insert("parameterAllowedCombinations".into(), json!([]));
+            model.insert("parameterValues".into(), json!(allowed.values));
+            model.insert("parameterDefaults".into(), json!(allowed.default_value));
+            model.insert(
+                "parameterAllowedCombinations".into(),
+                json!(allowed.allowed_combinations),
+            );
             model.insert(
                 "cleanedAppParameterDescriptions".into(),
                 json!(parameters
@@ -226,15 +237,31 @@ fn render_app_page(
                     ))
                     .collect::<BTreeMap<_, _>>()),
             );
+            // an app may bring its own form (`parameters.template`), rendered with the same model
             model.insert(
                 "parameterFragment".into(),
                 match &parameters.template {
-                    Some(_) => json!(null), // configuration provided templates land in P9
+                    Some(template) => {
+                        let context = serde_json::Value::Object(model.clone());
+                        match state
+                            .templates
+                            .render_string(template, minijinja::Value::from_serialize(context))
+                        {
+                            Ok(html) => json!(html),
+                            Err(error) => {
+                                tracing::warn!(
+                                    "cannot render the parameters template of {}: {error}",
+                                    spec.id
+                                );
+                                json!(null)
+                            }
+                        }
+                    }
                     None => json!(null),
                 },
             );
         }
-        None => {
+        _ => {
             for key in [
                 "parameterDefinitions",
                 "parameterIds",
@@ -360,8 +387,14 @@ pub async fn start_app(
 
     let proxy_id = uuid::Uuid::new_v4().to_string();
     let body = body.map(|Json(body)| body).unwrap_or_default();
-    let runtime_values =
+    let mut runtime_values =
         shinyproxy_runtime_values(&state, &spec, &instance, &proxy_id, body.timezone);
+
+    // the parameters the user chose (when the app asks for parameters)
+    match state.parse_parameters(Some(&user), &spec, body.parameters.as_ref()) {
+        Ok(values) => runtime_values.extend(values),
+        Err(error) => return api_fail(&error.0),
+    }
 
     let proxy =
         match state

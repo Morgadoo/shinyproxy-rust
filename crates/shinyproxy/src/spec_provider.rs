@@ -69,6 +69,8 @@ pub enum SpecError {
         #[source]
         source: serde_json::Error,
     },
+    #[error("{0}")]
+    Parameters(String),
     #[error("Configuration error: cannot read template group {index}: {source}")]
     InvalidTemplateGroup {
         index: usize,
@@ -387,6 +389,12 @@ impl ShinyProxySpecProvider {
             if !seen.insert(spec.id.clone()) {
                 return Err(SpecError::DuplicateId(spec.id.clone()));
             }
+        }
+
+        // The parameters of every app are validated at startup, as `ParametersService.init` does.
+        for spec in &parsed {
+            containerproxy::service::parameters::validate_spec(spec)
+                .map_err(SpecError::Parameters)?;
         }
 
         let mut groups = Vec::with_capacity(template_groups.len());
