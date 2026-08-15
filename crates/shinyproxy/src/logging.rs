@@ -132,10 +132,15 @@ fn file_writer(
 /// The names of the loggers are the module paths of this implementation (`containerproxy::service`, ...);
 /// `root` sets the level of everything, exactly like Spring Boot's `logging.level.root`.
 pub fn filter(settings: &Settings) -> EnvFilter {
+    // `RUST_LOG` wins, so that an operator can raise the level without touching the configuration
     if let Ok(filter) = EnvFilter::try_from_default_env() {
         return filter;
     }
+    filter_from_settings(settings)
+}
 
+/// Builds the filter from `logging.level.*` only, ignoring the environment.
+pub fn filter_from_settings(settings: &Settings) -> EnvFilter {
     let levels = &settings.logging.level;
     let root = levels
         .get("root")
@@ -304,7 +309,7 @@ mod tests {
     #[test]
     fn builds_a_filter_from_the_configuration() {
         // the directives are visible in the string representation of the filter
-        let filter = filter(&settings(
+        let filter = filter_from_settings(&settings(
             "logging:\n  level:\n    root: WARN\n    containerproxy.service: DEBUG\n",
         ));
         let rendered = filter.to_string();

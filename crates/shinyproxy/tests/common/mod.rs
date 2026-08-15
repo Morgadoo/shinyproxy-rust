@@ -44,12 +44,21 @@ pub struct TestInstance {
 /// The base is derived from the process id (test binaries run in parallel) and a counter (tests within a
 /// binary run in parallel as well).
 fn unique_port_range() -> (u16, u16) {
-    static COUNTER: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
-    let index = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    let process_offset = (std::process::id() % 150) as u16 * 200;
-    let start = 20_000 + process_offset + (index % 20) * 10;
-    (start, start + 9)
+    // the kernel hands out a free port, which becomes the first port of the range; asking it is more
+    // reliable than a fixed mapping, because several test binaries run at the same time
+    let mut ports = Vec::new();
+    for _ in 0..PORTS_PER_INSTANCE {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a free port");
+        ports.push(listener.local_addr().expect("address").port());
+    }
+    // the listeners are closed here, so the ports are free again for the apps of this instance
+    let start = *ports.iter().min().expect("one port");
+    let end = *ports.iter().max().expect("one port");
+    (start, end)
 }
+
+/// How many host ports one test instance may publish.
+const PORTS_PER_INSTANCE: usize = 8;
 
 /// Sends the log output of the server to the test output, so that `cargo test -- --nocapture` (and the
 /// output of a failing test) shows what the server logged. Enable with `RUST_LOG=info`.
