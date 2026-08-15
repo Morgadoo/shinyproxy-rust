@@ -402,10 +402,12 @@ pub fn build_container_create_body(
     let failed = BackendError::FailedToStart;
 
     // published ports, bound to the configured interface (skipped in internal networking mode)
+    // the keys are in the `<port>/<protocol>` form the Docker API documents: not every daemon
+    // normalizes a bare port number, and `docker inspect` then shows the key exactly as sent
     let mut docker_port_bindings: HashMap<String, Option<Vec<PortBinding>>> = HashMap::new();
     for (container_port, host_port) in port_bindings {
         docker_port_bindings.insert(
-            container_port.to_string(),
+            format!("{container_port}/tcp"),
             Some(vec![PortBinding {
                 host_ip: Some(config.target_bind_ip.clone()),
                 host_port: Some(host_port.to_string()),
@@ -1209,11 +1211,14 @@ mod tests {
             "runtime values are added as labels"
         );
 
-        assert!(body.exposed_ports.expect("exposed").contains_key("3838"));
+        assert!(body
+            .exposed_ports
+            .expect("exposed")
+            .contains_key("3838/tcp"));
 
         let host = body.host_config.expect("host config");
         assert_eq!(
-            host.port_bindings.as_ref().unwrap().get("3838"),
+            host.port_bindings.as_ref().unwrap().get("3838/tcp"),
             Some(&Some(vec![PortBinding {
                 host_ip: Some("127.0.0.1".to_string()),
                 host_port: Some("20000".to_string()),
