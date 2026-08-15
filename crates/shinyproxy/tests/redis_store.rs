@@ -145,6 +145,55 @@ async fn two_servers_share_their_apps() {
         .as_str()
         .is_some_and(|path| path.starts_with("/app_proxy/")));
 
+    // the traffic of the app is proxied by the second server as well, which is the behaviour a load
+    // balancer without sticky sessions needs (`examples/ha-redis.yml`)
+    let body = jack_on_second
+        .get(second.url(&format!("/app_proxy/{proxy_id}/")))
+        .send()
+        .await
+        .expect("app request")
+        .text()
+        .await
+        .expect("body");
+    assert!(
+        body.contains("sp-testapp"),
+        "the second server must reach the app of the first one: {body}"
+    );
+    // and its WebSocket traffic too
+    {
+        use futures::{SinkExt, StreamExt};
+        let host = second.base_url.trim_start_matches("http://").to_string();
+        let cookie = second
+            .session_cookie(&jack_on_second)
+            .expect("session cookie");
+        let request = tokio_tungstenite::tungstenite::http::Request::builder()
+            .uri(format!("ws://{host}/app_proxy/{proxy_id}/ws"))
+            .header("Host", &host)
+            .header("Cookie", cookie)
+            .header("Connection", "Upgrade")
+            .header("Upgrade", "websocket")
+            .header("Sec-WebSocket-Version", "13")
+            .header(
+                "Sec-WebSocket-Key",
+                tokio_tungstenite::tungstenite::handshake::client::generate_key(),
+            )
+            .body(())
+            .expect("request");
+        let (mut socket, response) = tokio_tungstenite::connect_async(request)
+            .await
+            .expect("websocket connects");
+        assert_eq!(response.status(), 101);
+        socket
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                "shared".into(),
+            ))
+            .await
+            .expect("sends");
+        let message = socket.next().await.expect("answer").expect("message");
+        assert_eq!(message.into_text().expect("text"), "shared");
+        socket.close(None).await.ok();
+    }
+
     // the second server can also read the status endpoint of the app
     let status: serde_json::Value = jack_on_second
         .get(second.url(&format!("/api/proxy/{proxy_id}/status")))

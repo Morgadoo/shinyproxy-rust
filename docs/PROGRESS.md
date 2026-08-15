@@ -48,7 +48,7 @@ service and are enabled with `SP_TEST_DOCKER=1`, `SP_TEST_LDAP=1` and `SP_TEST_R
 | `shinyproxy` admin & api (end to end) | 9 | admin pages and assets, app transfer, custom app details, issue reporting validation, app_direct, api/route, delegate-proxy authorization |
 | `shinyproxy` app flow (end to end) | 5 | start app → status watch → app page → proxied HTTP/WebSocket → heartbeat → admin data → stop; ownership and limits |
 | `containerproxy` lifecycle (end to end) | 8 | real app processes: start/reachable/env vars/stop/cleanup, failed start, max instances, shutdown behaviour, events |
-| `shinyproxy` config fixtures | 15 | 13 realistic configurations (docker, kubernetes, openid, ldap, saml, HA, parameters, template groups, usage stats, ecs, proxy sharing, api security) |
+| `shinyproxy` config fixtures | 16 | 13 realistic configurations (docker, kubernetes, openid, ldap, saml, HA, parameters, template groups, usage stats, ecs, proxy sharing, api security) |
 | `shinyproxy` docs/schema sync | 2 | generated CONFIGURATION.md + Java property inventory coverage |
 | `shinyproxy` unit | 45 | schema lookups, generated docs, spec conversion, page model, state (access control, admin, max instances, logos) |
 | `shinyproxy` ui (end to end) | 16 | login/logout/CSRF, index rendering, admin authorization, assets, security headers, context path, landing page, JSON 401 |

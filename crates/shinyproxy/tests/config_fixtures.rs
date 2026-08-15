@@ -501,3 +501,49 @@ fn demo_configuration_is_used_as_fallback() {
     assert_eq!(settings.proxy.specs.len(), 2);
     assert_eq!(settings.proxy.users.len(), 2);
 }
+
+/// Every example configuration in `examples/` must load without unknown properties and yield usable apps.
+///
+/// The examples are what users copy, so a typo in one of them is a bug.
+#[test]
+fn every_example_configuration_is_understood() {
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    let mut names: Vec<String> = std::fs::read_dir(&examples)
+        .expect("examples directory")
+        .map(|entry| {
+            entry
+                .expect("entry")
+                .file_name()
+                .to_string_lossy()
+                .to_string()
+        })
+        .filter(|name| name.ends_with(".yml"))
+        .collect();
+    names.sort();
+    assert!(
+        names.len() >= 3,
+        "the examples of the plan must exist: {names:?}"
+    );
+
+    for name in names {
+        let path = examples.join(&name);
+        let options = LoadOptions {
+            args: vec![format!("--spring.config.location={}", path.display())],
+            ..LoadOptions::default()
+        };
+        let (config, settings) = shinyproxy::load_config(options)
+            .unwrap_or_else(|error| panic!("examples/{name} must load: {error}"));
+        assert!(
+            config.unknown_properties.is_empty(),
+            "examples/{name} contains unknown properties: {:#?}",
+            config.unknown_properties
+        );
+
+        let provider = shinyproxy::spec_provider::ShinyProxySpecProvider::from_settings(&settings)
+            .unwrap_or_else(|error| panic!("examples/{name} must yield specs: {error}"));
+        assert!(
+            !provider.specs().is_empty(),
+            "examples/{name} must define at least one app"
+        );
+    }
+}
