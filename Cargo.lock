@@ -2611,6 +2611,7 @@ dependencies = [
  "mime_guess",
  "minijinja",
  "percent-encoding",
+ "regex",
  "reqwest",
  "rstest",
  "serde",

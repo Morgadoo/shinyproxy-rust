@@ -1,0 +1,243 @@
+---
+source: crates/shinyproxy/tests/html_snapshots.rs
+expression: html
+---
+
+
+
+<!DOCTYPE html>
+<html>
+    <head lang="en">
+        <title>My ShinyProxy</title>
+        <meta content="text/html; charset=UTF-8" http-equiv="Content-Type"/>
+        <meta content="width=device-width, initial-scale=1" name="viewport"/>
+        <link rel="icon" href="/{instance-id}/favicon">
+        <link media="screen" rel="stylesheet" href="/{instance-id}/css/bootstrap.css"/>
+        <link media="screen" rel="stylesheet" href="/{instance-id}/css/default.css"/>
+        <link media="screen" rel="stylesheet"
+              href="/{instance-id}/webjars/datatables/1.13.5/css/dataTables.bootstrap.min.css"/>
+        <link media="screen" rel="stylesheet"
+              href="/{instance-id}/webjars/datatables-buttons/2.4.1/css/buttons.bootstrap.min.css">
+        <link media="screen" rel="stylesheet"
+              href="/{instance-id}/webjars/datatables-responsive/2.2.7/css/responsive.bootstrap.min.css">
+        <script src="/{instance-id}/webjars/jquery/3.7.1/jquery.min.js"></script>
+        <script src="/{instance-id}/js/bootstrap.js"></script>
+        <script src="/{instance-id}/webjars/handlebars/4.7.9/dist/handlebars.runtime.min.js"></script>
+        <script src="/{instance-id}/js/shiny.app.js"></script>
+        <script src="/{instance-id}/js/shiny.api.js"></script>
+        <script src="/{instance-id}/js/shiny.instances.js"></script>
+        <script src="/{instance-id}/js/shiny.ui.js"></script>
+        <script src="/{instance-id}/js/shiny.common.js"></script>
+        <script src="/{instance-id}/js/shiny.admin.js"></script>
+        <script src="/{instance-id}/handlebars/precompiled.js"></script>
+    </head>
+    <body class="">
+        
+
+<div id="navbar">
+    <nav class="navbar navbar-inverse navbar-fixed-top navbar-height">
+        <div class="container-fluid">
+            <div class="navbar-header">
+                <button type="button" class="navbar-toggle collapsed" data-toggle="collapse" data-target="#navbar-collapse" aria-expanded="false">
+                    <span class="sr-only">Toggle navigation</span>
+                    <span class="icon-bar"></span>
+                    <span class="icon-bar"></span>
+                    <span class="icon-bar"></span>
+                </button>
+                <img class="navbar-brand" src="https://www.openanalytics.eu/shinyproxy/logo.png"/>
+                <a class="navbar-brand" href="/">My ShinyProxy</a>
+            </div>
+            <div class="collapse navbar-collapse" id="navbar-collapse">
+                <div class="navbar-form navbar-right navbar-buttons">
+                    
+                    
+                    
+                    
+                    
+                    <a class="btn btn-primary btn-sm" role="button" href="/admin">Admin</a>
+                    
+                    
+                    <a class="btn btn-primary btn-sm" role="button" href="/logout">Sign Out</a>
+                    
+                </div>
+                
+                <div class="navbar-right">
+                    <div class="navbar-text">
+                        <span class="glyphicon glyphicon-user"></span>
+                        <span>root</span>
+                    </div>
+                </div>
+                
+            </div>
+        </div>
+    </nav>
+    <script>
+        // fix padding of body as soon as navbar is rendered
+        let navbarHeight = $('.navbar-height').height();
+        if (navbarHeight !== undefined) {
+            $('body').css('padding-top', navbarHeight + 'px');
+        }
+    </script>
+</div>
+
+
+
+        <div class="container-fluid">
+            <div id="admin">
+                <ul class="nav nav-tabs admin-tabs">
+                    <li class=""><a href="/admin">Active Proxies</a></li>
+                    <li class="active"><a href="/admin/about">About</a></li>
+                </ul>
+                
+                
+                <div class="admin-tab-content admin-about table-responsive">
+                    <table class="table table-condensed">
+                        <tr>
+                            <td>
+                                <b>ShinyProxy RuntimeID</b>
+                            </td>
+                            <td class="admin-monospace">{runtime-id}</td>
+                        </tr>
+                        <tr>
+                            <td>
+                                <b>ShinyProxy InstanecId</b>
+                            </td>
+                            <td class="admin-monospace">{instance-id}</td>
+                        </tr>
+                        <tr>
+                            <td>
+                                <b>ShinyProxy RealmID</b>
+                            </td>
+                            <td class="admin-monospace">None</td>
+                        </tr>
+                        <tr>
+                            <td>
+                                <b>ShinyProxy version</b>
+                            </td>
+                            <td class="admin-monospace">0.1.0</td>
+                        </tr>
+                        <tr>
+                            <td>
+                                <b>Implementation</b>
+                            </td>
+                            <td class="admin-monospace">Rust implementation (compatible with ShinyProxy 3.2.4)</td>
+                        </tr>
+                        <tr>
+                            <td>
+                                <b>Build</b>
+                            </td>
+                            <td class="admin-monospace">{build-information}</td>
+                        </tr>
+                        <tr>
+                            <td>
+                                <b>Arguments</b>
+                            </td>
+                            <td class="admin-monospace" style="white-space: pre;"></td>
+                        </tr>
+                        <tr>
+                            <td>
+                                <b>Memory usage</b>
+                            </td>
+                            <td class="admin-monospace">{build-information}</td>
+                        </tr>
+                        <tr>
+                            <td>
+                                <b>Container backend</b>
+                            </td>
+                            <td class="admin-monospace">local</td>
+                        </tr>
+                        <tr>
+                            <td>
+                                <b>Authentication</b>
+                            </td>
+                            <td class="admin-monospace">simple</td>
+                        </tr>
+                    </table>
+                </div>
+                
+            </div>
+        </div>
+
+        
+<div class="modal fade" id="modal" role="dialog">
+    <div class="modal-dialog" id="switchInstancesModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button aria-hidden="true" class="close" data-dismiss="modal" type="button">&times;</button>
+                <h4 class="modal-title">Switch instance</h4>
+            </div>
+            <div class="modal-body">
+                <div class="myApps" id="appInstances">
+                </div>
+                <form class="form-inline" id="newInstanceForm">
+                    <div class="form-group">
+                        <label for="instanceNameField"><span class="glyphicon glyphicon-chat"></span>Name of
+                            new
+                            instance:</label><br>
+                        <div class="input-group">
+                            <input class="form-control" id="instanceNameField" type="text">
+                            <button class="btn btn-default btn-success" type="submit">Start</button>
+                        </div>
+                    </div>
+                </form>
+                Max instances: <span id="maxInstances"></span>, used: <span id="usedInstances"></span>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-default" data-dismiss="modal" type="button">Close</button>
+            </div>
+        </div>
+    </div>
+    
+    <div class="modal-dialog" id="appDetailsModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button aria-hidden="true" class="close" data-dismiss="modal" type="button">&times;</button>
+                <h4 class="modal-title">App Details</h4>
+            </div>
+            <div class="modal-body">
+                <div id="appDetails">
+                </div>
+                
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-default close-button" type="button">Close</button>
+            </div>
+        </div>
+    </div>
+    <div class="modal-dialog" id="reportIssueModal">
+        <div class="modal-content">
+            <form id="reportIssueForm">
+                <div class="modal-header">
+                    <button aria-hidden="true" class="close" data-dismiss="modal" type="button">&times;
+                    </button>
+                    <h4 class="modal-title">Report Issue</h4>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label for="reportIssueMessage"><span class="glyphicon glyphicon-chat"></span>
+                            Message to add to the report:</label>
+                        <textarea class="form-control" cols="40" id="reportIssueMessage"
+                                  name="reportIssueMessage" placeholder="Enter message" rows="5"></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-default btn-success" type="submit">Submit</button>
+                    <button class="btn btn-default" data-dismiss="modal" type="button">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+
+        <script src="/{instance-id}/webjars/datatables/1.13.5/js/jquery.dataTables.min.js"></script>
+        <script src="/{instance-id}/webjars/datatables/1.13.5/js/dataTables.bootstrap.min.js"></script>
+        <script src="/{instance-id}/webjars/datatables-buttons/2.4.1/js/dataTables.buttons.min.js"></script>
+        <script src="/{instance-id}/webjars/datatables-buttons/2.4.1/js/buttons.bootstrap.min.js"></script>
+        <script src="/{instance-id}/webjars/datatables-buttons/2.4.1/js/buttons.html5.min.js"></script>
+        <script src="/{instance-id}/webjars/datatables-responsive/2.2.7/js/dataTables.responsive.min.js"></script>
+        <script src="/{instance-id}/webjars/datatables-responsive/2.2.7/js/responsive.bootstrap.min.js"></script>
+
+        
+    </body>
+</html>

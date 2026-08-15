@@ -1,0 +1,256 @@
+---
+source: crates/shinyproxy/tests/html_snapshots.rs
+expression: "page(&instance, &client, \"/app/01_hello?sp_hide_navbar=true\").await"
+---
+
+
+
+<!DOCTYPE html>
+<html>
+    <head lang="en">
+        <title>Hello</title>
+        <meta content="text/html; charset=UTF-8" http-equiv="Content-Type"/>
+        <meta content="width=device-width, initial-scale=1" name="viewport"/>
+        <link rel="icon" href="/{instance-id}/favicon/01_hello">
+        <link media="screen" rel="stylesheet" href="/{instance-id}/css/bootstrap.css"/>
+        <link media="screen" rel="stylesheet" href="/{instance-id}/css/default.css"/>
+        <script src="/{instance-id}/webjars/jquery/3.7.1/jquery.min.js"></script>
+        <script src="/{instance-id}/js/bootstrap.js"></script>
+        <script src="/{instance-id}/webjars/handlebars/4.7.9/dist/handlebars.runtime.min.js"></script>
+        <script src="/{instance-id}/js/shiny.app.js"></script>
+        <script src="/{instance-id}/js/shiny.api.js"></script>
+        <script src="/{instance-id}/js/shiny.connections.js"></script>
+        <script src="/{instance-id}/js/shiny.instances.js"></script>
+        <script src="/{instance-id}/js/shiny.ui.js"></script>
+        <script src="/{instance-id}/js/shiny.common.js"></script>
+        <script src="/{instance-id}/handlebars/precompiled.js"></script>
+    </head>
+    <body id="appPage" class="">
+        
+
+
+
+        <div id="iframeinsert"></div>
+        <div class="loading" id="loading">
+            <div class="loading-txt">Launching <span>Hello</span>...</div>
+            <div class="loading-img"></div>
+        </div>
+        <div class="loading" id="resumingApp">
+            <div class="loading-txt">Resuming this app...</div>
+            <div class="loading-img"></div>
+        </div>
+        <div class="loading" id="stoppingApp">
+            <div class="loading-txt">Stopping this app...</div>
+            <div class="loading-img"></div>
+        </div>
+        <div class="loading" id="pausingApp">
+            <div class="loading-txt">Pausing this app...</div>
+            <div class="loading-img"></div>
+        </div>
+        <div class="loading" id="appStopped">
+            <div class="loading-txt">
+                This app has been stopped, you can now close this tab.<br><br>
+                <span class="refreshButton">
+				<button class="btn btn-default app-restart-btn">Restart app</button>
+			</span>
+            </div>
+        </div>
+        <div class="loading" id="appPaused">
+            <div class="loading-txt">
+                This app has been paused, you can now close this tab.<br><br>
+                <span class="refreshButton">
+				<button class="btn btn-default app-restart-btn">Resume app</button>
+			</span>
+            </div>
+        </div>
+        <div class="loading" id="reconnecting">
+            <div class="loading-txt">
+                Reconnecting to <span>Hello</span>...
+                <div class="loading-img"></div>
+                <span class="retryingDetails">
+				<br>
+				Attempt <span class="reloadAttempts"></span>/<span class="maxReloadAttempts"></span>
+				<br>
+				Retrying <span id="retryInXSeconds">in <span class="retrySeconds"></span></span><span
+                        id="retryNow">now</span>
+			</span>
+            </div>
+        </div>
+        <div class="loading" id="reloadFailed">
+            <div class="loading-txt">
+                Failed to reload <span>Hello</span><br><br>
+                <span class="refreshButton">
+				<button class="btn btn-default refresh-page-btn">Refresh page</button>
+			</span>
+            </div>
+        </div>
+        <div class="loading" id="startFailed">
+            <div class="loading-txt">
+                Failed to start app <span>Hello</span><br><br>
+                <div id="startFailedMessage"></div>
+                <span class="refreshButton">
+				<button class="btn btn-default refresh-page-btn">Try again</button>
+			</span>
+            </div>
+        </div>
+        <div class="loading" id="appCrashed">
+            <div class="loading-txt">
+                This app has crashed and has been stopped.<br><br>
+                <span class="refreshButton">
+				<button class="btn btn-default app-restart-btn">Restart app</button>
+			</span>
+            </div>
+        </div>
+        <div class="loading" id="appTransferred">
+            <div class="loading-txt">
+                This app has been transferred to another user.<br><br>
+            </div>
+        </div>
+        <div class="loading" id="userLoggedOut">
+            <div class="loading-txt">
+                You are now (automatically) logged out, you can now close this tab.<br><br>
+                <span class="refreshButton">
+				<a class="btn btn-default" href="/">Login again</a>
+			</span>
+            </div>
+        </div>
+        <div id="parameterForm">
+            
+            <div class="container">
+                <div class="row">
+                    <h2>Choose the parameters for this app</h2>
+                </div>
+                <div class="row" id="selectAllWarning">
+                    <div class="alert alert-danger" role="alert">Please select a value for each parameter before
+                        starting the app!
+                    </div>
+                </div>
+                <div class="row">
+                    <form class="form-horizontal default-parameter-form">
+                        
+                        <div class="form-group">
+                            <label class="col-sm-2 control-label" for="parameter-dataset">Dataset</label>
+                            <div class="col-sm-10">
+                                <select class="form-control"
+                                        
+                                        id="parameter-dataset"
+                                        name="dataset">
+                                    <option disabled selected>Select an option</option>
+                                    
+                                    <option>public</option>
+                                    
+                                    <option>private</option>
+                                    
+                                </select>
+                                
+                                <span class="help-block">Which data to use</span>
+                                
+                            </div>
+                        </div>
+                        
+
+                        <div class="form-group">
+                            <div class="col-sm-offset-2 col-sm-10">
+                                <button class="btn btn-default btn-success" type="submit">Start</button>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+            </div>
+            
+        </div>
+
+        
+<div class="modal fade" id="modal" role="dialog">
+    <div class="modal-dialog" id="switchInstancesModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button aria-hidden="true" class="close" data-dismiss="modal" type="button">&times;</button>
+                <h4 class="modal-title">Switch instance</h4>
+            </div>
+            <div class="modal-body">
+                <div class="myApps" id="appInstances">
+                </div>
+                <form class="form-inline" id="newInstanceForm">
+                    <div class="form-group">
+                        <label for="instanceNameField"><span class="glyphicon glyphicon-chat"></span>Name of
+                            new
+                            instance:</label><br>
+                        <div class="input-group">
+                            <input class="form-control" id="instanceNameField" type="text">
+                            <button class="btn btn-default btn-success" type="submit">Start</button>
+                        </div>
+                    </div>
+                </form>
+                Max instances: <span id="maxInstances"></span>, used: <span id="usedInstances"></span>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-default" data-dismiss="modal" type="button">Close</button>
+            </div>
+        </div>
+    </div>
+    
+    <div class="modal-dialog" id="appDetailsModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button aria-hidden="true" class="close" data-dismiss="modal" type="button">&times;</button>
+                <h4 class="modal-title">App Details</h4>
+            </div>
+            <div class="modal-body">
+                <div id="appDetails">
+                </div>
+                
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-default close-button" type="button">Close</button>
+            </div>
+        </div>
+    </div>
+    <div class="modal-dialog" id="reportIssueModal">
+        <div class="modal-content">
+            <form id="reportIssueForm">
+                <div class="modal-header">
+                    <button aria-hidden="true" class="close" data-dismiss="modal" type="button">&times;
+                    </button>
+                    <h4 class="modal-title">Report Issue</h4>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label for="reportIssueMessage"><span class="glyphicon glyphicon-chat"></span>
+                            Message to add to the report:</label>
+                        <textarea class="form-control" cols="40" id="reportIssueMessage"
+                                  name="reportIssueMessage" placeholder="Enter message" rows="5"></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-default btn-success" type="submit">Submit</button>
+                    <button class="btn btn-default" data-dismiss="modal" type="button">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+
+        <script type="text/javascript">
+            $(window).on('load', function () {
+                window.Shiny.common.init("/", "ShinyProxy", "{instance-id}", {"01_hello":1}, "None", false);
+                window.Shiny.app.start(
+                    null,
+                    10000,
+                    "01_hello",
+                    "_",
+                    [[1],[2]],
+                    [{"description":"Which data to use","displayNameOrId":"Dataset","id":"dataset"}],
+                    ["dataset"],
+                    "/app/01_hello",
+                    "",
+                );
+                window.Shiny.ui.loadDefaultParameters([0]);
+                if (false) {
+                    window.Shiny.connections.startOpenidRefresh();
+                }
+            });
+        </script>
+    </body>
+</html>
