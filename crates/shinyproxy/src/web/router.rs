@@ -237,9 +237,12 @@ async fn authorize(
                 )
                     .into_response()
             } else {
-                // remember where the user wanted to go, like the Java saved-request handling
+                // remember where the user wanted to go, like the Java saved-request handling; the
+                // session itself is always created, exactly as Spring does for every request
                 let mut data = data.clone();
-                data.auth_success_url = Some(request.uri().to_string());
+                if is_saveable_request(&request) {
+                    data.auth_success_url = Some(request.uri().to_string());
+                }
                 data.store(&session).await;
                 Redirect::to(&format!("{}login", state.context_path_with_slash())).into_response()
             };
@@ -255,6 +258,35 @@ async fn authorize(
         headers.insert(name.clone(), value.clone());
     }
     response
+}
+
+/// Whether a request may be remembered as the page to open after logging in.
+///
+/// Mirrors the default request matcher of Spring Security's request cache
+/// (`RequestCacheConfigurer.createDefaultSavedRequestMatcher`): only `GET` requests that ask for HTML
+/// (an `Accept` header that favours `text/html`, not `*/*`) and that are not `XMLHttpRequest` are saved.
+/// Without this, background requests of the browser (such as Chrome's
+/// `/.well-known/appspecific/com.chrome.devtools.json`) would become the page shown after login.
+fn is_saveable_request(request: &Request) -> bool {
+    if request.method() != axum::http::Method::GET {
+        return false;
+    }
+    let headers = request.headers();
+    if headers
+        .get("x-requested-with")
+        .is_some_and(|value| value == "XMLHttpRequest")
+    {
+        return false;
+    }
+    headers
+        .get(header::ACCEPT)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|accept| {
+            accept
+                .split(',')
+                .map(|media_type| media_type.split(';').next().unwrap_or("").trim())
+                .any(|media_type| media_type == "text/html")
+        })
 }
 
 fn wants_json(headers: &HeaderMap) -> bool {

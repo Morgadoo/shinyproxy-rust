@@ -305,7 +305,7 @@ mod tests {
     async fn starts_and_stops_a_process() {
         let allocator = Arc::new(PortAllocator::new(21000, None));
         let backend = LocalBackend::new(&settings(), allocator.clone());
-        let (spec, container_spec) = spec_with_command(vec!["sleep", "30"]);
+        let (spec, container_spec) = spec_with_command(vec!["sh", "-c", "sleep 30"]);
         let proxy = Proxy::new("proxy-1", ProxyStatus::New);
         let container = Container::new(0);
 
@@ -401,7 +401,7 @@ mod tests {
     async fn maps_additional_port_mappings_to_sub_paths() {
         let allocator = Arc::new(PortAllocator::new(21300, None));
         let backend = LocalBackend::new(&settings(), allocator.clone());
-        let (mut spec, mut container_spec) = spec_with_command(vec!["sleep", "30"]);
+        let (mut spec, mut container_spec) = spec_with_command(vec!["sh", "-c", "sleep 30"]);
         container_spec.port_mapping = vec![
             PortMapping {
                 name: "dashboard".to_string(),

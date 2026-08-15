@@ -215,9 +215,14 @@ async fn auth_success_page_redirects_with_an_absolute_url() {
     let client = instance.client();
     let token = instance.csrf_token(&client).await;
 
-    // a user who wanted to open an app is sent there after logging in
+    // a user who wanted to open an app is sent there after logging in (a browser navigation, i.e. a GET
+    // that asks for HTML)
     let response = client
         .get(instance.url("/app/01_hello"))
+        .header(
+            "accept",
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        )
         .send()
         .await
         .expect("request");
@@ -240,6 +245,41 @@ async fn auth_success_page_redirects_with_an_absolute_url() {
         .expect("redirect")
         .to_string();
     assert_eq!(location, "/auth-success?continue=%2Fapp%2F01_hello");
+
+    // background requests of the browser must not become the page shown after login (Chrome asks for
+    // /.well-known/appspecific/com.chrome.devtools.json with Accept: */* while DevTools is open)
+    let background = instance.client();
+    let token = instance.csrf_token(&background).await;
+    background
+        .get(instance.url("/app/01_hello"))
+        .header("accept", "text/html,application/xhtml+xml")
+        .send()
+        .await
+        .expect("request");
+    background
+        .get(instance.url("/.well-known/appspecific/com.chrome.devtools.json"))
+        .header("accept", "*/*")
+        .send()
+        .await
+        .expect("request");
+    let response = background
+        .post(instance.url("/login"))
+        .form(&[
+            ("username", "jack"),
+            ("password", "password"),
+            ("_csrf", token.as_str()),
+        ])
+        .send()
+        .await
+        .expect("login request");
+    assert_eq!(
+        response
+            .headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok()),
+        Some("/auth-success?continue=%2Fapp%2F01_hello"),
+        "the navigation is remembered, not the background request"
+    );
 
     let host = instance.base_url.trim_start_matches("http://").to_string();
     let body = client
