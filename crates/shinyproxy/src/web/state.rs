@@ -58,6 +58,8 @@ pub struct AppState {
     pub auth: Arc<dyn AuthBackend>,
     /// The OpenID Connect backend, when it is the configured one (the endpoints of the flow need it).
     pub openid: Option<Arc<containerproxy::auth::openid::OpenIdAuthenticationBackend>>,
+    /// Validates bearer tokens of API clients (`proxy.oauth2.*`), when configured.
+    pub bearer: Option<Arc<containerproxy::auth::bearer::BearerTokenAuthenticator>>,
     /// The template engine.
     pub templates: TemplateEngine,
     /// Security headers added to every response.
@@ -197,6 +199,10 @@ impl AppState {
             specs,
             auth,
             openid,
+            bearer: containerproxy::auth::bearer::BearerTokenAuthenticator::from_settings(
+                &settings,
+            )
+            .map(Arc::new),
             templates,
             security_headers,
             pause_supported: backend.supports_pause(),

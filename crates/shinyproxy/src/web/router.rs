@@ -255,6 +255,22 @@ async fn authorize(
         }
     }
 
+    // bearer tokens (`proxy.oauth2.*`): API clients authenticate per request, without a session
+    if data.user.is_none() {
+        if let (Some(authenticator), Some(token)) = (
+            state.bearer.as_ref(),
+            containerproxy::auth::bearer::bearer_token(request.headers()),
+        ) {
+            if let Some(user) = authenticator.authenticate(token).await {
+                tracing::debug!(
+                    "Request authenticated with a bearer token [user: {}]",
+                    user.id
+                );
+                data.user = Some(user);
+            }
+        }
+    }
+
     // header based authentication (`custom-header`): the reverse proxy in front of ShinyProxy decides who
     // the user is, so every request is checked (and a changed header replaces the user of the session)
     if !state.auth.uses_login_form() && state.auth.has_authorization() {

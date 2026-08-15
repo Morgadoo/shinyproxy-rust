@@ -25,6 +25,7 @@
 //! (`IAuthenticationBackend`). Phase P4 implements `none` and `simple`, the remaining backends follow
 //! in P11 and fail at startup with a clear message until then.
 
+pub mod bearer;
 pub mod custom_header;
 pub mod none;
 pub mod openid;

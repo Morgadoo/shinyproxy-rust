@@ -187,6 +187,26 @@ async fn start_provider(
     (address, provider, handle)
 }
 
+impl Provider {
+    /// Signs a token with the claims of the argument.
+    fn issue_token(&self, claims: serde_json::Value) -> String {
+        let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256);
+        header.kid = Some("test-key".to_string());
+        jsonwebtoken::encode(&header, &claims, &self.encoding_key).expect("token")
+    }
+
+    /// Signs an access token for a subject and an audience.
+    fn issue_access_token(&self, subject: &str, audience: &str, lifetime_seconds: i64) -> String {
+        self.issue_token(serde_json::json!({
+            "sub": subject,
+            "aud": audience,
+            "groups": ["scientists"],
+            "iat": now_plus(-10),
+            "exp": now_plus(lifetime_seconds),
+        }))
+    }
+}
+
 /// Starts the flow and follows the redirect to the provider (the test client does not follow redirects).
 async fn follow_to_provider(client: &common::TestClient, instance: &TestInstance) {
     let response = client
@@ -552,4 +572,119 @@ async fn pkce_is_used_when_configured() {
 
     instance.stop();
     provider_task.abort();
+}
+
+#[tokio::test]
+async fn api_clients_can_use_bearer_tokens() {
+    let (address, provider, provider_task) = start_provider(
+        serde_json::json!({"sub": "api-client", "groups": ["scientists"]}),
+        serde_json::json!({}),
+    )
+    .await;
+
+    // simple authentication for the browser, bearer tokens for API clients (as in Java, where the
+    // resource server is configured next to the authentication backend)
+    let instance = TestInstance::start(&format!(
+        r##"
+proxy:
+  authentication: simple
+  container-backend: local
+  oauth2:
+    resource-id: shinyproxy-client
+    jwks-url: http://{address}/jwks
+    roles-claim: groups
+  users:
+    - name: jack
+      password: password
+      groups: scientists
+  specs:
+    - id: 01_hello
+      display-name: Hello Application
+      container-image: sp-testapp
+      access-groups: scientists
+    - id: 02_other
+      display-name: Other Application
+      container-image: sp-testapp
+      access-groups: others
+"##
+    ))
+    .await;
+    let client = instance.client();
+
+    // without a token the API answers 401 for a JSON client
+    let response = client
+        .get(instance.url("/api/proxyspec"))
+        .header("accept", "application/json")
+        .send()
+        .await
+        .expect("request");
+    assert_eq!(response.status(), 401);
+
+    // a token of the provider is accepted, and its groups decide what the client sees
+    let token = provider.issue_access_token("api-client", "shinyproxy-client", 600);
+    let response: serde_json::Value = client
+        .get(instance.url("/api/proxyspec"))
+        .header("authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .expect("request")
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(response["data"].as_array().map(Vec::len), Some(1));
+    assert_eq!(response["data"][0]["id"], "01_hello");
+
+    // a token for another audience is refused
+    let token = provider.issue_access_token("api-client", "another-resource", 600);
+    let response = client
+        .get(instance.url("/api/proxyspec"))
+        .header("accept", "application/json")
+        .header("authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .expect("request");
+    assert_eq!(
+        response.status(),
+        401,
+        "the audience must match the resource id"
+    );
+
+    // an expired token is refused as well (60 seconds of clock skew are allowed, like Spring's
+    // JwtTimestampValidator does by default, so the token is expired by more than that)
+    let token = provider.issue_access_token("api-client", "shinyproxy-client", -600);
+    let response = client
+        .get(instance.url("/api/proxyspec"))
+        .header("accept", "application/json")
+        .header("authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .expect("request");
+    assert_eq!(response.status(), 401);
+
+    // and a token without the username claim
+    let token = provider.issue_token(serde_json::json!({
+        "aud": "shinyproxy-client",
+        "groups": ["scientists"],
+        "exp": now_plus(600),
+    }));
+    let response = client
+        .get(instance.url("/api/proxyspec"))
+        .header("accept", "application/json")
+        .header("authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .expect("request");
+    assert_eq!(response.status(), 401);
+
+    instance.stop();
+    provider_task.abort();
+}
+
+/// The epoch seconds of "now plus the given number of seconds".
+fn now_plus(seconds: i64) -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("time")
+        .as_secs() as i64
+        + seconds
 }
