@@ -80,6 +80,27 @@ passwords, unknown users and an unreachable directory.
 No service needed: `crates/shinyproxy/tests/openid.rs` runs a fake provider in process (an RSA key, a JWKS
 endpoint, a token endpoint with the refresh grant), so the whole flow is tested with real RS256 tokens.
 
+## Load and soak
+
+`scripts/load-test.sh` starts a server with the Docker backend, opens a number of WebSocket connections
+through the proxy and hammers the HTTP path at the same time (the load generator is `sp-testapp --load-test`,
+so nothing has to be installed). It prints the throughput, the latency distribution, the resident memory of
+the server and its startup time, and it fails when the server panicked.
+
+```sh
+./scripts/build-test-image.sh
+./scripts/load-test.sh                    # this implementation
+./scripts/load-test.sh /path/to/shinyproxy-3.2.4-exec.jar   # the Java one, for comparison
+SP_LOAD_SECONDS=1800 SP_LOAD_WEBSOCKETS=200 ./scripts/load-test.sh   # the soak run
+```
+
+The numbers of the last comparison are in [COMPATIBILITY.md](COMPATIBILITY.md#performance).
+
+## Comparing the whole behaviour with the Java implementation
+
+`scripts/cross-validate.sh` runs one scenario list against the Java ShinyProxy and this implementation and
+diffs the answers; see [COMPATIBILITY.md](COMPATIBILITY.md#cross-validation-against-the-java-implementation).
+
 ## Cross-validating the expression engine against Spring
 
 `tools/spel-crossvalidate/run.sh` evaluates a corpus of 116 expressions with the real Spring Expression

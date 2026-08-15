@@ -45,6 +45,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod load;
+
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};

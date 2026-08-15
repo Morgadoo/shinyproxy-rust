@@ -29,6 +29,9 @@ sha2.workspace = true
 hex.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+# the load generator (`--load-test`) drives the server through HTTP and WebSocket connections
+reqwest.workspace = true
+tokio-tungstenite.workspace = true
 
 [dev-dependencies]
 reqwest.workspace = true

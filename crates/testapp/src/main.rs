@@ -30,6 +30,12 @@ use tokio::net::TcpListener;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    // `--load-test` turns the fixture into the load generator of `scripts/load-test.sh`
+    if args.iter().any(|arg| arg == "--load-test") {
+        return testapp::load::run(testapp::load::Options::from_args(&args)).await;
+    }
+
     let port = port_from_args_or_env();
     let listener = TcpListener::bind(("0.0.0.0", port)).await?;
     testapp::serve(listener).await
