@@ -22,6 +22,7 @@
 //! Services: the stateful components of the engine.
 
 pub mod identifier;
+pub mod logs;
 pub mod parameters;
 pub mod proxy_service;
 pub mod recovery;
@@ -29,6 +30,7 @@ pub mod release;
 pub mod runtime_values;
 
 pub use identifier::Identifiers;
+pub use logs::{LogPaths, LogService};
 pub use parameters::{
     allowed_parameters_for_user, parse_and_validate_request, AllowedParametersForUser,
     InvalidParameters, ParameterName, ParameterNames, ParameterValues,

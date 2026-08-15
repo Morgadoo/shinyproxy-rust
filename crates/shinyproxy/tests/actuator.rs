@@ -242,6 +242,11 @@ async fn prometheus_exposes_the_metrics_of_a_start_and_stop() {
         .expect("json");
     assert_eq!(status["data"]["status"], "Up", "{status}");
 
+    // the exact line that must appear once the app started
+    let started_line = format!(
+        "shinyproxy_appStarts_total{{shinyproxy_instance=\"{}\",shinyproxy_realm=\"\",spec_id=\"01_hello\"}} 1",
+        instance.state.identifiers.instance_id
+    );
     let mut body = String::new();
     for _ in 0..25 {
         body = client
@@ -252,22 +257,18 @@ async fn prometheus_exposes_the_metrics_of_a_start_and_stop() {
             .text()
             .await
             .expect("body");
-        if body.contains("spec_id=\"01_hello\"} 1") {
+        if body.contains(&started_line) {
             break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
+    assert!(body.contains(&started_line), "{body}");
     assert!(
         body.contains(&format!(
-            "shinyproxy_appStarts_total{{shinyproxy_instance=\"{}\",shinyproxy_realm=\"\",spec_id=\"01_hello\"}} 1",
+            "shinyproxy_absolute_apps_running{{shinyproxy_instance=\"{}\",shinyproxy_realm=\"\",spec_id=\"01_hello\"}} 1",
             instance.state.identifiers.instance_id
         )),
-        "{body}"
-    );
-    assert!(
-        body.contains("shinyproxy_absolute_apps_running{")
-            && body.contains("spec_id=\"01_hello\"} 1"),
         "the running app is counted: {body}"
     );
     assert!(
@@ -291,6 +292,10 @@ async fn prometheus_exposes_the_metrics_of_a_start_and_stop() {
         .expect("stop request");
     assert_eq!(response.status(), 200);
 
+    let stopped_line = format!(
+        "shinyproxy_appStops_total{{shinyproxy_instance=\"{}\",shinyproxy_realm=\"\",spec_id=\"01_hello\"}} 1",
+        instance.state.identifiers.instance_id
+    );
     for _ in 0..25 {
         body = client
             .get(instance.url("/actuator/prometheus"))
@@ -300,21 +305,17 @@ async fn prometheus_exposes_the_metrics_of_a_start_and_stop() {
             .text()
             .await
             .expect("body");
-        if body.contains("shinyproxy_appStops_total") && body.contains("spec_id=\"01_hello\"} 1") {
+        if body.contains(&stopped_line) {
             break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+    assert!(body.contains(&stopped_line), "{body}");
     assert!(
         body.contains(&format!(
-            "shinyproxy_appStops_total{{shinyproxy_instance=\"{}\",shinyproxy_realm=\"\",spec_id=\"01_hello\"}} 1",
+            "shinyproxy_usageTime_seconds_count{{shinyproxy_instance=\"{}\",shinyproxy_realm=\"\",spec_id=\"01_hello\"}} 1",
             instance.state.identifiers.instance_id
         )),
-        "{body}"
-    );
-    assert!(
-        body.contains("shinyproxy_usageTime_seconds_count{")
-            && body.contains("spec_id=\"01_hello\"} 1"),
         "the usage time is recorded: {body}"
     );
     assert!(

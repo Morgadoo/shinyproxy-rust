@@ -156,6 +156,14 @@ types. Allow-listed static types: `java.lang.System.getenv`, `java.lang.String.v
 | `/actuator/prometheus` | Same metric names, label keys and values as the Micrometer registry: `appStarts`/`appStops`/`appCrashes`/`startFailed`/`userLogins`/`userLogouts`/`authFailed` counters (`_total`), `absolute_apps_running` and `appInfo` gauges (with the Java status values 1/10/20/30/40/50/100), `startupTime`/`usageTime`/`imagePullTime`/`containerScheduleTime`/`containerStartupTime`/`applicationStartupTime` summaries, the `shinyproxy_instance`/`shinyproxy_realm` labels and the `proxy.usage-stats-micrometer-prefix` prefix | ✅ |
 | Micrometer histogram buckets | Only `_count` and `_sum` are exposed for timers (no quantiles/histograms, which Java only publishes when configured) | 🟨 |
 
+## Container logs
+
+| Topic | Behaviour | Status |
+| --- | --- | --- |
+| `proxy.container-log-path` | The output of every app is written to `{specId}_{proxyId}_{dd_MMM_yyyy_kk_mm_ss}_{stdout,stderr}.log` in that directory (the same names as `FileLogStorage`, including the 1–24 hour of Java's `kk`), attached when the app starts or resumes and detached when it stops or pauses | ✅ |
+| Issue reports | The mail mentions the log files of the app, using the same paths | ✅ |
+| S3 log storage (`container-log-s3-*`) | Not implemented yet; only the filesystem storage exists | ⬜ |
+
 ## Not yet implemented
 
 Everything in [PROGRESS.md](PROGRESS.md) that is not marked ✅. Properties whose behaviour is not

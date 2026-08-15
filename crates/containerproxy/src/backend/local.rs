@@ -52,9 +52,13 @@ pub const NAME: &str = "local";
 #[derive(Debug)]
 pub struct LocalBackend {
     processes: DashMap<String, Vec<Child>>,
+    /// The output of the processes, when the logs are collected.
+    outputs: DashMap<String, Vec<(tokio::process::ChildStdout, tokio::process::ChildStderr)>>,
     port_allocator: Arc<PortAllocator>,
     host: String,
     protocol: String,
+    /// Whether the output of the processes is captured (`proxy.container-log-path` is set).
+    capture_output: bool,
 }
 
 impl LocalBackend {
@@ -62,6 +66,12 @@ impl LocalBackend {
     pub fn new(settings: &Settings, port_allocator: Arc<PortAllocator>) -> Self {
         LocalBackend {
             processes: DashMap::new(),
+            outputs: DashMap::new(),
+            capture_output: settings
+                .proxy
+                .container_log_path
+                .as_deref()
+                .is_some_and(|path| !path.trim().is_empty()),
             port_allocator,
             host: settings.proxy.docker.target_bind_ip().to_string(),
             protocol: settings
@@ -164,12 +174,28 @@ impl ContainerBackend for LocalBackend {
         command.env("PORT", port.to_string());
         command.kill_on_drop(false);
         command.stdin(std::process::Stdio::null());
-        command.stdout(std::process::Stdio::null());
-        command.stderr(std::process::Stdio::null());
+        // the output is only captured when it is collected, so that a process is never blocked on a pipe
+        // nobody reads
+        if self.capture_output {
+            command.stdout(std::process::Stdio::piped());
+            command.stderr(std::process::Stdio::piped());
+        } else {
+            command.stdout(std::process::Stdio::null());
+            command.stderr(std::process::Stdio::null());
+        }
 
-        let child = command.spawn().map_err(|error| {
+        let mut child = command.spawn().map_err(|error| {
             BackendError::FailedToStart(format!("cannot start '{program}': {error}"))
         })?;
+        if self.capture_output {
+            if let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) {
+                self.outputs
+                    .entry(context.proxy.id.clone())
+                    .or_default()
+                    .push((stdout, stderr));
+            }
+        }
+
         let pid = child.id().unwrap_or_default();
         tracing::info!(
             "[local backend] started process {pid} for proxy {} on port {port}",
@@ -197,7 +223,26 @@ impl ContainerBackend for LocalBackend {
         })
     }
 
+    async fn container_logs(
+        &self,
+        proxy: &Proxy,
+        _follow: bool,
+    ) -> Result<Option<super::LogStream>, BackendError> {
+        let Some((_, outputs)) = self.outputs.remove(&proxy.id) else {
+            return Ok(None);
+        };
+        let Some((stdout, stderr)) = outputs.into_iter().next() else {
+            return Ok(None);
+        };
+
+        // the two pipes are read concurrently and their chunks are tagged
+        let stdout = read_pipe(stdout, false);
+        let stderr = read_pipe(stderr, true);
+        Ok(Some(Box::pin(futures::stream::select(stdout, stderr))))
+    }
+
     async fn stop_proxy(&self, proxy: &Proxy) -> Result<(), BackendError> {
+        self.outputs.remove(&proxy.id);
         if let Some((_, children)) = self.processes.remove(&proxy.id) {
             for mut child in children {
                 let pid = child.id();
@@ -247,6 +292,54 @@ impl ContainerBackend for LocalBackend {
         }
         Ok(true)
     }
+}
+
+impl Drop for LocalBackend {
+    /// Stops the processes that are still running.
+    ///
+    /// The backend lives as long as the server, so this only matters when a server shuts down (or when a
+    /// test ends) with apps still running: without it, the app processes would be left behind.
+    fn drop(&mut self) {
+        for mut entry in self.processes.iter_mut() {
+            for child in entry.value_mut().iter_mut() {
+                if let Err(error) = child.start_kill() {
+                    tracing::debug!(
+                        "[local backend] cannot signal process {:?}: {error}",
+                        child.id()
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Turns a pipe of a process into a stream of log chunks.
+fn read_pipe<Pipe>(
+    pipe: Pipe,
+    stderr: bool,
+) -> impl futures::Stream<Item = Result<super::LogChunk, BackendError>> + Send
+where
+    Pipe: tokio::io::AsyncRead + Send + Unpin + 'static,
+{
+    futures::stream::unfold(Some((pipe, vec![0u8; 8192])), move |state| async move {
+        let (mut pipe, mut buffer) = state?;
+        match tokio::io::AsyncReadExt::read(&mut pipe, &mut buffer).await {
+            Ok(0) => None,
+            Ok(read) => {
+                let chunk = super::LogChunk {
+                    stderr,
+                    data: buffer[..read].to_vec(),
+                };
+                Some((Ok(chunk), Some((pipe, buffer))))
+            }
+            Err(error) => Some((
+                Err(BackendError::Backend(format!(
+                    "cannot read the output of the process: {error}"
+                ))),
+                None,
+            )),
+        }
+    })
 }
 
 /// Resolves the program to start: `sp-testapp` and other siblings of this executable are found next to

@@ -87,6 +87,19 @@ pub struct ExistingContainerInfo {
     pub port_bindings: BTreeMap<u16, u16>,
 }
 
+/// One chunk of the output of a container.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogChunk {
+    /// Whether the chunk was written to the standard error.
+    pub stderr: bool,
+    /// The bytes the container wrote.
+    pub data: Vec<u8>,
+}
+
+/// The output of the containers of a proxy.
+pub type LogStream =
+    std::pin::Pin<Box<dyn futures::Stream<Item = Result<LogChunk, BackendError>> + Send>>;
+
 /// Errors of a container backend.
 #[derive(Debug, thiserror::Error)]
 pub enum BackendError {
@@ -152,6 +165,18 @@ pub trait ContainerBackend: Send + Sync + std::fmt::Debug {
     /// Whether the containers of the proxy are still running.
     async fn is_proxy_healthy(&self, _proxy: &Proxy) -> Result<bool, BackendError> {
         Ok(true)
+    }
+
+    /// The output of the containers of a proxy, used by the log service.
+    ///
+    /// `follow` keeps the stream open while the app runs. `None` means that this backend cannot provide
+    /// the output (the Java implementation logs "no output streams defined" in that case).
+    async fn container_logs(
+        &self,
+        _proxy: &Proxy,
+        _follow: bool,
+    ) -> Result<Option<LogStream>, BackendError> {
+        Ok(None)
     }
 
     /// Containers that already exist, used by app recovery.

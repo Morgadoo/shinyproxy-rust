@@ -39,6 +39,18 @@ pub struct TestInstance {
     handle: tokio::task::JoinHandle<()>,
 }
 
+/// A port range that no other test instance uses.
+///
+/// The base is derived from the process id (test binaries run in parallel) and a counter (tests within a
+/// binary run in parallel as well).
+fn unique_port_range() -> (u16, u16) {
+    static COUNTER: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+    let index = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let process_offset = (std::process::id() % 150) as u16 * 200;
+    let start = 20_000 + process_offset + (index % 20) * 10;
+    (start, start + 9)
+}
+
 /// Sends the log output of the server to the test output, so that `cargo test -- --nocapture` (and the
 /// output of a failing test) shows what the server logged. Enable with `RUST_LOG=info`.
 fn init_logging() {
@@ -70,6 +82,13 @@ impl TestInstance {
         if settings.proxy.container_backend.is_none() {
             settings.proxy.container_backend = Some("local".to_string());
         }
+        // every instance gets its own port range, so that tests (which run in parallel, in several test
+        // binaries) never hand out the same host port twice
+        let (range_start, range_max) = unique_port_range();
+        settings.proxy.docker.port_range_start =
+            Some(containerproxy::config::FlexI64(range_start as i64));
+        settings.proxy.docker.port_range_max =
+            Some(containerproxy::config::FlexI64(range_max as i64));
         let state = Arc::new(AppState::new(raw, settings).expect("state"));
         // the same startup sequence as `main`: recovery runs before requests are served
         state

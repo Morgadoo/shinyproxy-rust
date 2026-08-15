@@ -910,6 +910,37 @@ impl ContainerBackend for DockerBackend {
         Ok(true)
     }
 
+    async fn container_logs(
+        &self,
+        proxy: &Proxy,
+        follow: bool,
+    ) -> Result<Option<super::LogStream>, BackendError> {
+        // like the Java implementation, the output of the first container is collected
+        let Some(id) = proxy
+            .containers
+            .first()
+            .and_then(|container| container.id.clone())
+        else {
+            return Ok(None);
+        };
+
+        let options = LogsOptionsBuilder::new()
+            .follow(follow)
+            .stdout(true)
+            .stderr(true)
+            .build();
+        let stream = self.client.logs(&id, Some(options)).map(|item| match item {
+            Ok(output) => Ok(super::LogChunk {
+                stderr: matches!(output, bollard::container::LogOutput::StdErr { .. }),
+                data: output.into_bytes().to_vec(),
+            }),
+            Err(error) => Err(BackendError::Backend(format!(
+                "cannot read the logs of the container: {error}"
+            ))),
+        });
+        Ok(Some(Box::pin(stream)))
+    }
+
     async fn scan_existing_containers(&self) -> Result<Vec<ExistingContainerInfo>, BackendError> {
         let options = ListContainersOptionsBuilder::new().all(true).build();
         let containers = self
@@ -984,21 +1015,6 @@ impl DockerBackend {
             .config
             .and_then(|config| config.hostname)
             .unwrap_or_else(|| id.to_string()))
-    }
-
-    /// The logs of a container, used by the log service.
-    pub async fn container_logs(
-        &self,
-        id: &str,
-        follow: bool,
-    ) -> impl futures::Stream<Item = Result<bollard::container::LogOutput, bollard::errors::Error>>
-    {
-        let options = LogsOptionsBuilder::new()
-            .follow(follow)
-            .stdout(true)
-            .stderr(true)
-            .build();
-        self.client.logs(id, Some(options))
     }
 }
 

@@ -32,8 +32,8 @@ use containerproxy::events::EventBus;
 use containerproxy::model::runtime_value::{RuntimeValue, RuntimeValueRegistry};
 use containerproxy::model::spec::ProxySpec;
 use containerproxy::service::{
-    AllowedParametersForUser, AppRecoveryService, Identifiers, ParameterValues, ProxyService,
-    ReleaseService,
+    AllowedParametersForUser, AppRecoveryService, Identifiers, LogService, ParameterValues,
+    ProxyService, ReleaseService,
 };
 use containerproxy::spec::expression::{ExpressionContextBuilder, SpelResolver};
 use containerproxy::spec::SpecProvider;
@@ -78,6 +78,8 @@ pub struct AppState {
     pub release: Arc<ReleaseService>,
     /// Usage statistics of this server (`/actuator/prometheus`).
     pub metrics: Arc<Metrics>,
+    /// Collects the output of the containers (`proxy.container-log-path`).
+    pub logs: Arc<LogService>,
     /// Open WebSocket tunnels (`/actuator/recyclable`).
     pub websockets: Arc<WebSocketCounter>,
     /// All known runtime value keys (engine + ShinyProxy).
@@ -168,6 +170,9 @@ impl AppState {
                 .collect();
             metrics.register_spec(&spec.id, &indexes);
         }
+        let logs = Arc::new(LogService::new(&settings));
+        logs.initialize();
+
         let release = Arc::new(ReleaseService::new(
             &settings,
             proxies.clone(),
@@ -190,6 +195,7 @@ impl AppState {
             recovery,
             release,
             metrics,
+            logs,
             websockets: Arc::new(WebSocketCounter::new()),
             backend,
             runtime_values: (*runtime_values).clone(),
@@ -203,8 +209,11 @@ impl AppState {
     /// `AppRecoveryFilter`. Called by `main` and by the test harness, so that both go through the same
     /// startup sequence.
     pub fn spawn_startup_tasks(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
-        // the metrics follow the events of the server (this needs a runtime, hence not in `new`)
+        // the metrics and the container logs follow the events of the server (this needs a runtime,
+        // hence not in `new`)
         self.metrics.subscribe(self.proxies.events());
+        self.logs
+            .subscribe(self.proxies.events(), self.backend.clone());
 
         let state = self.clone();
         tokio::spawn(async move {
