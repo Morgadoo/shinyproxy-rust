@@ -761,6 +761,72 @@ impl SessionSettings {
             .as_deref()
             .is_some_and(|value| value.eq_ignore_ascii_case("redis"))
     }
+
+    /// How long a session lives without being used (`spring.session.timeout`, 30 minutes by default).
+    ///
+    /// Spring reads the value as a `Duration`: a number is a number of seconds, and the suffixes `ms`,
+    /// `s`, `m`, `h` and `d` are supported.
+    pub fn timeout_duration(&self) -> std::time::Duration {
+        const DEFAULT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+        let Some(value) = self.timeout.as_deref().map(str::trim) else {
+            return DEFAULT;
+        };
+        parse_spring_duration(value).unwrap_or(DEFAULT)
+    }
+}
+
+/// Parses a Spring `Duration` property (`30m`, `1h`, `500ms`, or a number of seconds).
+pub fn parse_spring_duration(value: &str) -> Option<std::time::Duration> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    // ISO-8601 durations are accepted by Spring as well
+    if let Some(rest) = value
+        .strip_prefix("PT")
+        .or_else(|| value.strip_prefix("pt"))
+    {
+        let mut seconds = 0f64;
+        let mut number = String::new();
+        for character in rest.chars() {
+            match character.to_ascii_lowercase() {
+                digit if digit.is_ascii_digit() || digit == '.' => number.push(digit),
+                'h' => {
+                    seconds += number.parse::<f64>().ok()? * 3600.0;
+                    number.clear();
+                }
+                'm' => {
+                    seconds += number.parse::<f64>().ok()? * 60.0;
+                    number.clear();
+                }
+                's' => {
+                    seconds += number.parse::<f64>().ok()?;
+                    number.clear();
+                }
+                _ => return None,
+            }
+        }
+        return Some(std::time::Duration::from_secs_f64(seconds));
+    }
+
+    let (number, multiplier) = if let Some(number) = value.strip_suffix("ms") {
+        (number, 0.001)
+    } else if let Some(number) = value.strip_suffix('s') {
+        (number, 1.0)
+    } else if let Some(number) = value.strip_suffix('m') {
+        (number, 60.0)
+    } else if let Some(number) = value.strip_suffix('h') {
+        (number, 3600.0)
+    } else if let Some(number) = value.strip_suffix('d') {
+        (number, 86400.0)
+    } else {
+        (value, 1.0)
+    };
+    let number: f64 = number.trim().parse().ok()?;
+    if number < 0.0 {
+        return None;
+    }
+    Some(std::time::Duration::from_secs_f64(number * multiplier))
 }
 
 /// `spring.session.redis.*`
@@ -1049,5 +1115,56 @@ mod tests {
     fn accepts_ecs_cloudwatch_alias() {
         let settings = parse("proxy:\n  ecs:\n    enable-cloudwatch: true\n");
         assert_eq!(settings.proxy.ecs.enable_cloud_watch, Some(FlexBool(true)));
+    }
+}
+
+#[cfg(test)]
+mod session_timeout_tests {
+    use super::*;
+
+    #[test]
+    fn parses_the_session_timeout_like_spring() {
+        // the default of Spring Boot
+        assert_eq!(
+            SessionSettings::default().timeout_duration(),
+            std::time::Duration::from_secs(1800)
+        );
+
+        for (value, expected) in [
+            ("3600", 3600),
+            ("3600s", 3600),
+            ("30m", 1800),
+            ("2h", 7200),
+            ("1d", 86400),
+            ("PT30M", 1800),
+            ("PT1H30M", 5400),
+        ] {
+            let settings = SessionSettings {
+                timeout: Some(value.to_string()),
+                ..SessionSettings::default()
+            };
+            assert_eq!(
+                settings.timeout_duration(),
+                std::time::Duration::from_secs(expected),
+                "{value}"
+            );
+        }
+
+        // milliseconds and nonsense
+        assert_eq!(
+            parse_spring_duration("500ms"),
+            Some(std::time::Duration::from_millis(500))
+        );
+        assert_eq!(parse_spring_duration("nonsense"), None);
+        assert_eq!(parse_spring_duration(""), None);
+        // an unreadable value falls back to the default
+        let settings = SessionSettings {
+            timeout: Some("nonsense".to_string()),
+            ..SessionSettings::default()
+        };
+        assert_eq!(
+            settings.timeout_duration(),
+            std::time::Duration::from_secs(1800)
+        );
     }
 }

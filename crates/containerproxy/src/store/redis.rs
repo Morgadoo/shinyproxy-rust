@@ -144,6 +144,16 @@ impl RedisStores {
         }
     }
 
+    /// The session store of these stores.
+    pub fn session_store(
+        &self,
+        realm_id: Option<&str>,
+        version: &str,
+        session_timeout: std::time::Duration,
+    ) -> RedisSessionStore {
+        RedisSessionStore::new(self.clone(), realm_id, version, session_timeout)
+    }
+
     /// The leader lock of these stores.
     pub fn leader_lock(&self) -> RedisLock {
         RedisLock::leader(self.clone())
@@ -373,6 +383,234 @@ impl crate::backend::ports::PortRegistry for RedisPortRegistry {
             return;
         };
         let _: Result<(), _> = connection.hdel(self.stores.ports_key(), owner_id);
+    }
+}
+
+/// Keeps the HTTP sessions in Redis (`RedisSessionConfig` + Spring Session).
+///
+/// With `spring.session.store-type: redis` the sessions of the servers of a realm are shared, so a user
+/// reaches their app through any of them. The keys live under
+/// `shinyproxy__{realmId}__{version}__spring:session:sessions:{id}`, like the namespace the Java
+/// implementation configures, but the value is the JSON of this implementation: Spring Session writes a
+/// Redis hash with Java serialised attributes, which cannot be read here (documented in
+/// `docs/COMPATIBILITY.md` — sessions are lost when migrating from the Java implementation).
+#[derive(Debug, Clone)]
+pub struct RedisSessionStore {
+    stores: RedisStores,
+    namespace: String,
+    /// How long a session lives without being used; needed to derive the last use from the expiry.
+    session_timeout: time::Duration,
+}
+
+impl RedisSessionStore {
+    /// Creates the store for a realm and a version of ShinyProxy.
+    ///
+    /// The namespace is the one `RedisSessionConfig` builds: the realm and the version of the server, with
+    /// Spring Session's default namespace behind it.
+    pub fn new(
+        stores: RedisStores,
+        realm_id: Option<&str>,
+        version: &str,
+        session_timeout: std::time::Duration,
+    ) -> Self {
+        let version = version.replace(['.', '-'], "_");
+        let namespace = match realm_id.filter(|realm| !realm.is_empty()) {
+            Some(realm) => {
+                format!("shinyproxy__{realm}__{version}__spring:session:sessions")
+            }
+            None => format!("shinyproxy__{version}__spring:session:sessions"),
+        };
+        RedisSessionStore {
+            stores,
+            namespace,
+            session_timeout: time::Duration::try_from(session_timeout)
+                .unwrap_or(time::Duration::hours(1)),
+        }
+    }
+
+    /// The key of a session.
+    fn key(&self, id: &tower_sessions::session::Id) -> String {
+        format!("{}:{}", self.namespace, id)
+    }
+
+    /// The namespace of the sessions (used by tests).
+    pub fn namespace(&self) -> &str {
+        &self.namespace
+    }
+}
+
+#[async_trait::async_trait]
+impl tower_sessions::SessionStore for RedisSessionStore {
+    async fn create(
+        &self,
+        record: &mut tower_sessions::session::Record,
+    ) -> tower_sessions::session_store::Result<()> {
+        // a new id until one is free, so that two servers never share a session by accident
+        loop {
+            let key = self.key(&record.id);
+            let document = serde_json::to_string(record)
+                .map_err(|error| tower_sessions::session_store::Error::Encode(error.to_string()))?;
+            let mut connection = self.connection().await?;
+            let created: bool = redis::cmd("SET")
+                .arg(&key)
+                .arg(document)
+                .arg("NX")
+                .arg("EXAT")
+                .arg(record.expiry_date.unix_timestamp())
+                .query_async(&mut connection)
+                .await
+                .map_err(|error| {
+                    tower_sessions::session_store::Error::Backend(error.to_string())
+                })?;
+            if created {
+                return Ok(());
+            }
+            record.id = tower_sessions::session::Id::default();
+        }
+    }
+
+    async fn save(
+        &self,
+        record: &tower_sessions::session::Record,
+    ) -> tower_sessions::session_store::Result<()> {
+        let document = serde_json::to_string(record)
+            .map_err(|error| tower_sessions::session_store::Error::Encode(error.to_string()))?;
+        let mut connection = self.connection().await?;
+        let _: () = redis::cmd("SET")
+            .arg(self.key(&record.id))
+            .arg(document)
+            .arg("EXAT")
+            .arg(record.expiry_date.unix_timestamp())
+            .query_async(&mut connection)
+            .await
+            .map_err(|error| tower_sessions::session_store::Error::Backend(error.to_string()))?;
+        Ok(())
+    }
+
+    async fn load(
+        &self,
+        id: &tower_sessions::session::Id,
+    ) -> tower_sessions::session_store::Result<Option<tower_sessions::session::Record>> {
+        let mut connection = self.connection().await?;
+        let document: Option<String> = redis::cmd("GET")
+            .arg(self.key(id))
+            .query_async(&mut connection)
+            .await
+            .map_err(|error| tower_sessions::session_store::Error::Backend(error.to_string()))?;
+        let Some(document) = document else {
+            return Ok(None);
+        };
+        match serde_json::from_str(&document) {
+            Ok(record) => Ok(Some(record)),
+            Err(error) => {
+                // a session this server cannot read (e.g. written by another implementation) is
+                // treated as absent, so the user simply logs in again
+                tracing::debug!("ignoring an unreadable session in Redis: {error}");
+                Ok(None)
+            }
+        }
+    }
+
+    async fn delete(
+        &self,
+        id: &tower_sessions::session::Id,
+    ) -> tower_sessions::session_store::Result<()> {
+        let mut connection = self.connection().await?;
+        let _: () = redis::cmd("DEL")
+            .arg(self.key(id))
+            .query_async(&mut connection)
+            .await
+            .map_err(|error| tower_sessions::session_store::Error::Backend(error.to_string()))?;
+        Ok(())
+    }
+}
+
+impl RedisSessionStore {
+    /// Counts the users of the sessions of this realm (`updateCachedUsersLoggedInCount`).
+    ///
+    /// Returns the number of users that are logged in and the number that used their session inside
+    /// `active_window`. The last use of a session is derived from its expiry: `tower-sessions` moves the
+    /// expiry forward on every request, so `expiry - timeout` is the time it was last used.
+    pub async fn count_users(
+        &self,
+        active_window: std::time::Duration,
+    ) -> Result<(i64, i64), String> {
+        let mut connection = self
+            .stores
+            .client
+            .get_multiplexed_async_connection()
+            .await
+            .map_err(|error| error.to_string())?;
+
+        // SCAN instead of KEYS, which the Java implementation warns about
+        let pattern = format!("{}:*", self.namespace);
+        let mut cursor: u64 = 0;
+        let mut logged_in: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut active: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let now = time::OffsetDateTime::now_utc();
+
+        loop {
+            let (next, keys): (u64, Vec<String>) = redis::cmd("SCAN")
+                .arg(cursor)
+                .arg("MATCH")
+                .arg(&pattern)
+                .arg("COUNT")
+                .arg(100)
+                .query_async(&mut connection)
+                .await
+                .map_err(|error| error.to_string())?;
+
+            for key in keys {
+                let document: Option<String> = redis::cmd("GET")
+                    .arg(&key)
+                    .query_async(&mut connection)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let Some(document) = document else { continue };
+                let Ok(record) = serde_json::from_str::<tower_sessions::session::Record>(&document)
+                else {
+                    continue;
+                };
+
+                // the user of the session, when it is authenticated
+                let data = record
+                    .data
+                    .get("shinyproxy")
+                    .and_then(|value| {
+                        serde_json::from_value::<crate::web::session::SessionData>(value.clone())
+                            .ok()
+                    })
+                    .unwrap_or_default();
+                let Some(user) = data.user.map(|user| user.id) else {
+                    continue;
+                };
+
+                logged_in.insert(user.clone());
+                // the remaining life of the session tells when it was last used
+                let remaining = record.expiry_date - now;
+                if remaining > self.session_timeout - active_window {
+                    active.insert(user);
+                }
+            }
+
+            cursor = next;
+            if cursor == 0 {
+                break;
+            }
+        }
+
+        Ok((logged_in.len() as i64, active.len() as i64))
+    }
+
+    /// An asynchronous connection to Redis.
+    async fn connection(
+        &self,
+    ) -> tower_sessions::session_store::Result<redis::aio::MultiplexedConnection> {
+        self.stores
+            .client
+            .get_multiplexed_async_connection()
+            .await
+            .map_err(|error| tower_sessions::session_store::Error::Backend(error.to_string()))
     }
 }
 

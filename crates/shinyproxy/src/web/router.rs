@@ -315,6 +315,13 @@ async fn authorize(
     }
 
     let user = data.user.clone();
+    // the session service counts the users that are logged in (`absolute_users_logged_in`) and those that
+    // used their session in the last minute; with Redis sessions the counts are scanned from Redis instead
+    if let Some(user) = &user {
+        state
+            .sessions
+            .touch(&session::session_id(&session), &user.id);
+    }
     request.extensions_mut().insert(CurrentUser(user.clone()));
 
     if !is_public_path(&path, &state.identifiers.instance_id) {
@@ -616,6 +623,7 @@ async fn logout(State(state): State<Arc<AppState>>, session: Session) -> Respons
     let mut data = data;
     data.user_initiated_logout = true;
     data.user = None;
+    state.sessions.forget(&session::session_id(&session));
     data.store(&session).await;
     let _ = session.flush().await;
     Redirect::to(&format!(

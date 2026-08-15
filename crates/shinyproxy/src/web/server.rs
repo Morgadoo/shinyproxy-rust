@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use axum::Router;
 use containerproxy::web::session;
-use tower_sessions::{MemoryStore, SessionManagerLayer};
+use tower_sessions::{Expiry, MemoryStore, SessionManagerLayer};
 
 use super::state::AppState;
 
@@ -36,13 +36,33 @@ pub fn build(state: Arc<AppState>) -> Router {
     let cookie_name = session::cookie_name(state.settings.spring.session.is_redis()).to_string();
     let context_path = state.context_path_with_slash();
 
-    // Sessions are kept in memory; Redis backed sessions follow in P12.
-    let session_layer = SessionManagerLayer::new(MemoryStore::default())
-        .with_name(cookie_name)
-        .with_path(context_path)
-        .with_http_only(true)
-        .with_secure(secure_cookies)
-        .with_same_site(same_site);
+    // sessions live in Redis when Spring Session is configured that way, so that the servers of a realm
+    // share them (`spring.session.store-type: redis`), and in memory otherwise
+    let expiry = Expiry::OnInactivity(
+        time::Duration::try_from(state.settings.spring.session.timeout_duration())
+            .unwrap_or(time::Duration::minutes(30)),
+    );
 
-    super::router::router(state).layer(session_layer)
+    match state.session_store.clone() {
+        Some(store) => {
+            let session_layer = SessionManagerLayer::new(store)
+                .with_name(cookie_name)
+                .with_path(context_path)
+                .with_http_only(true)
+                .with_secure(secure_cookies)
+                .with_same_site(same_site)
+                .with_expiry(expiry);
+            super::router::router(state).layer(session_layer)
+        }
+        None => {
+            let session_layer = SessionManagerLayer::new(MemoryStore::default())
+                .with_name(cookie_name)
+                .with_path(context_path)
+                .with_http_only(true)
+                .with_secure(secure_cookies)
+                .with_same_site(same_site)
+                .with_expiry(expiry);
+            super::router::router(state).layer(session_layer)
+        }
+    }
 }

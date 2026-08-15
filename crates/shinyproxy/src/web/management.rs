@@ -147,6 +147,22 @@ pub async fn prometheus(State(state): State<Arc<AppState>>) -> Response {
     state
         .metrics
         .update_running_apps(&state.store.all_proxies());
+    // the users that are logged in are counted by the session service (`absolute_users_logged_in` and
+    // `absolute_users_active` in the Java implementation)
+    if let Some(count) = state.sessions.logged_in_users().await {
+        state.metrics.set_gauge(
+            "absolute_users_logged_in",
+            std::collections::BTreeMap::new(),
+            count as f64,
+        );
+    }
+    if let Some(count) = state.sessions.active_users().await {
+        state.metrics.set_gauge(
+            "absolute_users_active",
+            std::collections::BTreeMap::new(),
+            count as f64,
+        );
+    }
     (
         [(
             axum::http::header::CONTENT_TYPE,

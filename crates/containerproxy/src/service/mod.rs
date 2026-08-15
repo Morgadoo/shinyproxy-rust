@@ -29,6 +29,7 @@ pub mod proxy_service;
 pub mod recovery;
 pub mod release;
 pub mod runtime_values;
+pub mod sessions;
 
 pub use identifier::Identifiers;
 pub use leader::{LeaderService, MemoryLeaderService, RedisLeaderService};
@@ -41,3 +42,4 @@ pub use proxy_service::{ProxyService, StartError};
 pub use recovery::AppRecoveryService;
 pub use release::{ReleaseService, ReleaseStrategy};
 pub use runtime_values::{PortMappings, RuntimeValueService};
+pub use sessions::{MemorySessionService, RedisSessionService, SessionService, ACTIVE_WINDOW};

@@ -88,6 +88,12 @@ pub struct AppState {
     pub leader: Arc<dyn containerproxy::service::LeaderService>,
     /// The Redis leader election, when this server takes part in one.
     redis_leader: Option<Arc<containerproxy::service::RedisLeaderService>>,
+    /// Counts the users that are logged in (`absolute_users_logged_in`).
+    pub sessions: Arc<dyn containerproxy::service::SessionService>,
+    /// The Redis session service, when the sessions live in Redis (it refreshes its counts on a timer).
+    redis_sessions: Option<Arc<containerproxy::service::RedisSessionService>>,
+    /// The Redis session store, used by the session layer of the server.
+    pub session_store: Option<containerproxy::store::RedisSessionStore>,
     /// Usage statistics of this server (`/actuator/prometheus`).
     pub metrics: Arc<Metrics>,
     /// Collects the output of the containers (`proxy.container-log-path`).
@@ -168,7 +174,9 @@ impl AppState {
         let runtime_values = Arc::new(
             RuntimeValueRegistry::engine().with_keys(crate::runtime_values::SHINYPROXY_KEYS),
         );
-        // `proxy.store-mode: Redis` shares the state with the other servers of the realm
+        // `proxy.store-mode: Redis` shares the state with the other servers of the realm, and
+        // `spring.session.store-type: redis` shares the sessions; both need a connection
+        let redis_sessions_wanted = settings.spring.session.is_redis();
         let mut port_registry: Option<Box<dyn containerproxy::backend::ports::PortRegistry>> = None;
         let mut redis_stores: Option<RedisStores> = None;
         let (store, heartbeats): (Arc<dyn ProxyStore>, Arc<dyn HeartbeatStore>) =
@@ -192,6 +200,18 @@ impl AppState {
                     Arc::new(stores.heartbeat_store()),
                 )
             } else {
+                if redis_sessions_wanted {
+                    // the sessions live in Redis even though the apps are kept in memory
+                    let url = RedisStores::url_of(&settings);
+                    let stores = RedisStores::connect(
+                        &url,
+                        identifiers.realm_id.as_deref(),
+                        runtime_values.clone(),
+                    )
+                    .map_err(StateError::Store)?;
+                    tracing::info!("Using Redis for the sessions ({url})");
+                    redis_stores = Some(stores);
+                }
                 (
                     Arc::new(MemoryProxyStore::new(
                         settings.proxy.username_case_sensitive(),
@@ -269,6 +289,34 @@ impl AppState {
             ),
         };
 
+        // the sessions of a realm are shared through Redis when Spring Session is configured that way
+        let session_timeout = settings.spring.session.timeout_duration();
+        let session_store = match (&redis_stores, redis_sessions_wanted) {
+            (Some(stores), true) => Some(stores.session_store(
+                identifiers.realm_id.as_deref(),
+                crate::VERSION,
+                session_timeout,
+            )),
+            _ => None,
+        };
+        let (sessions, redis_sessions): (
+            Arc<dyn containerproxy::service::SessionService>,
+            Option<Arc<containerproxy::service::RedisSessionService>>,
+        ) = match &session_store {
+            Some(store) => {
+                let service = Arc::new(containerproxy::service::RedisSessionService::new(
+                    store.clone(),
+                ));
+                (service.clone(), Some(service))
+            }
+            None => (
+                Arc::new(containerproxy::service::MemorySessionService::new(
+                    session_timeout,
+                )),
+                None,
+            ),
+        };
+
         let release = Arc::new(ReleaseService::new(
             &settings,
             proxies.clone(),
@@ -299,6 +347,9 @@ impl AppState {
             release,
             leader,
             redis_leader,
+            sessions,
+            redis_sessions,
+            session_store,
             metrics,
             logs,
             websockets: Arc::new(WebSocketCounter::new()),
@@ -322,6 +373,11 @@ impl AppState {
             self.backend.clone(),
             self.leader.clone(),
         );
+
+        // the counts of logged in users are refreshed on a timer when they come from Redis
+        if let Some(sessions) = &self.redis_sessions {
+            sessions.clone().spawn_refresh();
+        }
 
         // take part in the leader election (and become the leader immediately when this server is alone)
         if let Some(election) = &self.redis_leader {

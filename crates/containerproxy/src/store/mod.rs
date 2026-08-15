@@ -31,7 +31,10 @@ use crate::model::proxy::Proxy;
 pub mod redis;
 
 pub use memory::{MemoryHeartbeatStore, MemoryProxyStore};
-pub use redis::{RedisHeartbeatStore, RedisLock, RedisPortRegistry, RedisProxyStore, RedisStores};
+pub use redis::{
+    RedisHeartbeatStore, RedisLock, RedisPortRegistry, RedisProxyStore, RedisSessionStore,
+    RedisStores,
+};
 
 /// Keeps track of the running proxies.
 pub trait ProxyStore: Send + Sync + std::fmt::Debug {

@@ -379,3 +379,92 @@ async fn the_management_server_serves_the_same_endpoints() {
     server.abort();
     instance.stop();
 }
+
+#[tokio::test]
+async fn prometheus_counts_the_users_that_are_logged_in() {
+    let instance = TestInstance::start(CONFIG).await;
+
+    // nobody is logged in yet
+    let body = instance
+        .client()
+        .get(instance.url("/actuator/prometheus"))
+        .send()
+        .await
+        .expect("request")
+        .text()
+        .await
+        .expect("body");
+    let instance_id = instance.state.identifiers.instance_id.clone();
+    let logged_in = format!(
+        "shinyproxy_absolute_users_logged_in{{shinyproxy_instance=\"{instance_id}\",shinyproxy_realm=\"\"}}"
+    );
+    let active = format!(
+        "shinyproxy_absolute_users_active{{shinyproxy_instance=\"{instance_id}\",shinyproxy_realm=\"\"}}"
+    );
+    assert!(body.contains(&format!("{logged_in} 0")), "{body}");
+    assert!(body.contains(&format!("{active} 0")), "{body}");
+    assert!(
+        body.contains("# TYPE shinyproxy_absolute_users_logged_in gauge"),
+        "{body}"
+    );
+
+    // after a login the user is counted, and counted as active because the session was just used
+    let jack = instance.login("jack", "password").await;
+    jack.get(instance.url("/"))
+        .send()
+        .await
+        .expect("index request");
+
+    let body = instance
+        .client()
+        .get(instance.url("/actuator/prometheus"))
+        .send()
+        .await
+        .expect("request")
+        .text()
+        .await
+        .expect("body");
+    assert!(body.contains(&format!("{logged_in} 1")), "{body}");
+    assert!(body.contains(&format!("{active} 1")), "{body}");
+
+    // a second browser of the same user does not count twice
+    let jack_again = instance.login("jack", "password").await;
+    jack_again
+        .get(instance.url("/"))
+        .send()
+        .await
+        .expect("index request");
+    let body = instance
+        .client()
+        .get(instance.url("/actuator/prometheus"))
+        .send()
+        .await
+        .expect("request")
+        .text()
+        .await
+        .expect("body");
+    assert!(body.contains(&format!("{logged_in} 1")), "{body}");
+
+    // signing out removes the user again
+    jack.get(instance.url("/logout"))
+        .send()
+        .await
+        .expect("logout");
+    jack_again
+        .get(instance.url("/logout"))
+        .send()
+        .await
+        .expect("logout");
+    let body = instance
+        .client()
+        .get(instance.url("/actuator/prometheus"))
+        .send()
+        .await
+        .expect("request")
+        .text()
+        .await
+        .expect("body");
+    assert!(body.contains(&format!("{logged_in} 0")), "{body}");
+
+    instance.stop();
+}

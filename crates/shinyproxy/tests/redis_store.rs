@@ -412,3 +412,101 @@ proxy:
     alone.stop();
     clear_realm(&realm);
 }
+
+#[tokio::test]
+async fn two_servers_share_their_sessions() {
+    if !enabled() {
+        eprintln!("skipping: set SP_TEST_REDIS=1 (and run a Redis) to run the Redis tests");
+        return;
+    }
+
+    let realm = format!("session-{}", std::process::id());
+    clear_realm(&realm);
+
+    // `spring.session.store-type: redis` puts the sessions in Redis, so a user that logged in on one
+    // server is known by the other one (and the cookie is named SESSION, like Spring Session's default)
+    let configuration = format!(
+        "{}\nspring:\n  session:\n    store-type: redis\n    timeout: 30m\n",
+        config(&realm)
+    );
+    let first = TestInstance::start(&configuration).await;
+    let second = TestInstance::start(&configuration).await;
+
+    let jack = first.login("jack", "password").await;
+    let cookie = first.session_cookie(&jack).expect("session cookie");
+    assert!(
+        cookie.starts_with("SESSION="),
+        "Redis sessions use the SESSION cookie: {cookie}"
+    );
+
+    // the same session works on the second server: its index page shows the user, no login redirect
+    let response = jack
+        .get(second.url("/"))
+        .send()
+        .await
+        .expect("index request");
+    assert_eq!(response.status(), 200);
+    let body = response.text().await.expect("body");
+    assert!(
+        body.contains("Hello Application"),
+        "the second server must accept the session: {body}"
+    );
+    assert!(body.contains("href=\"/logout\""), "{body}");
+
+    // an app started through the second server belongs to the same user
+    let proxy_id = start_app(&second, &jack).await;
+    let proxies: serde_json::Value = jack
+        .get(first.url("/api/proxy"))
+        .send()
+        .await
+        .expect("api request")
+        .json()
+        .await
+        .expect("json");
+    let entries = proxies["data"].as_array().expect("array");
+    assert_eq!(entries.len(), 1, "{proxies}");
+    assert_eq!(entries[0]["id"], proxy_id.as_str());
+    assert_eq!(entries[0]["userId"], "jack");
+
+    // the session keys live in the namespace of the realm, like RedisSessionConfig builds it
+    let store = first
+        .state
+        .session_store
+        .clone()
+        .expect("the session store is Redis backed");
+    assert!(
+        store
+            .namespace()
+            .starts_with(&format!("shinyproxy__{realm}__")),
+        "unexpected namespace: {}",
+        store.namespace()
+    );
+    assert!(store.namespace().ends_with("spring:session:sessions"));
+
+    // and the session service counts the user of the realm (this is what feeds the gauges)
+    let (logged_in, active) = store
+        .count_users(std::time::Duration::from_secs(60))
+        .await
+        .expect("counts");
+    assert_eq!(logged_in, 1, "one user is logged in");
+    assert_eq!(active, 1, "and used the session just now");
+
+    // signing out on one server ends the session on both
+    let response = jack.get(first.url("/logout")).send().await.expect("logout");
+    assert_eq!(response.status(), 303);
+    let response = jack
+        .get(second.url("/api/proxy"))
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .expect("api request");
+    assert_eq!(
+        response.status(),
+        401,
+        "the session must be gone on the second server too"
+    );
+
+    first.stop();
+    second.stop();
+    clear_realm(&realm);
+}
