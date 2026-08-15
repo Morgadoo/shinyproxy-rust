@@ -51,6 +51,16 @@ pub trait SessionService: Send + Sync + std::fmt::Debug {
     /// Forgets a session (used when a user signs out).
     fn forget(&self, _session_id: &str) {}
 
+    /// Whether the expiry of this session should be written again.
+    ///
+    /// Spring Session writes the last access time of a session on every request. Writing the session on every
+    /// request costs a serialisation (and a Redis round trip in a high availability setup), so the expiry is
+    /// only moved when a quarter of the timeout has passed since the last time — the session still never
+    /// expires while it is used, and a request costs nothing extra.
+    fn should_refresh_expiry(&self, _session_id: &str, _timeout: Duration) -> bool {
+        true
+    }
+
     /// Keeps a session alive while its app is used (`SessionReActivatorService`).
     ///
     /// The heartbeats of an app come from the browser through a WebSocket, so a user that only looks at
@@ -63,6 +73,8 @@ pub trait SessionService: Send + Sync + std::fmt::Debug {
 pub struct MemorySessionService {
     /// Session id to the user and the time it was last used (epoch millis).
     sessions: DashMap<String, (String, i64)>,
+    /// When the expiry of a session was last written (epoch millis), for [`should_refresh_expiry`].
+    refreshed: DashMap<String, i64>,
     /// How long a session lives without being used.
     timeout: Duration,
 }
@@ -72,6 +84,7 @@ impl MemorySessionService {
     pub fn new(timeout: Duration) -> Self {
         MemorySessionService {
             sessions: DashMap::new(),
+            refreshed: DashMap::new(),
             timeout,
         }
     }
@@ -81,6 +94,20 @@ impl MemorySessionService {
         let deadline = crate::model::proxy::now_millis() - self.timeout.as_millis() as i64;
         self.sessions
             .retain(|_, (_, last_used)| *last_used > deadline);
+        self.refreshed.retain(|_, refreshed| *refreshed > deadline);
+    }
+
+    /// Remembers that the expiry of a session was written, and answers whether it was due.
+    fn due_for_refresh(&self, session_id: &str, timeout: Duration) -> bool {
+        let now = crate::model::proxy::now_millis();
+        let interval = (timeout.as_millis() as i64 / 4).max(1);
+        match self.refreshed.get(session_id).map(|entry| *entry.value()) {
+            Some(last) if now - last < interval => false,
+            _ => {
+                self.refreshed.insert(session_id.to_string(), now);
+                true
+            }
+        }
     }
 }
 
@@ -122,6 +149,10 @@ impl SessionService for MemorySessionService {
     fn reactivate(&self, session_id: &str, user_id: &str) {
         self.touch(session_id, user_id);
     }
+
+    fn should_refresh_expiry(&self, session_id: &str, timeout: Duration) -> bool {
+        self.due_for_refresh(session_id, timeout)
+    }
 }
 
 /// Counts the sessions of the whole realm, by scanning the session keys in Redis.
@@ -134,6 +165,8 @@ pub struct RedisSessionService {
     /// Cached counts (`-1` until the first refresh, as Java starts with `null`).
     logged_in: AtomicI64,
     active: AtomicI64,
+    /// When the expiry of a session was last written by *this* server (epoch millis).
+    refreshed: DashMap<String, i64>,
 }
 
 impl RedisSessionService {
@@ -143,6 +176,7 @@ impl RedisSessionService {
             store,
             logged_in: AtomicI64::new(-1),
             active: AtomicI64::new(-1),
+            refreshed: DashMap::new(),
         }
     }
 
@@ -171,6 +205,21 @@ impl RedisSessionService {
 
 #[async_trait]
 impl SessionService for RedisSessionService {
+    fn should_refresh_expiry(&self, session_id: &str, timeout: Duration) -> bool {
+        let now = crate::model::proxy::now_millis();
+        let interval = (timeout.as_millis() as i64 / 4).max(1);
+        // the map is trimmed with the same window, so it cannot grow without bound
+        self.refreshed
+            .retain(|_, refreshed| now - *refreshed < timeout.as_millis() as i64);
+        match self.refreshed.get(session_id).map(|entry| *entry.value()) {
+            Some(last) if now - last < interval => false,
+            _ => {
+                self.refreshed.insert(session_id.to_string(), now);
+                true
+            }
+        }
+    }
+
     fn reactivate(&self, session_id: &str, _user_id: &str) {
         // the expiry of the session in Redis is moved forward; the call is asynchronous, so it happens in
         // the background of the heartbeat

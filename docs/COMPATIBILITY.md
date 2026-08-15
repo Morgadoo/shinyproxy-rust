@@ -271,23 +271,37 @@ down, which this implementation follows:
 
 ## Performance
 
-Both implementations, on the same machine (30 seconds, 50 WebSocket connections, 16 HTTP connections through
-the proxy to the same app; `scripts/load-test.sh`):
+Both implementations, measured one after the other on the same machine with the same configuration and the
+Docker backend (`scripts/benchmark.sh`; the full report is in
+[generated/benchmark.md](generated/benchmark.md)):
 
-| | this implementation | Java ShinyProxy 3.2.4 |
+| Measurement | This implementation | Java 3.2.4 |
 | --- | --- | --- |
-| Startup until the first answer | 0.2 s | 4.6 s |
-| Resident memory after startup | 18 MB | 343 MB |
-| Resident memory under load | 31 MB | 446 MB |
-| Requests per second through the proxy | 17 300 | 9 100 |
-| Latency p50 / p99 | 0.9 ms / 1.9 ms | 1.5 ms / 6.5 ms |
-| Errors | 0 | 0 |
+| Startup until the login page answers | 0.13 s | 5.0 s |
+| Resident memory after startup | 18 MB | 351 MB |
+| Resident memory after the load phases | 38 MB | 755 MB |
+| Starting an app (median of 5) | 520 ms | 514 ms |
+| Stopping an app (median of 5) | 306 ms | 317 ms |
+| Requests per second through the reverse proxy | 13 900 | 11 800 |
+| Proxy latency p50 / p99 | 2.2 ms / 4.3 ms | 2.2 ms / 11.2 ms |
+| Requests per second of the index page | 13 100 | 143 |
+| Index latency p99 | 3.0 ms | 485 ms |
+| Requests per second of the JSON API | 24 600 | 21 500 |
+| API latency p99 | 1.9 ms | 4.4 ms |
+| Requests per second through the proxy with 100 open websockets | 19 300 | 12 700 |
+| Errors in any phase | 0 | 0 |
+
+The index page is the outlier: rendering it costs the Java implementation ~20 ms of CPU (Thymeleaf plus the
+per-app authorization checks) even without load, while this implementation renders it in well under a
+millisecond.
 
 A 30 minute soak with 200 WebSocket connections and 32 HTTP connections held ~16 000 requests per second
 (28.9 million requests in total) with stable memory (18 MB after startup, 39 MB at the end), no panics and no
 WebSocket errors. The soak found one real bug, which is fixed: a session that was *used* still expired after
 `spring.session.timeout`, because the session layer only moves the expiry when a handler changes the session,
-while Spring Session writes the last access time on every request.
+while Spring Session writes the last access time on every request. The expiry is now moved at most every
+quarter of the timeout, which keeps active sessions alive without a store write per request (that write cost
+~40% of the throughput of the JSON API before it was throttled).
 
 ## Dependency advisories
 
