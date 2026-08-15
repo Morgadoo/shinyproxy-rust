@@ -32,6 +32,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 | `containerproxy` dataplane (end to end) | 6 | streamed bodies, header forwarding, WebSocket + heartbeats, cache headers, injection, crashed app |
 | `shinyproxy` docker backend (end to end, `SP_TEST_DOCKER=1`) | 4 | container create request (labels, env, published ports), HTTP + WebSocket proxying, stop/cleanup, pause/resume, app recovery after a restart and the instanceId check |
 | `shinyproxy` OpenID Connect (end to end) | 8 | the whole flow against a fake provider with real RS256 id tokens (redirects, code exchange, verification, user info, groups, access token in the app), a wrong state, roles claims of every shape, PKCE |
+| `shinyproxy` Redis store (end to end, `SP_TEST_REDIS=1`) | 2 | two servers sharing apps (start on one, see and stop on the other), shared heartbeats, realm isolation |
 | `shinyproxy` LDAP (end to end, `SP_TEST_LDAP=1`) | 3 | a user DN pattern, a user search with the manager account, group based access and admin rights, wrong passwords, unknown users, an unreachable directory |
 | `shinyproxy` authentication backends (end to end) | 4 | header based authentication (headers decide the user per request, no login page, API access, admin groups), the default header name, web service authentication against a fake service (groups from the answer, wrong credentials), and its startup validation |
 | `shinyproxy` container logs (end to end) | 2 | files created with the Java names, the output of the app collected, the paths in an issue report, disabled without a path |

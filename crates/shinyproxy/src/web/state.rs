@@ -38,7 +38,9 @@ use containerproxy::service::{
 use containerproxy::spec::expression::{ExpressionContextBuilder, SpelResolver};
 use containerproxy::spec::SpecProvider;
 use containerproxy::stat::Metrics;
-use containerproxy::store::{HeartbeatStore, MemoryHeartbeatStore, MemoryProxyStore, ProxyStore};
+use containerproxy::store::{
+    HeartbeatStore, MemoryHeartbeatStore, MemoryProxyStore, ProxyStore, RedisStores,
+};
 use containerproxy::web::{SecurityHeaders, TemplateEngine};
 
 use crate::spec_provider::{ShinyProxySpecProvider, SpecError};
@@ -116,6 +118,8 @@ pub enum StateError {
     Backend(#[from] backend::CreateError),
     #[error(transparent)]
     Templates(#[from] containerproxy::web::TemplateError),
+    #[error("{0}")]
+    Store(String),
 }
 
 impl AppState {
@@ -170,10 +174,29 @@ impl AppState {
             },
         )?;
         let recovery = Arc::new(AppRecoveryService::new(&settings, &identifiers));
-        let store: Arc<dyn ProxyStore> = Arc::new(MemoryProxyStore::new(
-            settings.proxy.username_case_sensitive(),
-        ));
-        let heartbeats: Arc<dyn HeartbeatStore> = Arc::new(MemoryHeartbeatStore::new());
+        // `proxy.store-mode: Redis` shares the state with the other servers of the realm
+        let (store, heartbeats): (Arc<dyn ProxyStore>, Arc<dyn HeartbeatStore>) =
+            if settings.proxy.store_mode().eq_ignore_ascii_case("redis") {
+                let url = RedisStores::url_of(&settings);
+                let stores = RedisStores::connect(
+                    &url,
+                    identifiers.realm_id.as_deref(),
+                    runtime_values.clone(),
+                )
+                .map_err(StateError::Store)?;
+                tracing::info!("Using the Redis store ({url})");
+                (
+                    Arc::new(stores.proxy_store()),
+                    Arc::new(stores.heartbeat_store()),
+                )
+            } else {
+                (
+                    Arc::new(MemoryProxyStore::new(
+                        settings.proxy.username_case_sensitive(),
+                    )),
+                    Arc::new(MemoryHeartbeatStore::new()),
+                )
+            };
         let proxies = Arc::new(ProxyService::new(
             settings.clone(),
             &identifiers,

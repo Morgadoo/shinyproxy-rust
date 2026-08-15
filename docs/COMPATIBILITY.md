@@ -201,6 +201,15 @@ types. Allow-listed static types: `java.lang.System.getenv`, `java.lang.String.v
 | `ms-graph` groups | `proxy.ms-graph.{client-id,client-secret,token-url,tenant-id,api-url,scopes}`: with OpenID Connect the groups of the token are replaced by the display names of `/v1.0/{tenant}/users/{oid}/memberOf` (client credentials token cached until it expires), and a missing `oid` claim or an API failure logs the Java warning and continues without groups | ✅ |
 | `saml` | Not implemented; the server refuses to start with a message that points at OpenID Connect (most identity providers support both) or at the Java implementation | 🟨 documented gap |
 
+## High availability (`proxy.store-mode: Redis`)
+
+| Topic | Behaviour | Status |
+| --- | --- | --- |
+| Redis proxy store | The same keys as Java (`shinyproxy_{realmId}__active_proxies`, `shinyproxy_{realmId}_user_proxies_{userId}`) with the internal JSON document of a proxy (`_runtimeValues`, `targets`, containers), so several servers of a realm share their apps and a Java and a Rust server can read each other's state | ✅ |
+| Redis heartbeat store | `shinyproxy_{realmId}__heartbeats`, so a heartbeat that arrives at one server is seen by all of them | ✅ |
+| Redis sessions | Not implemented; sessions live in memory, so a user has to log in again when they reach another server. `proxy.store-mode: Redis` without Redis sessions warns at startup (as in Java) | ⬜ |
+| Leader election, `RedisCheckLatestConfigService`, Redis port allocator, proxy sharing seats | Not implemented yet | ⬜ |
+
 ## Not yet implemented
 
 Everything in [PROGRESS.md](PROGRESS.md) that is not marked ✅. Properties whose behaviour is not

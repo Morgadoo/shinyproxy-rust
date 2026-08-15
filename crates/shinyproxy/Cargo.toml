@@ -49,6 +49,7 @@ tracing-appender.workspace = true
 time.workspace = true
 
 [dev-dependencies]
+redis.workspace = true
 jsonwebtoken.workspace = true
 rsa = { version = "0.9", features = ["pem"] }
 rand_old = { package = "rand", version = "0.8" }
