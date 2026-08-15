@@ -25,14 +25,18 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 
 ## Test inventory
 
-447 tests pass with `cargo test --workspace`; the Docker (4), LDAP (3) and Redis (4) suites need their
-service and are enabled with `SP_TEST_DOCKER=1`, `SP_TEST_LDAP=1` and `SP_TEST_REDIS=1`.
+526 tests pass with `cargo test --workspace`; the Docker (4), Kubernetes (3), LDAP (3) and Redis (7) suites
+need their service and are enabled with `SP_TEST_DOCKER=1`, `SP_TEST_K8S=1`, `SP_TEST_LDAP=1` and
+`SP_TEST_REDIS=1`. See [TESTING.md](TESTING.md).
 
 | Suite | Tests | Notes |
 | --- | --- | --- |
 | `containerproxy` unit | 290 | config tree/schema/loader/settings/warnings, canonical YAML, identifiers |
 | `containerproxy` golden | 2 | canonical YAML + SHA-1 vs Java reference output |
 | `containerproxy` dataplane (end to end) | 6 | streamed bodies, header forwarding, WebSocket + heartbeats, cache headers, injection, crashed app |
+| `shinyproxy` security review | 9 | the route × visitor matrix (anonymous, owner, other user, administrator), app actions of another user, header smuggling and CRLF, redirects that stay on this server, the CSRF token of the login form, the cookie and header settings, secrets never logged or exposed, and a session that stays alive while it is used |
+| `shinyproxy` robustness | 6 | property tests of the app request parser, the WebSocket sniffer, the expression engine and the configuration binder, plus nasty URLs and broken bodies against a running server |
+| `shinyproxy` chaos | 4 | an app killed during a WebSocket session, an app stopped while starting, a Redis that disappears, a shutdown with running apps |
 | `shinyproxy` proxy sharing (end to end) | 7 | containers pre-started before anybody logs in, users claiming seats instantly, several users on one container, containers that may not be re-used, waiting and failing without a seat, removal through the admin endpoint, the seat metrics and the startup validations |
 | `shinyproxy` kubernetes backend (end to end, `SP_TEST_K8S=1`) | 3 | pod and NodePort service contents, HTTP + WebSocket proxying, cleanup on stop, pod patches and additional/persistent manifests, app recovery of running pods |
 | `shinyproxy` docker backend (end to end, `SP_TEST_DOCKER=1`) | 4 | container create request (labels, env, published ports), HTTP + WebSocket proxying, stop/cleanup, pause/resume, app recovery after a restart and the instanceId check |
