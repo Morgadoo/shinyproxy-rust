@@ -81,6 +81,7 @@ impl SimpleAuthenticationBackend {
     }
 }
 
+#[async_trait::async_trait]
 impl AuthBackend for SimpleAuthenticationBackend {
     fn name(&self) -> &'static str {
         NAME

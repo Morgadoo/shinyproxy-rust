@@ -25,8 +25,10 @@
 //! (`IAuthenticationBackend`). Phase P4 implements `none` and `simple`, the remaining backends follow
 //! in P11 and fail at startup with a clear message until then.
 
+pub mod custom_header;
 pub mod none;
 pub mod simple;
+pub mod webservice;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -138,6 +140,7 @@ pub enum AuthError {
 }
 
 /// An authentication backend.
+#[async_trait::async_trait]
 pub trait AuthBackend: Send + Sync + std::fmt::Debug {
     /// Name as used by `proxy.authentication`.
     fn name(&self) -> &'static str;
@@ -160,28 +163,68 @@ pub trait AuthBackend: Send + Sync + std::fmt::Debug {
         Err(AuthError::NoFormLogin)
     }
 
+    /// Authenticates a user, for backends that have to talk to another service (`webservice`).
+    async fn authenticate_async(&self, form: &LoginForm) -> Result<AuthenticatedUser, AuthError> {
+        self.authenticate(form)
+    }
+
     /// The user of an anonymous session (only the `none` backend has one).
     fn anonymous_user(&self, _session_id: &str) -> Option<AuthenticatedUser> {
         None
     }
+
+    /// The user of a request, for backends that authenticate through headers (`custom-header`).
+    fn user_from_headers(&self, _headers: &axum::http::HeaderMap) -> Option<AuthenticatedUser> {
+        None
+    }
+
+    /// Where an unauthenticated request is sent (the login page, or `/auth-error` for header based
+    /// authentication, as in Java).
+    fn login_redirect(&self) -> &str {
+        if self.uses_login_form() {
+            "login"
+        } else {
+            "auth-error"
+        }
+    }
+}
+
+/// Why the authentication backend could not be created.
+#[derive(Debug, thiserror::Error)]
+pub enum CreateError {
+    /// The backend is not implemented (yet).
+    #[error(transparent)]
+    Unsupported(#[from] UnsupportedBackend),
+    /// The configuration of the backend is incomplete or invalid.
+    #[error("{0}")]
+    Configuration(String),
 }
 
 /// Creates the configured authentication backend.
-pub fn create(settings: &Settings) -> Result<Arc<dyn AuthBackend>, UnsupportedBackend> {
-    match settings
+pub fn create(settings: &Settings) -> Result<Arc<dyn AuthBackend>, CreateError> {
+    // the spelling of the Java values is accepted as well (`customHeader`, `webService`)
+    let name = settings
         .proxy
         .authentication()
         .to_ascii_lowercase()
-        .as_str()
-    {
+        .replace(['-', '_'], "");
+    match name.as_str() {
         "none" => Ok(Arc::new(none::NoAuthenticationBackend)),
         "simple" => Ok(Arc::new(simple::SimpleAuthenticationBackend::new(
             &settings.proxy.users,
             settings.proxy.username_case_sensitive(),
         ))),
+        "customheader" => Ok(Arc::new(
+            custom_header::CustomHeaderAuthenticationBackend::new(settings),
+        )),
+        "webservice" => Ok(Arc::new(
+            webservice::WebServiceAuthenticationBackend::new(settings)
+                .map_err(CreateError::Configuration)?,
+        )),
         other => Err(UnsupportedBackend {
             name: other.to_string(),
-        }),
+        }
+        .into()),
     }
 }
 
@@ -189,7 +232,7 @@ pub fn create(settings: &Settings) -> Result<Arc<dyn AuthBackend>, UnsupportedBa
 #[derive(Debug, thiserror::Error)]
 #[error(
     "authentication backend '{name}' is not supported yet by this implementation (supported: none, \
-     simple); see docs/PROGRESS.md for the phase that adds it"
+     simple, custom-header, webservice); see docs/PROGRESS.md for the phase that adds it"
 )]
 pub struct UnsupportedBackend {
     /// The configured value of `proxy.authentication`.

@@ -185,6 +185,16 @@ types. Allow-listed static types: `java.lang.System.getenv`, `java.lang.String.v
 | Attribute expressions | The names become columns; evaluating `usage-stats-attributes[].expression` per event lands with the remaining SpEL context work | 🟨 |
 | InfluxDB (`/write?db=`) | Not implemented; the server refuses to start with a clear message instead of ignoring the setting | 🟨 |
 
+## Authentication backends
+
+| `proxy.authentication` | Behaviour | Status |
+| --- | --- | --- |
+| `none` | Anonymous users, no login page | ✅ |
+| `simple` | `proxy.users` with plain and bcrypt passwords, `{noop}` prefixes, groups as a list or a scalar | ✅ |
+| `custom-header` | `proxy.custom-header.{username-header-name,groups-header-name}` (default `REMOTE_USER`); the header decides the user on every request, a request without it is sent to `/auth-error`, and a missing groups header logs the same security warning as Java | ✅ |
+| `webservice` | `proxy.webservice.{authentication-url,authentication-request-body,groups-expression}`; the body is the Java format string (`%s` for the name and the password), 4xx means invalid credentials, and the JSON answer is available to expressions as `json` | ✅ |
+| `openid`, `ldap`, `saml`, `keycloak`, `oauth2` bearer tokens, `ms-graph` groups | Not implemented yet; the server refuses to start with the list of supported backends | ⬜ |
+
 ## Not yet implemented
 
 Everything in [PROGRESS.md](PROGRESS.md) that is not marked ✅. Properties whose behaviour is not

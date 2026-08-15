@@ -34,6 +34,7 @@ pub struct NoAuthenticationBackend;
 /// Name of the backend.
 pub const NAME: &str = "none";
 
+#[async_trait::async_trait]
 impl AuthBackend for NoAuthenticationBackend {
     fn name(&self) -> &'static str {
         NAME

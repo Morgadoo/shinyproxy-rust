@@ -245,6 +245,32 @@ async fn authorize(
         }
     }
 
+    // header based authentication (`custom-header`): the reverse proxy in front of ShinyProxy decides who
+    // the user is, so every request is checked (and a changed header replaces the user of the session)
+    if !state.auth.uses_login_form() && state.auth.has_authorization() {
+        let from_headers = state.auth.user_from_headers(request.headers());
+        if let Some(user) = from_headers {
+            let changed = data
+                .user
+                .as_ref()
+                .map(|existing| existing != &user)
+                .unwrap_or(true);
+            if changed {
+                if data.user.is_none() {
+                    tracing::info!("User logged in [user: {}]", user.id);
+                    state
+                        .proxies
+                        .events()
+                        .publish(containerproxy::events::Event::UserLoggedIn {
+                            user_id: user.id.clone(),
+                        });
+                }
+                data.user = Some(user);
+                data.store(&session).await;
+            }
+        }
+    }
+
     let user = data.user.clone();
     request.extensions_mut().insert(CurrentUser(user.clone()));
 
@@ -267,7 +293,12 @@ async fn authorize(
                     data.auth_success_url = Some(request.uri().to_string());
                 }
                 data.store(&session).await;
-                Redirect::to(&format!("{}login", state.context_path_with_slash())).into_response()
+                Redirect::to(&format!(
+                    "{}{}",
+                    state.context_path_with_slash(),
+                    state.auth.login_redirect()
+                ))
+                .into_response()
             };
         }
         if is_admin_path(&path) && !state.is_admin(user.as_ref()) {
@@ -452,7 +483,7 @@ async fn login_submit(
         password: form.get("password").cloned().unwrap_or_default(),
     };
 
-    match state.auth.authenticate(&credentials) {
+    match state.auth.authenticate_async(&credentials).await {
         Ok(user) => {
             tracing::info!("User logged in [user: {}]", user.id);
             state

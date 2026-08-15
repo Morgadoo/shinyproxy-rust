@@ -105,7 +105,7 @@ pub enum StateError {
     #[error(transparent)]
     Specs(#[from] SpecError),
     #[error(transparent)]
-    Auth(#[from] auth::UnsupportedBackend),
+    Auth(#[from] auth::CreateError),
     #[error(transparent)]
     Backend(#[from] backend::CreateError),
     #[error(transparent)]
