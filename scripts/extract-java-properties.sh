@@ -2,25 +2,36 @@
 # Extracts the configuration property names used by the Java implementation.
 #
 # The Rust rewrite must accept the same `application.yml` files, so this script produces the raw
-# inventory that docs/CONFIGURATION.md is curated from. It scans:
-#   1. the Java sources of this repository (src/main/java), and
-#   2. a checkout of the ContainerProxy engine (default: /tmp/cp, override with $1),
-#      cloned with:
+# inventory that docs/CONFIGURATION.md is curated from. The Java sources are no longer part of this
+# repository (they were removed once the rewrite was complete), so it scans two checkouts:
+#   1. the Java ShinyProxy (default: /tmp/sp, override with $2), cloned with:
+#        git clone --depth 1 --branch v3.2.4 https://github.com/openanalytics/shinyproxy.git /tmp/sp
+#   2. the ContainerProxy engine (default: /tmp/cp, override with $1), cloned with:
 #        git clone --depth 1 --branch v1.2.4 https://github.com/openanalytics/containerproxy.git /tmp/cp
 #
-# Usage: scripts/extract-java-properties.sh [path-to-containerproxy-checkout]
+# Usage: scripts/extract-java-properties.sh [path-to-containerproxy-checkout] [path-to-shinyproxy-checkout]
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CP_DIR="${1:-/tmp/cp}"
+SP_DIR="${2:-/tmp/sp}"
 OUT="$REPO_ROOT/docs/generated/java-properties.txt"
 mkdir -p "$(dirname "$OUT")"
 
-SOURCES=("$REPO_ROOT/src/main/java" "$REPO_ROOT/src/main/resources")
+SOURCES=()
+if [[ -d "$SP_DIR/src/main/java" ]]; then
+    SOURCES+=("$SP_DIR/src/main/java" "$SP_DIR/src/main/resources")
+else
+    echo "warning: ShinyProxy checkout not found at $SP_DIR, inventory will be incomplete" >&2
+fi
 if [[ -d "$CP_DIR/src/main/java" ]]; then
     SOURCES+=("$CP_DIR/src/main/java" "$CP_DIR/src/main/resources")
 else
     echo "warning: ContainerProxy checkout not found at $CP_DIR, inventory will be incomplete" >&2
+fi
+if [[ ${#SOURCES[@]} -eq 0 ]]; then
+    echo "error: no Java sources found; clone the two repositories first (see the header of this script)" >&2
+    exit 1
 fi
 
 {
