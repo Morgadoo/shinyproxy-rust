@@ -272,36 +272,40 @@ down, which this implementation follows:
 ## Performance
 
 Both implementations, measured one after the other on the same machine with the same configuration and the
-Docker backend (`scripts/benchmark.sh`; the full report is in
+Docker backend (`scripts/benchmark.sh`; the full report with the stress matrix is in
 [generated/benchmark.md](generated/benchmark.md)):
 
 | Measurement | This implementation | Java 3.2.4 |
 | --- | --- | --- |
-| Startup until the login page answers | 0.13 s | 5.0 s |
-| Resident memory after startup | 18 MB | 351 MB |
-| Resident memory after the load phases | 38 MB | 755 MB |
-| Starting an app (median of 5) | 520 ms | 514 ms |
-| Stopping an app (median of 5) | 306 ms | 317 ms |
-| Requests per second through the reverse proxy | 13 900 | 11 800 |
-| Proxy latency p50 / p99 | 2.2 ms / 4.3 ms | 2.2 ms / 11.2 ms |
-| Requests per second of the index page | 13 100 | 143 |
-| Index latency p99 | 3.0 ms | 485 ms |
-| Requests per second of the JSON API | 24 600 | 21 500 |
-| API latency p99 | 1.9 ms | 4.4 ms |
-| Requests per second through the proxy with 100 open websockets | 19 300 | 12 700 |
+| Startup until the login page answers | 0.12 s | 4.7 s |
+| Resident memory after startup / after the load phases | 29 / 43 MB | 388 / 853 MB |
+| Starting / stopping an app (median of 5) | 498 / 306 ms | 463 / 316 ms |
+| Proxy requests per second (8 / 32 / 128 connections) | 13 300 / 18 700 / 26 200 | 7 400 / 13 800 / 18 000 |
+| Proxy latency p99 (32 / 128 connections) | 3.3 / 9.9 ms | 6.0 / 16.8 ms |
+| Server CPU per 1000 proxied requests | 62 ms | 143 ms |
+| Index page requests per second (p99) | 23 700 (1.8 ms) | 160 (419 ms) |
+| JSON API requests per second (p99) | 44 700 (1.2 ms) | 24 600 (3.8 ms) |
+| Streaming / posting a 64 KB body through the proxy | 1 023 / 189 MB/s | 580 / 44 MB/s |
+| WebSocket handshakes per second (p99) | 1 640 (3.1 ms) | 1 400 (5.8 ms) |
+| Proxy requests per second with 100 websockets open (p99) | 23 500 (2.6 ms) | 12 900 (5.8 ms) |
 | Errors in any phase | 0 | 0 |
 
 The index page is the outlier: rendering it costs the Java implementation ~20 ms of CPU (Thymeleaf plus the
 per-app authorization checks) even without load, while this implementation renders it in well under a
 millisecond.
 
+The proxy path of this implementation was tuned with a CPU profile after the first comparison: the parsed
+`SHINYPROXY_HTTP_HEADERS` of a proxy are cached for its lifetime, the in-memory store shares its proxies
+instead of copying them per request, the router resolves targets without copying the mapping table, the
+global allocator is mimalloc, and the WebSocket tunnel lets the app close the connection first (which keeps
+the TIME_WAIT of short-lived connections off the proxy). Together these took the proxy path from ~13 600 to
+~23 400 requests per second (isolated measurement, 32 connections) and the p99 from 4.3 ms to 2.6 ms.
+
 A 30 minute soak with 200 WebSocket connections and 32 HTTP connections held ~16 000 requests per second
-(28.9 million requests in total) with stable memory (18 MB after startup, 39 MB at the end), no panics and no
-WebSocket errors. The soak found one real bug, which is fixed: a session that was *used* still expired after
-`spring.session.timeout`, because the session layer only moves the expiry when a handler changes the session,
-while Spring Session writes the last access time on every request. The expiry is now moved at most every
-quarter of the timeout, which keeps active sessions alive without a store write per request (that write cost
-~40% of the throughput of the JSON API before it was throttled).
+(28.9 million requests in total) with stable memory, no panics and no WebSocket errors. The soak found one
+real bug, which is fixed: a session that was *used* still expired after `spring.session.timeout`. The expiry
+is now moved at most every quarter of the timeout, which keeps active sessions alive without a store write
+per request.
 
 ## Dependency advisories
 
