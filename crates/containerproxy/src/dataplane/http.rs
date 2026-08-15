@@ -86,6 +86,7 @@ pub async fn forward(
     url: &str,
     options: &ForwardOptions,
 ) -> Result<Response<Body>, ForwardError> {
+    // the answer is marked as coming from an app, so the cache headers of the server are not added to it
     let (parts, body) = request.into_parts();
     let uri: Uri = url
         .parse()
@@ -140,7 +141,12 @@ pub async fn forward(
             .map_err(|error| ForwardError::InvalidRequest(error.to_string()))?;
 
         match CLIENT.request(outgoing).await {
-            Ok(response) => return Ok(response.map(Body::new)),
+            Ok(response) => {
+                let mut response = response.map(Body::new);
+                // the answer comes from the app, so the server does not add its cache headers to it
+                response.extensions_mut().insert(super::AppAnswer);
+                return Ok(response);
+            }
             Err(error) => {
                 if attempt < retries {
                     attempt += 1;

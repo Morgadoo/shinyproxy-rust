@@ -41,6 +41,13 @@ pub mod inject;
 pub mod ws;
 
 use std::collections::BTreeMap;
+
+/// Marker put in the extensions of a response that came from an app.
+///
+/// The answers of the server itself carry the cache headers of Spring Security; the answers of an app keep
+/// the headers the app chose (and whatever `proxy.default-cache-headers-mode` adds).
+#[derive(Debug, Clone, Copy)]
+pub struct AppAnswer;
 use std::sync::Arc;
 
 use dashmap::DashMap;

@@ -111,10 +111,13 @@ run_scenarios() {
             echo "status: $(head -1 "$WORK/headers.tmp" | tr -d '\r' | awk '{print $2}')"
             # only the headers that are part of the contract
             # `|| true`: a request without any of these headers is not an error
+            # header names are case insensitive, and so is the charset spelling; both are lower cased so
+            # that the report only shows differences that matter
             (grep -iE '^(location|content-type|cache-control|x-frame-options|x-content-type-options|set-cookie):' \
                 "$WORK/headers.tmp" || true) | tr -d '\r' |
-                sed -e 's/JSESSIONID=[^;]*/JSESSIONID=<id>/' -e 's/SESSION=[^;]*/SESSION=<id>/' \
-                    -e 's#http://127.0.0.1:80[0-9][0-9]#<base>#' | sort
+                sed -e 's/^\([A-Za-z-]*\):/\L\1:/' -e 's/; *charset=UTF-8/;charset=utf-8/I' \
+                    -e 's/JSESSIONID=[^;]*/JSESSIONID=<id>/' -e 's/SESSION=[^;]*/SESSION=<id>/' \
+                    -e 's#http://127.0.0.1:80[0-9][0-9]##' | sort
             # the body, normalised: ids, timestamps and ports are different by nature
             if grep -qi 'application/json' "$WORK/headers.tmp"; then
                 python3 - "$WORK/body.tmp" <<'PYTHON'
@@ -127,7 +130,10 @@ def normalise(value):
         return [normalise(item) for item in value]
     if isinstance(value, str):
         value = re.sub(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', '<uuid>', value)
-        value = re.sub(r'[0-9a-f]{40}', '<sha1>', value)
+        # container ids (64 hex), the instance id (40 hex) and the host name of a container
+        value = re.sub(r'\b[0-9a-f]{64}\b', '<container-id>', value)
+        value = re.sub(r'\b[0-9a-f]{40}\b', '<sha1>', value)
+        value = re.sub(r'\b[0-9a-f]{12}\b', '<hostname>', value)
         value = re.sub(r'\b(1[0-9]{12})\b', '<timestamp>', value)
         value = re.sub(r':2[0-9]{4}\b', ':<port>', value)
         return value

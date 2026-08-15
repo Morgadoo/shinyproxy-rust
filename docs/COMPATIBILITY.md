@@ -229,6 +229,27 @@ Everything in [PROGRESS.md](PROGRESS.md) that is not marked ✅. Properties whos
 implemented yet are still parsed and validated, and are listed with their target phase in
 [CONFIGURATION.md](CONFIGURATION.md).
 
+## Cross validation against the Java implementation
+
+`scripts/cross-validate.sh` starts the Java ShinyProxy 3.2.4 and this implementation with the *same*
+configuration and the Docker backend, runs one scripted scenario list against both (the login flow, the index
+page, the app definitions, starting an app, the status endpoint, the app page, a proxied request and the
+environment of the app, the heartbeat, the admin pages and data, stopping the app, and the error cases of an
+unknown app or a user without access) and compares the status codes, the normalised JSON, the interesting
+headers, and the labels and environment of the container. The latest report is
+[generated/cross-validation.md](generated/cross-validation.md).
+
+The report is down to four differences, all of them without behavioural meaning:
+
+| Difference | Why it is harmless |
+| --- | --- |
+| The attributes of the session cookie are in another order (`HttpOnly; SameSite=Lax; Path=/` instead of `Path=/; HttpOnly; SameSite=Lax`) | Cookie attributes are unordered |
+| A failed login does not re-issue the session cookie | The session already exists, so nothing changes for the browser |
+| One error answer has `content-type: application/json` where Java says `application/json;charset=UTF-8` | JSON is UTF-8 by definition (RFC 8259) |
+| The cookie that ends a session says `Max-Age=0` with a date in the past, Java says `Expires=Thu, 01-Jan-1970` | Both delete the cookie |
+
+Everything else the report found has been fixed; the list is in the commit that introduced the script.
+
 ## Version scheme
 
 The crate version is `0.x` (semver for a young code base), and every binary reports the ShinyProxy version its

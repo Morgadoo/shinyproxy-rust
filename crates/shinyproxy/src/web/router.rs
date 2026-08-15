@@ -328,7 +328,7 @@ async fn authorize(
         if state.auth.has_authorization() && user.is_none() {
             // only the API paths answer with the document; every other path redirects to the login page,
             // whatever the request asked for (verified against the Java implementation)
-            return if needs_authentication_answer(&path) {
+            let mut answer = if needs_authentication_answer(&path) {
                 // `AuthenticationRequiredFilter`: the API paths answer 410 with this exact document, which
                 // the browser code of the app page recognises to reload the page
                 (
@@ -352,41 +352,45 @@ async fn authorize(
                     state.context_path_with_slash(),
                     state.auth.login_redirect()
                 ))
-                .into_response()
             };
+            add_headers(&state, &path, &mut answer);
+            return answer;
         }
         if is_admin_path(&path) && !state.is_admin(user.as_ref()) {
             // Spring's access denied handler answers with the API document, whatever the request asked for
-            return (
+            let mut answer = (
                 StatusCode::FORBIDDEN,
                 axum::Json(serde_json::json!({"status": "fail", "data": "forbidden"})),
             )
                 .into_response();
+            add_headers(&state, &path, &mut answer);
+            return answer;
         }
     }
 
     let mut response = next.run(request).await;
+    add_headers(&state, &path, &mut response);
+    response
+}
+
+/// Adds the security and cache headers to an answer of the server itself.
+fn add_headers(state: &AppState, _path: &str, response: &mut Response) {
+    // an answer that came from an app keeps its own cache headers
+    let from_app = response
+        .extensions()
+        .get::<containerproxy::dataplane::AppAnswer>()
+        .is_some();
     let headers = response.headers_mut();
     for (name, value) in state.security_headers.headers() {
         headers.insert(name.clone(), value.clone());
     }
     // Spring Security adds the cache headers to every answer of the server itself; the answers of an app
     // keep the headers the app chose (`/app_proxy` and `/api/route` set them per the cache headers mode)
-    if !is_proxied_path(&path) {
+    if !from_app {
         for (name, value) in no_cache_headers() {
             headers.entry(name).or_insert(value);
         }
     }
-    response
-}
-
-/// Whether a path carries the answer of an app instead of a page of ShinyProxy.
-fn is_proxied_path(path: &str) -> bool {
-    path.starts_with("/app_proxy/")
-        || path.starts_with("/api/route/")
-        || path.starts_with("/app_direct/")
-        || path.starts_with("/app_direct_i/")
-        || path.starts_with("/grafana/")
 }
 
 /// Whether an unauthenticated request to this path is answered with the API document instead of a redirect

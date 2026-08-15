@@ -565,7 +565,10 @@ pub fn format_seconds(seconds: i64) -> String {
 }
 
 fn stopped_proxy(proxy_id: &str) -> serde_json::Value {
-    Proxy::new(proxy_id, ProxyStatus::Stopped).api_json()
+    let mut proxy = Proxy::new(proxy_id, ProxyStatus::Stopped);
+    // the stub of the Java implementation carries nothing but the id and the status
+    proxy.target_id = None;
+    proxy.api_json()
 }
 
 fn success(data: serde_json::Value) -> Response {
