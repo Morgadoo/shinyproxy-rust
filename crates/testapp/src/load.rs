@@ -19,12 +19,21 @@
  * along with this program.  If not, see <http://www.apache.org/licenses/>
  */
 
-//! The load generator of `scripts/load-test.sh`.
+//! The load generator of `scripts/load-test.sh` and `scripts/benchmark.sh`.
 //!
 //! It logs in, starts an app, opens a number of WebSocket connections through the proxy and keeps them alive
-//! while it hammers the HTTP path of the same app with a number of connections. At the end it reports the
-//! throughput, the latency distribution and the number of errors, so the run can be compared with the Java
-//! implementation on the same machine.
+//! while it hammers a path with a number of connections. At the end it reports the throughput, the latency
+//! distribution and the number of errors, so the run can be compared with the Java implementation on the
+//! same machine.
+//!
+//! Three targets can be measured (`--target`):
+//!
+//! * `app` — the reverse proxy path (`/app_proxy/{id}/`), which is what a user of an app exercises,
+//! * `index` — a page the server renders itself (`/`), which measures the templating and the session layer,
+//! * `api` — the JSON API (`/api/proxy`), which measures the store and the serialisation.
+//!
+//! `--measure-start-cycles N` measures something else entirely: how long the server needs to start an app and
+//! to stop it again, N times, which is the number a user feels when opening an app.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -46,6 +55,43 @@ pub struct Options {
     pub connections: usize,
     /// How long the load runs.
     pub duration: Duration,
+    /// What is measured: the app behind the proxy, a page of the server, or the API.
+    pub target: Target,
+    /// When set, the run measures how long starting and stopping an app takes, this many times.
+    pub start_cycles: usize,
+    /// Prints the report as `key: value` lines that a script can read.
+    pub machine_readable: bool,
+}
+
+/// What the load is pointed at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Target {
+    /// The reverse proxy path of a running app.
+    App,
+    /// The index page, which the server renders itself.
+    Index,
+    /// The JSON API.
+    Api,
+}
+
+impl Target {
+    /// The target of a name (`app` by default).
+    fn parse(value: &str) -> Target {
+        match value.to_ascii_lowercase().as_str() {
+            "index" | "page" => Target::Index,
+            "api" => Target::Api,
+            _ => Target::App,
+        }
+    }
+
+    /// The name used in the report.
+    fn name(self) -> &'static str {
+        match self {
+            Target::App => "app",
+            Target::Index => "index",
+            Target::Api => "api",
+        }
+    }
 }
 
 impl Options {
@@ -66,6 +112,9 @@ impl Options {
             websockets: value("--websockets", "200").parse().unwrap_or(200),
             connections: value("--connections", "32").parse().unwrap_or(32),
             duration: Duration::from_secs(value("--seconds", "60").parse().unwrap_or(60)),
+            target: Target::parse(&value("--target", "app")),
+            start_cycles: value("--measure-start-cycles", "0").parse().unwrap_or(0),
+            machine_readable: args.iter().any(|arg| arg == "--machine-readable"),
         }
     }
 }
@@ -112,31 +161,13 @@ pub async fn run(options: Options) -> anyhow::Result<()> {
         .send()
         .await?;
 
-    // start the app and wait until it is up
-    let started: serde_json::Value = client
-        .post(format!("{}/app_i/{}/_", options.base_url, options.spec))
-        .header("Content-Type", "application/json")
-        .body("{}")
-        .send()
-        .await?
-        .json()
-        .await?;
-    let proxy_id = started["data"]["id"]
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("the app did not start: {started}"))?
-        .to_string();
-    let status: serde_json::Value = client
-        .get(format!(
-            "{}/api/proxy/{proxy_id}/status?watch=true&timeout=60",
-            options.base_url
-        ))
-        .send()
-        .await?
-        .json()
-        .await?;
-    if status["data"]["status"] != "Up" {
-        anyhow::bail!("the app did not become available: {status}");
+    // how long the server needs to start an app and to stop it again
+    if options.start_cycles > 0 {
+        return measure_start_cycles(&client, &options).await;
     }
+
+    // start the app and wait until it is up
+    let (proxy_id, _) = start_app(&client, &options).await?;
     println!("app {proxy_id} is up, starting the load");
 
     let cookie = {
@@ -164,10 +195,15 @@ pub async fn run(options: Options) -> anyhow::Result<()> {
     }
 
     // the HTTP load, with a latency sample per request
+    let target_url = match options.target {
+        Target::App => format!("{}/app_proxy/{proxy_id}/", options.base_url),
+        Target::Index => format!("{}/", options.base_url),
+        Target::Api => format!("{}/api/proxy", options.base_url),
+    };
     let latencies = Arc::new(std::sync::Mutex::new(Vec::<u64>::new()));
     for _ in 0..options.connections {
         let client = client.clone();
-        let url = format!("{}/app_proxy/{proxy_id}/", options.base_url);
+        let url = target_url.clone();
         let counters = counters.clone();
         let latencies = latencies.clone();
         tasks.push(tokio::spawn(async move {
@@ -237,6 +273,7 @@ pub async fn run(options: Options) -> anyhow::Result<()> {
 
     let requests = counters.requests.load(Ordering::Relaxed);
     println!();
+    println!("target: {}", options.target.name());
     println!("requests: {requests}");
     println!(
         "requests_per_second: {:.0}",
@@ -256,7 +293,165 @@ pub async fn run(options: Options) -> anyhow::Result<()> {
         percentile(0.99),
         percentile(1.0)
     );
+    // the lines a script reads (`scripts/benchmark.sh`)
+    if options.machine_readable {
+        println!(
+            "METRIC requests_per_second {:.1}",
+            requests as f64 / options.duration.as_secs_f64()
+        );
+        println!("METRIC errors {}", counters.errors.load(Ordering::Relaxed));
+        println!("METRIC latency_p50_ms {:.2}", percentile(0.50));
+        println!("METRIC latency_p90_ms {:.2}", percentile(0.90));
+        println!("METRIC latency_p99_ms {:.2}", percentile(0.99));
+        println!("METRIC latency_max_ms {:.2}", percentile(1.0));
+        println!(
+            "METRIC websocket_errors {}",
+            counters.websocket_errors.load(Ordering::Relaxed)
+        );
+    }
 
+    Ok(())
+}
+
+/// The app of the user that is already running, when there is one.
+///
+/// A benchmark run measures several phases one after the other; without this every phase would try to start
+/// another app and run into `proxy.default-max-instances`.
+async fn running_app(
+    client: &reqwest::Client,
+    options: &Options,
+) -> anyhow::Result<Option<String>> {
+    let proxies: serde_json::Value = client
+        .get(format!("{}/api/proxy", options.base_url))
+        .send()
+        .await?
+        .json()
+        .await?;
+    Ok(proxies["data"].as_array().and_then(|entries| {
+        entries
+            .iter()
+            .find(|entry| {
+                entry["specId"].as_str() == Some(options.spec.as_str())
+                    && entry["status"].as_str() == Some("Up")
+            })
+            .and_then(|entry| entry["id"].as_str().map(str::to_string))
+    }))
+}
+
+/// Starts an app and waits until it is up; returns its id and how long that took.
+///
+/// An app of this user that is already up is reused (the time is then zero).
+async fn start_app(
+    client: &reqwest::Client,
+    options: &Options,
+) -> anyhow::Result<(String, Duration)> {
+    if let Some(proxy_id) = running_app(client, options).await? {
+        return Ok((proxy_id, Duration::ZERO));
+    }
+
+    let started_at = Instant::now();
+    let started: serde_json::Value = client
+        .post(format!("{}/app_i/{}/_", options.base_url, options.spec))
+        .header("Content-Type", "application/json")
+        .body("{}")
+        .send()
+        .await?
+        .json()
+        .await?;
+    let proxy_id = started["data"]["id"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("the app did not start: {started}"))?
+        .to_string();
+    let status: serde_json::Value = client
+        .get(format!(
+            "{}/api/proxy/{proxy_id}/status?watch=true&timeout=60",
+            options.base_url
+        ))
+        .send()
+        .await?
+        .json()
+        .await?;
+    if status["data"]["status"] != "Up" {
+        anyhow::bail!("the app did not become available: {status}");
+    }
+    Ok((proxy_id, started_at.elapsed()))
+}
+
+/// Stops an app and waits until it is gone; returns how long that took.
+async fn stop_app(
+    client: &reqwest::Client,
+    options: &Options,
+    proxy_id: &str,
+) -> anyhow::Result<Duration> {
+    let started_at = Instant::now();
+    client
+        .put(format!("{}/api/proxy/{proxy_id}/status", options.base_url))
+        .header("Content-Type", "application/json")
+        .body("{\"status\":\"Stopping\"}")
+        .send()
+        .await?;
+
+    // wait until the app is no longer listed
+    for _ in 0..600 {
+        let proxies: serde_json::Value = client
+            .get(format!("{}/api/proxy", options.base_url))
+            .send()
+            .await?
+            .json()
+            .await?;
+        let listed = proxies["data"]
+            .as_array()
+            .map(|entries| {
+                entries
+                    .iter()
+                    .any(|entry| entry["id"].as_str() == Some(proxy_id))
+            })
+            .unwrap_or(false);
+        if !listed {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    Ok(started_at.elapsed())
+}
+
+/// Measures how long the server needs to start an app and to stop it again.
+async fn measure_start_cycles(client: &reqwest::Client, options: &Options) -> anyhow::Result<()> {
+    // an app that is still running from an earlier phase would make the first cycle measure nothing
+    if let Some(proxy_id) = running_app(client, options).await? {
+        stop_app(client, options, &proxy_id).await?;
+    }
+
+    let mut start_times = Vec::new();
+    let mut stop_times = Vec::new();
+    for cycle in 1..=options.start_cycles {
+        let (proxy_id, start) = start_app(client, options).await?;
+        let stop = stop_app(client, options, &proxy_id).await?;
+        println!(
+            "  cycle {cycle}: start {:.0} ms, stop {:.0} ms",
+            start.as_secs_f64() * 1000.0,
+            stop.as_secs_f64() * 1000.0
+        );
+        start_times.push(start.as_secs_f64() * 1000.0);
+        stop_times.push(stop.as_secs_f64() * 1000.0);
+    }
+
+    let median = |mut values: Vec<f64>| -> f64 {
+        if values.is_empty() {
+            return 0.0;
+        }
+        values.sort_by(|left, right| left.partial_cmp(right).expect("no NaN"));
+        values[values.len() / 2]
+    };
+    let start_median = median(start_times.clone());
+    let stop_median = median(stop_times.clone());
+    println!();
+    println!("app_start_ms: median {start_median:.0}");
+    println!("app_stop_ms: median {stop_median:.0}");
+    if options.machine_readable {
+        println!("METRIC app_start_ms {start_median:.1}");
+        println!("METRIC app_stop_ms {stop_median:.1}");
+    }
     Ok(())
 }
 
