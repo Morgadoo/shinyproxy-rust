@@ -148,7 +148,8 @@ async fn starts_an_app_in_docker_and_proxies_to_it() {
     }
 
     cleanup_all().await;
-    let instance = TestInstance::start(&config(24000, "", "")).await;
+    // a fixed range, so that the published port can be asserted
+    let instance = TestInstance::start_sharing_ports(&config(24000, "", ""), (24000, 24009)).await;
     let jack = instance.login("jack", "password").await;
 
     // start the app through the API, as the browser does
@@ -248,7 +249,7 @@ async fn starts_an_app_in_docker_and_proxies_to_it() {
         .parse()
         .expect("number");
     assert!(
-        (24000..24100).contains(&host_port),
+        (24000..=24009).contains(&host_port),
         "the host port comes from the configured range: {host_port}"
     );
 
