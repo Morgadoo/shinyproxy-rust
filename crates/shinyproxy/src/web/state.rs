@@ -210,6 +210,11 @@ impl AppState {
         SpelResolver::new(builder.build())
     }
 
+    /// The Grafana this server proxies to (`proxy.monitoring.grafana-url`), without a trailing slash.
+    pub fn grafana_url(&self) -> Option<String> {
+        grafana_url(&self.settings)
+    }
+
     /// Whether a user may use a value set of the parameters of an app (`AccessControlEvaluationService`).
     pub fn has_value_set_access(
         &self,
@@ -560,6 +565,17 @@ fn inline_file_uri(uri: &str) -> Option<String> {
             None
         }
     }
+}
+
+/// The configured Grafana URL, without a trailing slash (`MonitoringService`).
+pub fn grafana_url(settings: &Settings) -> Option<String> {
+    settings
+        .proxy
+        .monitoring
+        .grafana_url
+        .as_deref()
+        .map(|url| url.trim_end_matches('/').to_string())
+        .filter(|url| !url.is_empty())
 }
 
 #[cfg(test)]

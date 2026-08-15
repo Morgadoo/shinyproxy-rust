@@ -530,6 +530,97 @@ springdoc:
 }
 
 #[tokio::test]
+async fn grafana_is_proxied_for_administrators_when_configured() {
+    // without proxy.monitoring.grafana-url the route answers 403, as the Java implementation does
+    let instance = TestInstance::start(CONFIG).await;
+    let admin = instance.login("root", "rootpw").await;
+    let response = admin
+        .get(instance.url("/grafana/"))
+        .send()
+        .await
+        .expect("request");
+    assert_eq!(response.status(), 403);
+    instance.stop();
+
+    // a fake Grafana that echoes the request
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let grafana_address = listener.local_addr().expect("address");
+    let grafana = tokio::spawn(async move {
+        let app = axum::Router::new().fallback(|request: axum::extract::Request| async move {
+            let user = request
+                .headers()
+                .get("x-sp-userid")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("")
+                .to_string();
+            format!("grafana {} user={user}", request.uri())
+        });
+        axum::serve(listener, app).await.ok();
+    });
+
+    let instance = TestInstance::start(&format!(
+        r##"
+proxy:
+  authentication: simple
+  admin-groups: admins
+  container-backend: local
+  monitoring:
+    grafana-url: http://{grafana_address}/
+  users:
+    - name: jack
+      password: password
+      groups: scientists
+    - name: root
+      password: rootpw
+      groups: admins
+  specs: []
+"##
+    ))
+    .await;
+
+    // a normal user may not reach it
+    let user = instance.login("jack", "password").await;
+    let response = user
+        .get(instance.url("/grafana/d/my-dashboard"))
+        .send()
+        .await
+        .expect("request");
+    assert_eq!(response.status(), 403);
+
+    // an administrator does, and the request keeps its path, query and the user header
+    let admin = instance.login("root", "rootpw").await;
+    let body = admin
+        .get(instance.url("/grafana/d/my-dashboard?orgId=1"))
+        .send()
+        .await
+        .expect("request")
+        .text()
+        .await
+        .expect("body");
+    assert_eq!(body, "grafana /d/my-dashboard?orgId=1 user=root");
+
+    // the bare path is redirected to the slash variant
+    let response = admin
+        .get(instance.url("/grafana"))
+        .send()
+        .await
+        .expect("request");
+    assert_eq!(response.status(), 303);
+    assert_eq!(
+        response
+            .headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok()),
+        Some("/grafana/")
+    );
+
+    instance.stop();
+    grafana.abort();
+}
+
+#[tokio::test]
 async fn delegate_proxy_endpoint_is_admin_only() {
     let instance = TestInstance::start(CONFIG).await;
 

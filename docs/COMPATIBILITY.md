@@ -131,6 +131,12 @@ types. Allow-listed static types: `java.lang.System.getenv`, `java.lang.String.v
 | Using values in an app definition | `#{proxy.getRuntimeObject('SHINYPROXY_PARAMETERS').backendValues['id']}` (in Java the runtime value is a Java object, so `.getValue('id')` also works there; this implementation exposes it as the JSON document) | 🟨 |
 | Choosing different values while resuming | The app is resumed with the values it was started with; passing new values while resuming lands with the rest of the resume flow | 🟨 |
 
+## Monitoring
+
+| Topic | Behaviour | Status |
+| --- | --- | --- |
+| `/grafana/**` | Reverse proxied to `proxy.monitoring.grafana-url` for administrators (403 without the setting, `/grafana` redirects to `/grafana/`), with the current user in `X-SP-UserId` so that Grafana's auth proxy works as with Java | ✅ |
+
 ## Not yet implemented
 
 Everything in [PROGRESS.md](PROGRESS.md) that is not marked ✅. Properties whose behaviour is not

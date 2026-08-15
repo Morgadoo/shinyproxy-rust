@@ -126,6 +126,10 @@ pub fn router(state: Arc<AppState>) -> Router {
             &path("/swagger-ui/index.html"),
             get(super::openapi::swagger_ui),
         )
+        // the Grafana proxy (administrators only, enforced by is_admin_path)
+        .route(&path("/grafana"), any(super::monitoring::grafana))
+        .route(&path("/grafana/"), any(super::monitoring::grafana))
+        .route(&path("/grafana/{*rest}"), any(super::monitoring::grafana))
         .route(&path("/admin"), get(super::admin::admin_page))
         .route(&path("/admin/about"), get(super::admin::about_page))
         .route(&path("/admin/data"), get(super::api::admin_data))

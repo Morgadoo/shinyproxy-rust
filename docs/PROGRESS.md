@@ -16,7 +16,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 | P6 | Data plane (HTTP + WebSocket proxying, heartbeats) | ✅ | streaming HTTP forwarding, WebSocket tunnel with browser pings (Java semantics), iframe script injection, cache header modes, crash detection; app page + /app_proxy + heartbeat endpoints |
 | P7 | REST API parity | ✅ | all documented endpoints (specs, proxies, status+watch, transfer, details, admin pages/data, issue reporting, delegate-proxy, app_direct, api/route) plus the OpenAPI document; the Java integration test classes are all covered |
 | P8 | Docker & Docker Swarm backends | ✅ | bollard based `docker` and `docker-swarm` backends, app recovery with the startup page and the readiness gate; verified end to end against a real Docker daemon (see `crates/shinyproxy/tests/docker.rs`, `SP_TEST_DOCKER=1`) |
-| P9 | UI parity completion | 🟨 | parameters (validation, form, conversion, runtime values) and the admin pages are done; remaining: my-apps modes/landing-page/logo details audit, `/grafana/**` proxy, HTML snapshot tests |
+| P9 | UI parity completion | 🟨 | parameters (validation, form, conversion, runtime values) and the admin pages are done; remaining: my-apps modes/landing-page/logo details audit and HTML snapshot tests |
 | P10 | Operational features (logs, metrics, timeouts, stats) | ⬜ | |
 | P11 | Authentication backends (OIDC, LDAP, SAML, ...) | ⬜ | |
 | P12 | High availability (Redis), Kubernetes, ECS, proxy sharing | ⬜ | |
