@@ -281,20 +281,25 @@ impl HeartbeatStore for RedisHeartbeatStore {
     }
 }
 
-/// Keeps the published host ports in Redis, so that two servers never publish the same port.
+/// Keeps the allocated host ports in Redis (`RedisPortAllocator`).
+///
+/// The hash `shinyproxy_{realmId}__ports` maps an owner (a proxy id) to the JSON array of its ports, which
+/// is what the Java implementation stores (`PortList`). Claiming a port uses `WATCH`/`MULTI`/`EXEC`, so two
+/// servers never hand out the same port.
 #[derive(Debug, Clone)]
-pub struct RedisPortStore {
+pub struct RedisPortRegistry {
     stores: RedisStores,
 }
 
-impl RedisPortStore {
-    /// Creates the store.
+impl RedisPortRegistry {
+    /// Creates the registry.
     pub fn new(stores: RedisStores) -> Self {
-        RedisPortStore { stores }
+        RedisPortRegistry { stores }
     }
+}
 
-    /// The owners of every allocated port.
-    pub fn allocated(&self) -> BTreeMap<u16, String> {
+impl crate::backend::ports::PortRegistry for RedisPortRegistry {
+    fn allocated(&self) -> BTreeMap<String, std::collections::BTreeSet<u16>> {
         let Some(mut connection) = self.stores.connection() else {
             return BTreeMap::new();
         };
@@ -303,31 +308,66 @@ impl RedisPortStore {
             .unwrap_or_default();
         entries
             .into_iter()
-            .filter_map(|(port, owner)| port.parse().ok().map(|port| (port, owner)))
+            .map(|(owner, ports)| {
+                let ports: std::collections::BTreeSet<u16> =
+                    serde_json::from_str::<Vec<u16>>(&ports)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .collect();
+                (owner, ports)
+            })
             .collect()
     }
 
-    /// Claims a port for an owner; `false` when another server claimed it first.
-    pub fn claim(&self, port: u16, owner: &str) -> bool {
+    fn add(&self, owner_id: &str, port: u16) -> bool {
         let Some(mut connection) = self.stores.connection() else {
             return false;
         };
-        connection
-            .hset_nx(self.stores.ports_key(), port.to_string(), owner)
-            .unwrap_or(false)
+        let key = self.stores.ports_key();
+        let owner = owner_id.to_string();
+
+        // the transaction re-reads the hash after WATCH, so a port another server claimed in the
+        // meantime makes this attempt fail (the caller then retries with a fresh view)
+        let result: redis::RedisResult<bool> =
+            redis::transaction(&mut connection, &[key.as_str()], |connection, pipeline| {
+                let entries: BTreeMap<String, String> = connection.hgetall(&key)?;
+                let taken = entries.values().any(|ports| {
+                    serde_json::from_str::<Vec<u16>>(ports)
+                        .unwrap_or_default()
+                        .contains(&port)
+                });
+                if taken {
+                    // nothing to write: an empty transaction commits and reports the conflict
+                    let _: Option<()> = pipeline.query(connection)?;
+                    return Ok(Some(false));
+                }
+                let mut ports: Vec<u16> = entries
+                    .get(&owner)
+                    .and_then(|ports| serde_json::from_str(ports).ok())
+                    .unwrap_or_default();
+                if !ports.contains(&port) {
+                    ports.push(port);
+                }
+                ports.sort_unstable();
+                let document = serde_json::to_string(&ports).unwrap_or_default();
+                let _: Option<()> = pipeline.hset(&key, &owner, document).query(connection)?;
+                Ok(Some(true))
+            });
+
+        match result {
+            Ok(claimed) => claimed,
+            Err(error) => {
+                tracing::warn!("cannot claim port {port} in Redis: {error}");
+                false
+            }
+        }
     }
 
-    /// Releases every port of an owner.
-    pub fn release(&self, owner: &str) {
-        let allocated = self.allocated();
+    fn release(&self, owner_id: &str) {
         let Some(mut connection) = self.stores.connection() else {
             return;
         };
-        for (port, port_owner) in allocated {
-            if port_owner == owner {
-                let _: Result<(), _> = connection.hdel(self.stores.ports_key(), port.to_string());
-            }
-        }
+        let _: Result<(), _> = connection.hdel(self.stores.ports_key(), owner_id);
     }
 }
 

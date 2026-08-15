@@ -208,7 +208,8 @@ types. Allow-listed static types: `java.lang.System.getenv`, `java.lang.String.v
 | Redis proxy store | The same keys as Java (`shinyproxy_{realmId}__active_proxies`, `shinyproxy_{realmId}_user_proxies_{userId}`) with the internal JSON document of a proxy (`_runtimeValues`, `targets`, containers), so several servers of a realm share their apps and a Java and a Rust server can read each other's state | ✅ |
 | Redis heartbeat store | `shinyproxy_{realmId}__heartbeats`, so a heartbeat that arrives at one server is seen by all of them | ✅ |
 | Redis sessions | Not implemented; sessions live in memory, so a user has to log in again when they reach another server. `proxy.store-mode: Redis` without Redis sessions warns at startup (as in Java) | ⬜ |
-| Leader election, `RedisCheckLatestConfigService`, Redis port allocator, proxy sharing seats | Not implemented yet | ⬜ |
+| Redis port allocator | `shinyproxy_{realmId}__ports` maps an owner to the JSON array of its ports (the Java `PortList`), claimed with `WATCH`/`MULTI`/`EXEC`, so two servers never publish the same host port | ✅ |
+| Leader election, `RedisCheckLatestConfigService`, proxy sharing seats | Not implemented yet | ⬜ |
 
 ## Not yet implemented
 

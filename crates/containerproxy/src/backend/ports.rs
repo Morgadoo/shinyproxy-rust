@@ -35,78 +35,131 @@ use std::sync::Mutex;
 )]
 pub struct NoPortAvailable;
 
+/// Where the allocated ports are kept.
+///
+/// The memory registry is used by a single server; the Redis registry (`store::redis`) lets the servers of
+/// a realm allocate ports without ever handing out the same one twice, as `RedisPortAllocator` does.
+pub trait PortRegistry: Send + Sync + std::fmt::Debug {
+    /// Every allocated port, per owner.
+    fn allocated(&self) -> BTreeMap<String, BTreeSet<u16>>;
+
+    /// Adds a port to an owner; `false` when somebody else took it in the meantime (then the caller
+    /// retries with a fresh view).
+    fn add(&self, owner_id: &str, port: u16) -> bool;
+
+    /// Releases every port of an owner.
+    fn release(&self, owner_id: &str);
+
+    /// The ports of an owner.
+    fn owned(&self, owner_id: &str) -> BTreeSet<u16> {
+        self.allocated().remove(owner_id).unwrap_or_default()
+    }
+}
+
+/// Keeps the allocated ports in memory (one server).
+#[derive(Debug, Default)]
+pub struct MemoryPortRegistry {
+    state: Mutex<BTreeMap<String, BTreeSet<u16>>>,
+}
+
+impl PortRegistry for MemoryPortRegistry {
+    fn allocated(&self) -> BTreeMap<String, BTreeSet<u16>> {
+        self.state.lock().expect("not poisoned").clone()
+    }
+
+    fn add(&self, owner_id: &str, port: u16) -> bool {
+        let mut state = self.state.lock().expect("not poisoned");
+        if state.values().any(|ports| ports.contains(&port)) {
+            return false;
+        }
+        state.entry(owner_id.to_string()).or_default().insert(port);
+        true
+    }
+
+    fn release(&self, owner_id: &str) {
+        self.state.lock().expect("not poisoned").remove(owner_id);
+    }
+}
+
 /// Hands out host ports.
 #[derive(Debug)]
 pub struct PortAllocator {
-    state: Mutex<State>,
+    registry: Box<dyn PortRegistry>,
     range_from: u16,
     range_to: Option<u16>,
-}
-
-#[derive(Debug, Default)]
-struct State {
-    /// Owner (proxy id) to the ports it owns.
-    ports: BTreeMap<String, BTreeSet<u16>>,
 }
 
 impl PortAllocator {
     /// Creates an allocator for the given range (`range_to` `None` means "until the end").
     pub fn new(range_from: u16, range_to: Option<u16>) -> Self {
+        PortAllocator::with_registry(
+            Box::new(MemoryPortRegistry::default()),
+            range_from,
+            range_to,
+        )
+    }
+
+    /// Creates an allocator that keeps its state in the given registry.
+    pub fn with_registry(
+        registry: Box<dyn PortRegistry>,
+        range_from: u16,
+        range_to: Option<u16>,
+    ) -> Self {
         PortAllocator {
-            state: Mutex::new(State::default()),
+            registry,
             range_from,
             range_to,
         }
     }
 
     /// Allocates a free port for the given owner.
+    ///
+    /// With a shared registry another server may take the port between reading and claiming it, so the
+    /// search is retried (the Java implementation does the same with `WATCH`/`MULTI`).
     pub fn allocate(&self, owner_id: &str) -> Result<u16, NoPortAvailable> {
-        let mut state = self.state.lock().expect("port allocator is not poisoned");
-        let allocated: BTreeSet<u16> = state.ports.values().flatten().copied().collect();
+        for _ in 0..100 {
+            let allocated: BTreeSet<u16> = self
+                .registry
+                .allocated()
+                .values()
+                .flatten()
+                .copied()
+                .collect();
 
-        let mut candidate = self.range_from;
-        while allocated.contains(&candidate) {
-            candidate = candidate.checked_add(1).ok_or(NoPortAvailable)?;
-        }
-        if let Some(range_to) = self.range_to {
-            if candidate > range_to {
-                return Err(NoPortAvailable);
+            let mut candidate = self.range_from;
+            while allocated.contains(&candidate) {
+                candidate = candidate.checked_add(1).ok_or(NoPortAvailable)?;
+            }
+            if let Some(range_to) = self.range_to {
+                if candidate > range_to {
+                    return Err(NoPortAvailable);
+                }
+            }
+            if self.registry.add(owner_id, candidate) {
+                return Ok(candidate);
             }
         }
-        state
-            .ports
-            .entry(owner_id.to_string())
-            .or_default()
-            .insert(candidate);
-        Ok(candidate)
+        Err(NoPortAvailable)
     }
 
     /// Registers a port that is already in use (app recovery).
     pub fn add_existing_port(&self, owner_id: &str, port: u16) {
-        let mut state = self.state.lock().expect("port allocator is not poisoned");
-        state
-            .ports
-            .entry(owner_id.to_string())
-            .or_default()
-            .insert(port);
+        self.registry.add(owner_id, port);
     }
 
     /// Releases all ports of an owner.
     pub fn release(&self, owner_id: &str) {
-        let mut state = self.state.lock().expect("port allocator is not poisoned");
-        state.ports.remove(owner_id);
+        self.registry.release(owner_id);
     }
 
     /// The ports owned by the given owner.
     pub fn owned_ports(&self, owner_id: &str) -> BTreeSet<u16> {
-        let state = self.state.lock().expect("port allocator is not poisoned");
-        state.ports.get(owner_id).cloned().unwrap_or_default()
+        self.registry.owned(owner_id)
     }
 
     /// Total number of allocated ports.
     pub fn allocated_count(&self) -> usize {
-        let state = self.state.lock().expect("port allocator is not poisoned");
-        state.ports.values().map(BTreeSet::len).sum()
+        self.registry.allocated().values().map(BTreeSet::len).sum()
     }
 }
 

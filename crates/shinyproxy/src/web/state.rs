@@ -158,23 +158,11 @@ impl AppState {
         let security_headers = SecurityHeaders::from_settings(&settings);
 
         let settings = Arc::new(settings);
-        let port_allocator = Arc::new(PortAllocator::new(
-            settings.proxy.docker.port_range_start(),
-            settings.proxy.docker.port_range_max(),
-        ));
         let runtime_values = Arc::new(
             RuntimeValueRegistry::engine().with_keys(crate::runtime_values::SHINYPROXY_KEYS),
         );
-        let backend = backend::create(
-            &settings,
-            backend::BackendContext {
-                port_allocator: port_allocator.clone(),
-                registry: runtime_values.clone(),
-                realm_id: identifiers.realm_id.clone(),
-            },
-        )?;
-        let recovery = Arc::new(AppRecoveryService::new(&settings, &identifiers));
         // `proxy.store-mode: Redis` shares the state with the other servers of the realm
+        let mut port_registry: Option<Box<dyn containerproxy::backend::ports::PortRegistry>> = None;
         let (store, heartbeats): (Arc<dyn ProxyStore>, Arc<dyn HeartbeatStore>) =
             if settings.proxy.store_mode().eq_ignore_ascii_case("redis") {
                 let url = RedisStores::url_of(&settings);
@@ -185,6 +173,11 @@ impl AppState {
                 )
                 .map_err(StateError::Store)?;
                 tracing::info!("Using the Redis store ({url})");
+                // the host ports are allocated through Redis as well, so that two servers never publish
+                // the same port
+                port_registry = Some(Box::new(containerproxy::store::RedisPortRegistry::new(
+                    stores.clone(),
+                )));
                 (
                     Arc::new(stores.proxy_store()),
                     Arc::new(stores.heartbeat_store()),
@@ -197,6 +190,28 @@ impl AppState {
                     Arc::new(MemoryHeartbeatStore::new()),
                 )
             };
+
+        let port_allocator = Arc::new(match port_registry {
+            Some(registry) => PortAllocator::with_registry(
+                registry,
+                settings.proxy.docker.port_range_start(),
+                settings.proxy.docker.port_range_max(),
+            ),
+            None => PortAllocator::new(
+                settings.proxy.docker.port_range_start(),
+                settings.proxy.docker.port_range_max(),
+            ),
+        });
+
+        let backend = backend::create(
+            &settings,
+            backend::BackendContext {
+                port_allocator: port_allocator.clone(),
+                registry: runtime_values.clone(),
+                realm_id: identifiers.realm_id.clone(),
+            },
+        )?;
+        let recovery = Arc::new(AppRecoveryService::new(&settings, &identifiers));
         let proxies = Arc::new(ProxyService::new(
             settings.clone(),
             &identifiers,

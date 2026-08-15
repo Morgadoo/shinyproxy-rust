@@ -56,6 +56,7 @@ proxy:
       container-image: sp-testapp
       container-cmd: [ "sp-testapp" ]
       access-groups: scientists
+      max-instances: 3
 "##
     )
 }
@@ -190,6 +191,96 @@ async fn two_servers_share_their_apps() {
         Some(0),
         "the app must be gone on both servers: {proxies}"
     );
+
+    first.stop();
+    second.stop();
+    clear_realm(&realm);
+}
+
+#[tokio::test]
+async fn two_servers_never_publish_the_same_port() {
+    if !enabled() {
+        eprintln!("skipping: set SP_TEST_REDIS=1 to run the Redis tests");
+        return;
+    }
+
+    let realm = format!("ports-{}", std::process::id());
+    clear_realm(&realm);
+
+    // both servers publish from the same range, which is the point of the shared allocator
+    let range = (24800, 24809);
+    let first = TestInstance::start_sharing_ports(&config(&realm), range).await;
+    let second = TestInstance::start_sharing_ports(&config(&realm), range).await;
+
+    // with the Redis registry they never hand out the same port
+    let jack_on_first = first.login("jack", "password").await;
+    let jack_on_second = second.login("jack", "password").await;
+    let first_id = start_app(&first, &jack_on_first).await;
+
+    // the second app is started through the other server (a second instance of the same app)
+    let started: serde_json::Value = jack_on_second
+        .post(second.url("/app_i/01_hello/second"))
+        .send()
+        .await
+        .expect("start request")
+        .json()
+        .await
+        .expect("json");
+    let second_id = started["data"]["id"].as_str().expect("id").to_string();
+    let status: serde_json::Value = jack_on_second
+        .get(second.url(&format!(
+            "/api/proxy/{second_id}/status?watch=true&timeout=15"
+        )))
+        .send()
+        .await
+        .expect("status request")
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(status["data"]["status"], "Up", "{status}");
+
+    // the two apps listen on different host ports (the targets are part of the stored proxies)
+    let target_of = |proxies: &serde_json::Value, id: &str| -> String {
+        proxies["data"]
+            .as_array()
+            .expect("array")
+            .iter()
+            .find(|proxy| proxy["id"] == id)
+            .and_then(|proxy| proxy["runtimeValues"]["SHINYPROXY_PUBLIC_PATH"].as_str())
+            .unwrap_or_default()
+            .to_string()
+    };
+    let proxies: serde_json::Value = jack_on_first
+        .get(first.url("/api/proxy"))
+        .send()
+        .await
+        .expect("api request")
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(proxies["data"].as_array().map(Vec::len), Some(2));
+    assert_ne!(
+        target_of(&proxies, &first_id),
+        target_of(&proxies, &second_id)
+    );
+
+    // the ports of both servers are in the shared hash, under their proxy ids
+    let url =
+        std::env::var("SP_TEST_REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1/".to_string());
+    let client = redis::Client::open(url).expect("client");
+    let mut connection = client.get_connection().expect("connection");
+    let entries: std::collections::BTreeMap<String, String> = redis::cmd("HGETALL")
+        .arg(format!("shinyproxy_{realm}__ports"))
+        .query(&mut connection)
+        .expect("ports");
+    assert!(entries.contains_key(&first_id), "{entries:?}");
+    assert!(entries.contains_key(&second_id), "{entries:?}");
+    let ports: Vec<u16> = entries
+        .values()
+        .flat_map(|value| serde_json::from_str::<Vec<u16>>(value).unwrap_or_default())
+        .collect();
+    assert_eq!(ports.len(), 2, "one port per app: {entries:?}");
+    assert_ne!(ports[0], ports[1], "the ports must differ: {entries:?}");
 
     first.stop();
     second.stop();

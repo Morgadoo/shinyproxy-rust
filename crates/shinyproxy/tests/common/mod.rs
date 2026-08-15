@@ -77,6 +77,19 @@ fn init_logging() {
 impl TestInstance {
     /// Starts a server with the given configuration.
     pub async fn start(yaml: &str) -> TestInstance {
+        TestInstance::start_with_ports(yaml, None).await
+    }
+
+    /// Starts a server that publishes app ports from the given range.
+    ///
+    /// Used by the tests that check that two servers sharing a store never hand out the same port; every
+    /// other test gets its own range (see `unique_port_range`).
+    pub async fn start_sharing_ports(yaml: &str, range: (u16, u16)) -> TestInstance {
+        TestInstance::start_with_ports(yaml, Some(range)).await
+    }
+
+    /// Starts a server, optionally with a fixed port range.
+    async fn start_with_ports(yaml: &str, ports: Option<(u16, u16)>) -> TestInstance {
         init_logging();
         let directory = tempfile::tempdir().expect("temp dir");
         let path = directory.path().join("application.yml");
@@ -93,7 +106,7 @@ impl TestInstance {
         }
         // every instance gets its own port range, so that tests (which run in parallel, in several test
         // binaries) never hand out the same host port twice
-        let (range_start, range_max) = unique_port_range();
+        let (range_start, range_max) = ports.unwrap_or_else(unique_port_range);
         settings.proxy.docker.port_range_start =
             Some(containerproxy::config::FlexI64(range_start as i64));
         settings.proxy.docker.port_range_max =
