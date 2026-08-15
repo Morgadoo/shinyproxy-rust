@@ -941,6 +941,20 @@ impl ContainerBackend for DockerBackend {
         Ok(Some(Box::pin(stream)))
     }
 
+    async fn existing_targets(
+        &self,
+        container: &crate::model::proxy::Container,
+        port_bindings: &BTreeMap<u16, u16>,
+    ) -> BTreeMap<String, String> {
+        super::target::targets_from_stored_mappings(
+            container,
+            port_bindings,
+            &self.config.target_protocol,
+            &self.config.target_host,
+            self.config.internal_networking,
+        )
+    }
+
     async fn scan_existing_containers(&self) -> Result<Vec<ExistingContainerInfo>, BackendError> {
         let options = ListContainersOptionsBuilder::new().all(true).build();
         let containers = self

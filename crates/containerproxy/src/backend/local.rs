@@ -241,6 +241,20 @@ impl ContainerBackend for LocalBackend {
         Ok(Some(Box::pin(futures::stream::select(stdout, stderr))))
     }
 
+    async fn existing_targets(
+        &self,
+        container: &crate::model::proxy::Container,
+        port_bindings: &BTreeMap<u16, u16>,
+    ) -> BTreeMap<String, String> {
+        super::target::targets_from_stored_mappings(
+            container,
+            port_bindings,
+            &self.protocol,
+            &self.host,
+            false,
+        )
+    }
+
     async fn stop_proxy(&self, proxy: &Proxy) -> Result<(), BackendError> {
         self.outputs.remove(&proxy.id);
         if let Some((_, children)) = self.processes.remove(&proxy.id) {

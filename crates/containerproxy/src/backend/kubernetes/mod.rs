@@ -777,6 +777,66 @@ impl ContainerBackend for KubernetesBackend {
         Ok(Some(Box::pin(chunks)))
     }
 
+    async fn existing_targets(
+        &self,
+        container: &crate::model::proxy::Container,
+        port_bindings: &BTreeMap<u16, u16>,
+    ) -> BTreeMap<String, String> {
+        let mappings: crate::service::runtime_values::PortMappings = container
+            .runtime_values
+            .get(&crate::model::runtime_value::PORT_MAPPINGS)
+            .and_then(|value| value.data.parse_json())
+            .unwrap_or_default();
+
+        // the host of a pod is its name inside the cluster, and the IP of its node outside
+        let pod = self.pod_of(container).await;
+        let host = if self.config.internal_networking {
+            let Some(pod) = &pod else {
+                return BTreeMap::new();
+            };
+            let hostname = pod
+                .spec
+                .as_ref()
+                .and_then(|spec| spec.hostname.clone())
+                .unwrap_or_else(|| pod.name_any());
+            let namespace = pod
+                .namespace()
+                .unwrap_or_else(|| self.config.namespace.clone());
+            manifest::pod_fqdn(&hostname, &namespace, &self.config.cluster_domain)
+        } else {
+            match pod
+                .as_ref()
+                .and_then(|pod| pod.status.as_ref())
+                .and_then(|status| status.host_ip.clone())
+            {
+                Some(host_ip) => host_ip,
+                None => return BTreeMap::new(),
+            }
+        };
+
+        let mut targets = BTreeMap::new();
+        for mapping in &mappings.port_mappings {
+            let port = if self.config.internal_networking {
+                mapping.port as u16
+            } else {
+                match port_bindings.get(&(mapping.port as u16)) {
+                    Some(node_port) => *node_port,
+                    None => continue,
+                }
+            };
+            targets.insert(
+                mapping_key_to_path(&mapping.name),
+                target_url(
+                    &self.config.target_protocol,
+                    &host,
+                    port,
+                    &compute_target_path(Some(mapping.target_path.as_str())),
+                ),
+            );
+        }
+        targets
+    }
+
     async fn scan_existing_containers(&self) -> Result<Vec<ExistingContainerInfo>, BackendError> {
         let mut existing = Vec::new();
         for namespace in &self.config.app_namespaces {

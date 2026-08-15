@@ -78,6 +78,58 @@ pub fn target_url(protocol: &str, host: &str, port: u16, target_path: &str) -> S
     format!("{protocol}://{host}:{port}{target_path}")
 }
 
+/// The targets of a container that already exists, from the port mappings stored on it.
+///
+/// Used by the backends that publish host ports (Docker, Swarm and the local backend): the mapping names
+/// and paths come from the `SHINYPROXY_PORT_MAPPINGS` runtime value, and the host and the port from the
+/// arguments.
+pub fn targets_from_stored_mappings(
+    container: &crate::model::proxy::Container,
+    port_bindings: &std::collections::BTreeMap<u16, u16>,
+    protocol: &str,
+    host: &str,
+    internal_networking: bool,
+) -> std::collections::BTreeMap<String, String> {
+    let mappings: crate::service::runtime_values::PortMappings = container
+        .runtime_values
+        .get(&crate::model::runtime_value::PORT_MAPPINGS)
+        .and_then(|value| value.data.parse_json())
+        .unwrap_or_default();
+
+    let mut targets = std::collections::BTreeMap::new();
+    for mapping in &mappings.port_mappings {
+        let container_port = mapping.port;
+        let (host, port) = if internal_networking {
+            // inside a container network the short container id is a resolvable name
+            (
+                container
+                    .id
+                    .clone()
+                    .unwrap_or_default()
+                    .chars()
+                    .take(12)
+                    .collect::<String>(),
+                container_port as u16,
+            )
+        } else {
+            match port_bindings.get(&(container_port as u16)) {
+                Some(host_port) => (host.to_string(), *host_port),
+                None => continue,
+            }
+        };
+        targets.insert(
+            mapping_key_to_path(&mapping.name),
+            target_url(
+                protocol,
+                &host,
+                port,
+                &compute_target_path(Some(mapping.target_path.as_str())),
+            ),
+        );
+    }
+    targets
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

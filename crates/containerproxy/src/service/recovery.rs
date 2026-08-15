@@ -33,15 +33,14 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use crate::backend::{compute_target_path, mapping_key_to_path, ContainerBackend};
+use crate::backend::ContainerBackend;
 use crate::config::Settings;
 use crate::model::proxy::{Container, Proxy, ProxyStatus};
 use crate::model::runtime_value::{
-    RuntimeValues, CONTAINER_INDEX, CREATED_TIMESTAMP, DISPLAY_NAME, INSTANCE_ID, PORT_MAPPINGS,
-    PROXY_ID, PROXY_SPEC_ID, TARGET_ID, USER_ID,
+    RuntimeValues, CONTAINER_INDEX, CREATED_TIMESTAMP, DISPLAY_NAME, INSTANCE_ID, PROXY_ID,
+    PROXY_SPEC_ID, TARGET_ID, USER_ID,
 };
 use crate::service::identifier::Identifiers;
-use crate::service::runtime_values::PortMappings;
 use crate::store::{HeartbeatStore, ProxyStore};
 
 /// Recovers the apps that are still running.
@@ -54,11 +53,6 @@ pub struct AppRecoveryService {
     from_different_config: bool,
     /// The instance id of this server.
     instance_id: String,
-    /// How the containers are reached.
-    target_protocol: String,
-    target_host: String,
-    /// Whether the proxy talks to the containers over the internal container network.
-    internal_networking: bool,
     /// Set once recovery finished; the readiness probe and the recovery filter use it.
     ready: AtomicBool,
 }
@@ -66,23 +60,6 @@ pub struct AppRecoveryService {
 impl AppRecoveryService {
     /// Creates the service from the settings.
     pub fn new(settings: &Settings, identifiers: &Identifiers) -> Self {
-        let docker = &settings.proxy.docker;
-        let target_url = docker
-            .target_url
-            .clone()
-            .unwrap_or_else(|| "http://localhost".to_string());
-        let parsed = url::Url::parse(&target_url).ok();
-        let target_protocol = docker.container_protocol.clone().unwrap_or_else(|| {
-            parsed
-                .as_ref()
-                .map(|url| url.scheme().to_string())
-                .unwrap_or_else(|| "http".to_string())
-        });
-        let target_host = parsed
-            .as_ref()
-            .and_then(|url| url.host_str().map(str::to_string))
-            .unwrap_or_else(|| "localhost".to_string());
-
         AppRecoveryService {
             enabled: settings.proxy.recover_running_proxies(),
             from_different_config: settings
@@ -91,9 +68,6 @@ impl AppRecoveryService {
                 .map(|value| value.0)
                 .unwrap_or(false),
             instance_id: identifiers.instance_id.clone(),
-            target_protocol,
-            target_host,
-            internal_networking: docker.internal_networking(),
             ready: AtomicBool::new(false),
         }
     }
@@ -224,8 +198,11 @@ impl AppRecoveryService {
             }
             container.runtime_values = container_values;
 
-            // rebuild the targets from the port mappings that are stored on the container
-            for (name, url) in self.targets(&container, &info.port_bindings) {
+            // the backend knows how a container that already exists is reached
+            for (name, url) in backend
+                .existing_targets(&container, &info.port_bindings)
+                .await
+            {
                 proxy.targets.insert(name, url);
             }
             proxy.containers.push(container);
@@ -246,62 +223,15 @@ impl AppRecoveryService {
         self.ready.store(true, Ordering::SeqCst);
         recovered
     }
-
-    /// The targets of a recovered container (`setupPortMappingExistingProxy`).
-    fn targets(
-        &self,
-        container: &Container,
-        port_bindings: &BTreeMap<u16, u16>,
-    ) -> BTreeMap<String, String> {
-        let mappings: PortMappings = container
-            .runtime_values
-            .get(&PORT_MAPPINGS)
-            .and_then(|value| value.data.parse_json())
-            .unwrap_or_default();
-
-        let mut targets = BTreeMap::new();
-        for mapping in &mappings.port_mappings {
-            let container_port = mapping.port;
-            let (host, port) = if self.internal_networking {
-                (
-                    container
-                        .id
-                        .clone()
-                        .unwrap_or_default()
-                        .chars()
-                        .take(12)
-                        .collect::<String>(),
-                    container_port as u16,
-                )
-            } else {
-                match port_bindings.get(&(container_port as u16)) {
-                    Some(host_port) => (self.target_host.clone(), *host_port),
-                    None => continue,
-                }
-            };
-            // the stored path is already normalised, but normalising again is harmless and keeps the
-            // behaviour identical for containers created by other versions
-            let target_path = compute_target_path(Some(mapping.target_path.as_str()));
-            targets.insert(
-                mapping_key_to_path(&mapping.name),
-                crate::backend::target::target_url(
-                    &self.target_protocol,
-                    &host,
-                    port,
-                    &target_path,
-                ),
-            );
-        }
-        targets
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::backend::{BackendError, ExistingContainerInfo, StartContext, StartedContainer};
-    use crate::model::runtime_value::RuntimeValue;
+    use crate::model::runtime_value::{RuntimeValue, PORT_MAPPINGS};
     use crate::service::runtime_values::PortMappingEntry;
+    use crate::service::runtime_values::PortMappings;
     use crate::store::{MemoryHeartbeatStore, MemoryProxyStore};
     use async_trait::async_trait;
 
@@ -332,6 +262,21 @@ mod tests {
             &self,
         ) -> Result<Vec<ExistingContainerInfo>, BackendError> {
             Ok(self.containers.clone())
+        }
+
+        /// The targets of an existing container, like the Docker backend computes them.
+        async fn existing_targets(
+            &self,
+            container: &crate::model::proxy::Container,
+            port_bindings: &BTreeMap<u16, u16>,
+        ) -> BTreeMap<String, String> {
+            crate::backend::target::targets_from_stored_mappings(
+                container,
+                port_bindings,
+                "http",
+                "localhost",
+                false,
+            )
         }
     }
 

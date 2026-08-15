@@ -180,6 +180,19 @@ pub trait ContainerBackend: Send + Sync + std::fmt::Debug {
         Ok(None)
     }
 
+    /// The targets of a container that already exists, used by app recovery.
+    ///
+    /// The backend decides how a container is reached (`setupPortMappingExistingProxy` in Java, which asks
+    /// the backend for every mapping), because the answer differs per backend: a published host port for
+    /// Docker, a node port or a pod name for Kubernetes.
+    async fn existing_targets(
+        &self,
+        _container: &Container,
+        _port_bindings: &BTreeMap<u16, u16>,
+    ) -> BTreeMap<String, String> {
+        BTreeMap::new()
+    }
+
     /// Containers that already exist, used by app recovery.
     async fn scan_existing_containers(&self) -> Result<Vec<ExistingContainerInfo>, BackendError> {
         Ok(Vec::new())
