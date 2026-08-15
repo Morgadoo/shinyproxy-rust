@@ -25,6 +25,7 @@ pub mod identifier;
 pub mod parameters;
 pub mod proxy_service;
 pub mod recovery;
+pub mod release;
 pub mod runtime_values;
 
 pub use identifier::Identifiers;
@@ -34,4 +35,5 @@ pub use parameters::{
 };
 pub use proxy_service::{ProxyService, StartError};
 pub use recovery::AppRecoveryService;
+pub use release::{ReleaseService, ReleaseStrategy};
 pub use runtime_values::{PortMappings, RuntimeValueService};

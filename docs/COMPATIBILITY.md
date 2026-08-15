@@ -137,6 +137,15 @@ types. Allow-listed static types: `java.lang.System.getenv`, `java.lang.String.v
 | --- | --- | --- |
 | `/grafana/**` | Reverse proxied to `proxy.monitoring.grafana-url` for administrators (403 without the setting, `/grafana` redirects to `/grafana/`), with the current user in `X-SP-UserId` so that Grafana's auth proxy works as with Java | ✅ |
 
+## Releasing apps
+
+| Topic | Behaviour | Status |
+| --- | --- | --- |
+| Heartbeat timeout | Apps that have been silent longer than their heartbeat timeout are released; checked every `2 × proxy.heartbeat-rate`, measured from the last heartbeat (or the startup time when there was none), disabled for a timeout of `0` or less — same as `ActiveProxiesService` | ✅ |
+| `max-lifetime` | Apps older than their max lifetime are released; checked every five minutes, with the same log line (including the `DurationFormatUtils` wording of the uptime) | ✅ |
+| Logout | The apps of the user are stopped when `stop-on-logout` of the app, or `proxy.default-stop-proxy-on-logout` (true by default), says so | ✅ |
+| Release strategy | Apps are stopped (`StopProxyReleaseStrategy`); pausing instead of stopping exists in the service (`ReleaseStrategy::Pause`) but ShinyProxy never selects it, as in Java | ✅ |
+
 ## Not yet implemented
 
 Everything in [PROGRESS.md](PROGRESS.md) that is not marked ✅. Properties whose behaviour is not

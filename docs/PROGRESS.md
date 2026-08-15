@@ -31,6 +31,7 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 | `containerproxy` golden | 2 | canonical YAML + SHA-1 vs Java reference output |
 | `containerproxy` dataplane (end to end) | 6 | streamed bodies, header forwarding, WebSocket + heartbeats, cache headers, injection, crashed app |
 | `shinyproxy` docker backend (end to end, `SP_TEST_DOCKER=1`) | 4 | container create request (labels, env, published ports), HTTP + WebSocket proxying, stop/cleanup, pause/resume, app recovery after a restart and the instanceId check |
+| `shinyproxy` release timers (end to end) | 5 | inactive apps released while used/unused, disabled timeout, max lifetime, logout stopping (and `stop-on-logout` overrides) |
 | `shinyproxy` HTML snapshots | 8 | login (plain and expired), index (user, admin, inline my-apps with template groups), app page (plain and with parameters + hidden navbar), admin (proxies and about), error pages |
 | `shinyproxy` parameters (end to end) | 6 | the form for two kinds of users, validation of chosen values, values reaching the app and the API, preselection when resuming, a configuration provided form, startup validation |
 | `shinyproxy` admin & api (end to end) | 9 | admin pages and assets, app transfer, custom app details, issue reporting validation, app_direct, api/route, delegate-proxy authorization |

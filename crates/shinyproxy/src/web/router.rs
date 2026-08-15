@@ -469,6 +469,27 @@ async fn logout(State(state): State<Arc<AppState>>, session: Session) -> Respons
     let data = SessionData::load(&session).await;
     if let Some(user) = &data.user {
         tracing::info!("User logged out [user: {}]", user.id);
+        state
+            .proxies
+            .events()
+            .publish(containerproxy::events::Event::UserLoggedOut {
+                user_id: user.id.clone(),
+                expired: false,
+            });
+
+        // the apps of the user are stopped when they say so (`proxy.default-stop-proxy-on-logout` is
+        // true by default), in the background so that the browser is not kept waiting
+        let logout_state = state.clone();
+        let user_id = user.id.clone();
+        tokio::spawn(async move {
+            let stopped = logout_state
+                .release
+                .on_logout(&user_id, &|proxy| logout_state.stop_on_logout(proxy))
+                .await;
+            for proxy_id in stopped {
+                logout_state.router.remove_mappings(&proxy_id);
+            }
+        });
     }
     let mut data = data;
     data.user_initiated_logout = true;

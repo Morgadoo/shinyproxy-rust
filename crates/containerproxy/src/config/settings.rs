@@ -279,6 +279,14 @@ impl ProxySettings {
                 .unwrap_or(false)
     }
 
+    /// Whether apps are stopped when their user logs out (`proxy.default-stop-proxy-on-logout`,
+    /// default true).
+    pub fn default_stop_proxy_on_logout(&self) -> bool {
+        self.default_stop_proxy_on_logout
+            .map(|value| value.0)
+            .unwrap_or(true)
+    }
+
     /// Whether logs are emitted as JSON (`proxy.log-as-json`, default false).
     pub fn log_as_json(&self) -> bool {
         self.log_as_json.map(|value| value.0).unwrap_or(false)

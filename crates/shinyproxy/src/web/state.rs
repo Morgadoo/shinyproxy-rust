@@ -33,6 +33,7 @@ use containerproxy::model::runtime_value::{RuntimeValue, RuntimeValueRegistry};
 use containerproxy::model::spec::ProxySpec;
 use containerproxy::service::{
     AllowedParametersForUser, AppRecoveryService, Identifiers, ParameterValues, ProxyService,
+    ReleaseService,
 };
 use containerproxy::spec::expression::{ExpressionContextBuilder, SpelResolver};
 use containerproxy::spec::SpecProvider;
@@ -72,6 +73,8 @@ pub struct AppState {
     pub backend: Arc<dyn ContainerBackend>,
     /// Recovery of apps that are still running (`proxy.recover-running-proxies`).
     pub recovery: Arc<AppRecoveryService>,
+    /// Releases apps that are inactive or too old.
+    pub release: Arc<ReleaseService>,
     /// All known runtime value keys (engine + ShinyProxy).
     pub runtime_values: RuntimeValueRegistry,
     /// Cached logo data URIs, keyed by the configured URL.
@@ -148,6 +151,12 @@ impl AppState {
             EventBus::new(),
         ));
 
+        let release = Arc::new(ReleaseService::new(
+            &settings,
+            proxies.clone(),
+            heartbeats.clone(),
+        ));
+
         Ok(AppState {
             raw,
             settings: (*settings).clone(),
@@ -162,6 +171,7 @@ impl AppState {
             heartbeats,
             router: Arc::new(ProxyRouter::new()),
             recovery,
+            release,
             backend,
             runtime_values: (*runtime_values).clone(),
             logo_cache: dashmap::DashMap::new(),
@@ -183,7 +193,24 @@ impl AppState {
             for proxy in &recovered {
                 state.router.add_mappings(proxy);
             }
+
+            // the timers that release inactive and expired apps run for the lifetime of the process
+            state.release.clone().spawn();
         })
+    }
+
+    /// Whether an app is stopped when its user logs out (`DefaultProxyLogoutStrategy.shouldBeStopped`).
+    pub fn stop_on_logout(&self, proxy: &containerproxy::model::proxy::Proxy) -> bool {
+        // the app definition wins over the global default (which is true)
+        if let Some(stop_on_logout) = proxy
+            .spec_id
+            .as_deref()
+            .and_then(|spec_id| self.specs.spec(spec_id))
+            .and_then(|spec| spec.stop_on_logout)
+        {
+            return stop_on_logout;
+        }
+        self.settings.proxy.default_stop_proxy_on_logout()
     }
 
     /// The context path, always ending with a slash (`ContextPathHelper.withEndingSlash`).
