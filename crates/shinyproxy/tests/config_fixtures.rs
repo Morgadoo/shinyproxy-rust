@@ -199,7 +199,10 @@ fn ldap_configuration_single_and_multiple_providers() {
     assert_no_unknown_properties("ldap-multiple.yml", &config);
     let providers = settings.proxy.ldap.providers();
     assert_eq!(providers.len(), 2);
-    assert_eq!(providers[1].starttls.as_deref(), Some("simple"));
+    assert_eq!(
+        providers[1].starttls.as_ref().map(|value| value.0.as_str()),
+        Some("simple")
+    );
 }
 
 #[test]

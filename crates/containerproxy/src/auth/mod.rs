@@ -27,6 +27,7 @@
 
 pub mod bearer;
 pub mod custom_header;
+pub mod ldap;
 pub mod none;
 pub mod openid;
 pub mod simple;
@@ -219,6 +220,9 @@ pub fn create(settings: &Settings) -> Result<Arc<dyn AuthBackend>, CreateError> 
         "customheader" => Ok(Arc::new(
             custom_header::CustomHeaderAuthenticationBackend::new(settings),
         )),
+        "ldap" => Ok(Arc::new(
+            ldap::LdapAuthenticationBackend::new(settings).map_err(CreateError::Configuration)?,
+        )),
         "openid" => Ok(Arc::new(
             openid::OpenIdAuthenticationBackend::new(settings)
                 .map_err(CreateError::Configuration)?,
@@ -238,7 +242,7 @@ pub fn create(settings: &Settings) -> Result<Arc<dyn AuthBackend>, CreateError> 
 #[derive(Debug, thiserror::Error)]
 #[error(
     "authentication backend '{name}' is not supported yet by this implementation (supported: none, \
-     simple, custom-header, webservice, openid); see docs/PROGRESS.md for the phase that adds it"
+     simple, custom-header, webservice, openid, ldap); see docs/PROGRESS.md for the phase that adds it"
 )]
 pub struct UnsupportedBackend {
     /// The configured value of `proxy.authentication`.
@@ -279,7 +283,7 @@ mod tests {
         assert!(backend.has_authorization());
 
         let settings: Settings =
-            serde_yaml_ng::from_str("proxy:\n  authentication: ldap\n").unwrap();
+            serde_yaml_ng::from_str("proxy:\n  authentication: saml\n").unwrap();
         let error = create(&settings).unwrap_err();
         assert!(error.to_string().contains("not supported yet"), "{error}");
     }

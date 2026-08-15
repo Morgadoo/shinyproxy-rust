@@ -196,7 +196,8 @@ types. Allow-listed static types: `java.lang.System.getenv`, `java.lang.String.v
 | `openid` | The authorization code flow with the Java URLs (`/oauth2/authorization/shinyproxy`, `/login/oauth2/code/shinyproxy`), `proxy.openid.{auth-url,token-url,jwks-url,userinfo-url,client-id,client-secret,scopes,include-default-scopes,username-attribute,roles-claim,with-pkce,jwks-signature-algorithm,logout-url}`, id token verification against the JWKS with nonce and audience checks, groups from the roles claim of the id token *and* the user info (including the "string containing a JSON list" shape), the `emails` array of Azure AD B2C, and `SHINYPROXY_OIDC_ACCESS_TOKEN` for the apps | ✅ |
 | `openid` token refresh | The access token is stored in the session, but it is not refreshed yet (`OpenIdReAuthorizeFilter`), so a session outlives its access token | 🟨 |
 | `oauth2` bearer tokens | `proxy.oauth2.{resource-id,jwks-url,username-attribute,roles-claim}` next to any backend: the JWT must be signed by a key of the JWKS (cached for five minutes), be valid now (with Spring's 60 seconds of clock skew), carry the resource id in its audience and contain the user name claim; the roles claim provides the groups | ✅ |
-| `ldap`, `saml`, `keycloak`, `ms-graph` groups | Not implemented yet; the server refuses to start with the list of supported backends | ⬜ |
+| `ldap` | One or more providers (`proxy.ldap.url` or `proxy.ldap[i].url`), authentication by binding as the user (`user-dn-pattern`, or a lookup with `user-search-base`/`user-search-filter` and the manager account), groups from a `group-search-filter` search (`(uniqueMember={0})` by default) using the `cn` of the results, `starttls` (`true`/`simple`/`external`), and DN/filter escaping | ✅ |
+| `saml`, `keycloak`, `ms-graph` groups | Not implemented yet; the server refuses to start with the list of supported backends | ⬜ |
 
 ## Not yet implemented
 

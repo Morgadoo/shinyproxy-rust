@@ -422,7 +422,8 @@ impl LdapConfigured {
 #[serde(default, rename_all = "kebab-case")]
 pub struct LdapSettings {
     pub url: Option<String>,
-    pub starttls: Option<String>,
+    /// `starttls` is a string in Java (`true`, `simple`, `external`), so a boolean is accepted as well.
+    pub starttls: Option<FlexString>,
     pub user_dn_pattern: Option<String>,
     pub user_search_base: Option<String>,
     pub user_search_filter: Option<String>,
