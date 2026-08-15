@@ -476,6 +476,7 @@ fn shinyproxy_runtime_values(
 pub async fn app_proxy(
     State(state): State<Arc<AppState>>,
     axum::Extension(CurrentUser(user)): axum::Extension<CurrentUser>,
+    session: tower_sessions::Session,
     request: Request,
 ) -> Response {
     let path = request.uri().path();
@@ -535,6 +536,8 @@ pub async fn app_proxy(
     let observer: Arc<dyn TunnelObserver> = Arc::new(HeartbeatObserver {
         state: state.clone(),
         proxy_id: proxy.id.clone(),
+        session_id: Some(containerproxy::web::session::session_id(&session)),
+        user_id: user.as_ref().map(|user| user.id.clone()),
     });
 
     // every request to the app counts as a heartbeat (as in Java, only for the proxy's own target)
@@ -591,11 +594,19 @@ pub async fn app_proxy(
 struct HeartbeatObserver {
     state: Arc<AppState>,
     proxy_id: String,
+    /// The session and the user of the browser, so that its session stays alive while the app is used
+    /// (`SessionReActivatorService`).
+    session_id: Option<String>,
+    user_id: Option<String>,
 }
 
 impl TunnelObserver for HeartbeatObserver {
     fn heartbeat(&self) {
         self.state.heartbeats.update(&self.proxy_id, now_millis());
+        // a user that only looks at their app still has an active session
+        if let (Some(session_id), Some(user_id)) = (&self.session_id, &self.user_id) {
+            self.state.sessions.reactivate(session_id, user_id);
+        }
     }
 
     fn opened(&self) {
@@ -676,6 +687,7 @@ async fn app_crashed_or_stopped(state: &Arc<AppState>, proxy: &Proxy) -> Respons
 pub async fn app_direct(
     State(state): State<Arc<AppState>>,
     axum::Extension(CurrentUser(user)): axum::Extension<CurrentUser>,
+    session: tower_sessions::Session,
     request: Request,
 ) -> Response {
     let context = state.context_path_with_slash();
@@ -799,7 +811,7 @@ pub async fn app_direct(
         return app_stopped_response();
     };
     let url = resolved.url(request.uri().query());
-    forward_to_app(&state, &proxy, request, &url).await
+    forward_to_app(&state, &proxy, request, &url, &session, Some(&user)).await
 }
 
 /// Waits until a proxy is up, giving up after ten minutes (as in `AppDirectController`).
@@ -822,6 +834,7 @@ async fn wait_until_up(state: &Arc<AppState>, proxy: &Proxy) -> Option<Proxy> {
 pub async fn api_route(
     State(state): State<Arc<AppState>>,
     axum::Extension(CurrentUser(user)): axum::Extension<CurrentUser>,
+    session: tower_sessions::Session,
     request: Request,
 ) -> Response {
     let context = state.context_path_with_slash();
@@ -844,7 +857,7 @@ pub async fn api_route(
         return app_stopped_response();
     };
     let url = resolved.url(request.uri().query());
-    forward_to_app(&state, &proxy, request, &url).await
+    forward_to_app(&state, &proxy, request, &url, &session, user.as_ref()).await
 }
 
 /// Forwards a request to an app, without the iframe script injection.
@@ -853,6 +866,8 @@ async fn forward_to_app(
     proxy: &Proxy,
     request: Request,
     url: &str,
+    session: &tower_sessions::Session,
+    user: Option<&containerproxy::auth::AuthenticatedUser>,
 ) -> Response {
     let method = request.method().clone();
     let options = ForwardOptions {
@@ -864,6 +879,8 @@ async fn forward_to_app(
     let observer: Arc<dyn TunnelObserver> = Arc::new(HeartbeatObserver {
         state: state.clone(),
         proxy_id: proxy.id.clone(),
+        session_id: Some(containerproxy::web::session::session_id(session)),
+        user_id: user.map(|user| user.id.clone()),
     });
     state.heartbeats.update(&proxy.id, now_millis());
 

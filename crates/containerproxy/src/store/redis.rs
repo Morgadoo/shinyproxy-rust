@@ -607,6 +607,27 @@ impl RedisSessionStore {
         Ok((logged_in.len() as i64, active.len() as i64))
     }
 
+    /// Moves the expiry of a session forward (`reActivateSession`).
+    pub async fn extend(&self, session_id: &str) -> Result<(), String> {
+        let mut connection = self
+            .stores
+            .client
+            .get_multiplexed_async_connection()
+            .await
+            .map_err(|error| error.to_string())?;
+        let key = format!("{}:{session_id}", self.namespace);
+        // the session document keeps its own expiry date, which the next request refreshes; extending the
+        // key is enough to keep the session from disappearing while the app is being used
+        let _: () = redis::cmd("EXPIRE")
+            .arg(&key)
+            .arg(self.session_timeout.whole_seconds().max(1))
+            .arg("XX")
+            .query_async(&mut connection)
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
     /// An asynchronous connection to Redis.
     async fn connection(
         &self,

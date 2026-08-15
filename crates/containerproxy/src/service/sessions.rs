@@ -50,6 +50,12 @@ pub trait SessionService: Send + Sync + std::fmt::Debug {
 
     /// Forgets a session (used when a user signs out).
     fn forget(&self, _session_id: &str) {}
+
+    /// Keeps a session alive while its app is used (`SessionReActivatorService`).
+    ///
+    /// The heartbeats of an app come from the browser through a WebSocket, so a user that only looks at
+    /// their app — without loading a page of ShinyProxy — would otherwise have their session expire.
+    fn reactivate(&self, _session_id: &str, _user_id: &str) {}
 }
 
 /// Counts the sessions of this server, for the in-memory session store.
@@ -112,6 +118,10 @@ impl SessionService for MemorySessionService {
     fn forget(&self, session_id: &str) {
         self.sessions.remove(session_id);
     }
+
+    fn reactivate(&self, session_id: &str, user_id: &str) {
+        self.touch(session_id, user_id);
+    }
 }
 
 /// Counts the sessions of the whole realm, by scanning the session keys in Redis.
@@ -161,6 +171,18 @@ impl RedisSessionService {
 
 #[async_trait]
 impl SessionService for RedisSessionService {
+    fn reactivate(&self, session_id: &str, _user_id: &str) {
+        // the expiry of the session in Redis is moved forward; the call is asynchronous, so it happens in
+        // the background of the heartbeat
+        let store = self.store.clone();
+        let session_id = session_id.to_string();
+        tokio::spawn(async move {
+            if let Err(error) = store.extend(&session_id).await {
+                tracing::debug!("cannot keep the session {session_id} alive: {error}");
+            }
+        });
+    }
+
     async fn logged_in_users(&self) -> Option<i64> {
         match self.logged_in.load(Ordering::Relaxed) {
             -1 => None,
@@ -212,6 +234,24 @@ mod tests {
             ),
         );
         assert_eq!(service.logged_in_users().await, Some(2));
+        assert_eq!(service.active_users().await, Some(1));
+    }
+
+    #[tokio::test]
+    async fn a_heartbeat_keeps_a_session_alive() {
+        let service = MemorySessionService::new(Duration::from_secs(60));
+        // a session that is about to time out
+        service.sessions.insert(
+            "session-1".to_string(),
+            (
+                "jack".to_string(),
+                crate::model::proxy::now_millis() - 50_000,
+            ),
+        );
+
+        // the heartbeat of the app keeps it alive and active
+        service.reactivate("session-1", "jack");
+        assert_eq!(service.logged_in_users().await, Some(1));
         assert_eq!(service.active_users().await, Some(1));
     }
 
