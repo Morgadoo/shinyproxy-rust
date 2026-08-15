@@ -154,6 +154,11 @@ impl RedisStores {
         RedisSessionStore::new(self.clone(), realm_id, version, session_timeout)
     }
 
+    /// The version store of these stores.
+    pub fn version_store(&self) -> RedisVersionStore {
+        RedisVersionStore::new(self.clone())
+    }
+
     /// The leader lock of these stores.
     pub fn leader_lock(&self) -> RedisLock {
         RedisLock::leader(self.clone())
@@ -614,6 +619,71 @@ impl RedisSessionStore {
     }
 }
 
+/// Keeps the newest configuration version of a realm (`RedisCheckLatestConfigService`).
+///
+/// Every server publishes its `proxy.version`; a server whose version is older than the one in Redis is not
+/// running the latest configuration and steps out of the leader election, so that a rolling update hands
+/// the work of the realm to the new servers.
+#[derive(Debug, Clone)]
+pub struct RedisVersionStore {
+    stores: RedisStores,
+    key: String,
+}
+
+impl RedisVersionStore {
+    /// The version key of a realm (`shinyproxy_{realmId}__version`).
+    pub fn new(stores: RedisStores) -> Self {
+        let key = format!("{}__version", stores.prefix);
+        RedisVersionStore { stores, key }
+    }
+
+    /// The key that holds the version (used by tests).
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+
+    /// Publishes `version` and answers whether this server runs the latest configuration.
+    ///
+    /// `None` means the check could not be made (Redis is unreachable or another server changed the key
+    /// while this one was writing), which the caller reports and retries, exactly like `VersionChecker`.
+    pub fn check_latest(&self, version: i64) -> Option<bool> {
+        let mut connection = self.stores.connection()?;
+
+        // WATCH/MULTI/EXEC, so that two servers starting at the same time cannot both win
+        let _: Result<(), _> = redis::cmd("WATCH").arg(&self.key).query(&mut connection);
+        let current: Option<i64> = redis::cmd("GET")
+            .arg(&self.key)
+            .query(&mut connection)
+            .unwrap_or_default();
+
+        match current {
+            Some(current) if version == current => {
+                let _: Result<(), _> = redis::cmd("UNWATCH").query(&mut connection);
+                Some(true)
+            }
+            Some(current) if version < current => {
+                let _: Result<(), _> = redis::cmd("UNWATCH").query(&mut connection);
+                Some(false)
+            }
+            // this server is newer (or the first one): it publishes its version
+            _ => {
+                let updated: Option<Vec<redis::Value>> = redis::pipe()
+                    .atomic()
+                    .cmd("SET")
+                    .arg(&self.key)
+                    .arg(version)
+                    .query(&mut connection)
+                    .ok();
+                match updated {
+                    Some(answers) if !answers.is_empty() => Some(true),
+                    // the transaction was aborted because another server wrote the key
+                    _ => None,
+                }
+            }
+        }
+    }
+}
+
 /// A lock in Redis, used to elect the leader of a realm (`RedisLockRegistry`).
 ///
 /// The key `shinyproxy_{realmId}__leader` holds the runtime id of the leader and expires, so a server that
@@ -689,6 +759,45 @@ impl RedisLock {
             .arg(&self.key)
             .query(&mut connection)
             .unwrap_or_default()
+    }
+}
+
+/// Connects to the Redis of the test environment, or returns `None` when there is none.
+///
+/// The unit tests that need Redis are skipped when it is not running, exactly like the integration tests
+/// that check `SP_TEST_REDIS`.
+#[cfg(test)]
+pub(crate) fn test_stores(realm: &str) -> Option<RedisStores> {
+    if std::env::var("SP_TEST_REDIS").as_deref() != Ok("1") {
+        return None;
+    }
+    let url =
+        std::env::var("SP_TEST_REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1/".to_string());
+    let realm = format!("{realm}-{}", std::process::id());
+    let stores = RedisStores::connect(
+        &url,
+        Some(realm.as_str()),
+        std::sync::Arc::new(crate::model::runtime_value::RuntimeValueRegistry::engine()),
+    )
+    .ok()?;
+    stores.clear_for_tests();
+    Some(stores)
+}
+
+impl RedisStores {
+    /// Removes every key of this realm (tests only).
+    #[cfg(test)]
+    pub(crate) fn clear_for_tests(&self) {
+        let Some(mut connection) = self.connection() else {
+            return;
+        };
+        let keys: Vec<String> = redis::cmd("KEYS")
+            .arg(format!("{}*", self.prefix))
+            .query(&mut connection)
+            .unwrap_or_default();
+        for key in keys {
+            let _: Result<(), _> = redis::cmd("DEL").arg(key).query(&mut connection);
+        }
     }
 }
 

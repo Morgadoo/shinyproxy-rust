@@ -32,7 +32,7 @@ pub mod runtime_values;
 pub mod sessions;
 
 pub use identifier::Identifiers;
-pub use leader::{LeaderService, MemoryLeaderService, RedisLeaderService};
+pub use leader::{LatestConfigService, LeaderService, MemoryLeaderService, RedisLeaderService};
 pub use logs::{LogPaths, LogService};
 pub use parameters::{
     allowed_parameters_for_user, parse_and_validate_request, AllowedParametersForUser,

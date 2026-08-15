@@ -27,6 +27,7 @@
 mod common;
 
 use common::{TestClient, TestInstance};
+use containerproxy::service::LeaderService;
 
 /// Whether the Redis tests are enabled.
 fn enabled() -> bool {
@@ -508,5 +509,79 @@ async fn two_servers_share_their_sessions() {
 
     first.stop();
     second.stop();
+    clear_realm(&realm);
+}
+
+#[tokio::test]
+async fn a_rolling_update_moves_the_leadership_to_the_new_configuration() {
+    if !enabled() {
+        eprintln!("skipping: set SP_TEST_REDIS=1 (and run a Redis) to run the Redis tests");
+        return;
+    }
+
+    let realm = format!("version-{}", std::process::id());
+    clear_realm(&realm);
+
+    // `proxy.version` tells the servers of a realm which configuration is the newest one; only the
+    // servers that run it take part in the leader election (`RedisCheckLatestConfigService`)
+    let old = TestInstance::start(&format!("{}  version: 1\n", config(&realm))).await;
+    let old_service = old
+        .state
+        .latest_config
+        .clone()
+        .expect("the version check is active");
+    assert!(old_service.is_latest());
+    assert!(
+        old.state
+            .redis_leader
+            .as_ref()
+            .expect("election")
+            .is_leader(),
+        "the only server of the realm is the leader"
+    );
+
+    // a server of the new configuration appears; it is the latest one and takes part in the election
+    let new = TestInstance::start(&format!("{}  version: 2\n", config(&realm))).await;
+    let new_service = new
+        .state
+        .latest_config
+        .clone()
+        .expect("the version check is active");
+    assert!(new_service.is_latest());
+    assert!(new
+        .state
+        .redis_leader
+        .as_ref()
+        .expect("election")
+        .participating());
+
+    // the old server notices on its next check and stops taking part; because it is the leader it waits
+    // before releasing the lock, so that the other servers of its version notice as well
+    assert!(
+        !old_service.check(),
+        "the old server is no longer the latest"
+    );
+    assert!(!old_service.is_latest());
+    assert!(
+        !old_service.check(),
+        "a server that lost never becomes the latest again"
+    );
+
+    // and a server that starts with an old configuration never takes part at all
+    let late = TestInstance::start(&format!("{}  version: 1\n", config(&realm))).await;
+    let late_service = late
+        .state
+        .latest_config
+        .clone()
+        .expect("the version check is active");
+    assert!(!late_service.is_latest());
+    let late_election = late.state.redis_leader.as_ref().expect("election");
+    assert!(!late_election.participating());
+    assert!(!late_election.is_leader());
+    assert!(!late_election.elect(), "it must not take the lock");
+
+    old.stop();
+    new.stop();
+    late.stop();
     clear_realm(&realm);
 }

@@ -87,13 +87,15 @@ pub struct AppState {
     /// Which server of the realm does the work that must happen once.
     pub leader: Arc<dyn containerproxy::service::LeaderService>,
     /// The Redis leader election, when this server takes part in one.
-    redis_leader: Option<Arc<containerproxy::service::RedisLeaderService>>,
+    pub redis_leader: Option<Arc<containerproxy::service::RedisLeaderService>>,
     /// Counts the users that are logged in (`absolute_users_logged_in`).
     pub sessions: Arc<dyn containerproxy::service::SessionService>,
     /// The Redis session service, when the sessions live in Redis (it refreshes its counts on a timer).
     redis_sessions: Option<Arc<containerproxy::service::RedisSessionService>>,
     /// The Redis session store, used by the session layer of the server.
     pub session_store: Option<containerproxy::store::RedisSessionStore>,
+    /// Checks whether this server runs the latest configuration of the realm (`proxy.version`).
+    pub latest_config: Option<Arc<containerproxy::service::LatestConfigService>>,
     /// Usage statistics of this server (`/actuator/prometheus`).
     pub metrics: Arc<Metrics>,
     /// Collects the output of the containers (`proxy.container-log-path`).
@@ -317,6 +319,20 @@ impl AppState {
             ),
         };
 
+        // a rolling update publishes its `proxy.version` in Redis; a server that runs an older
+        // configuration steps out of the leader election (`RedisCheckLatestConfigService`)
+        let latest_config = match (&redis_stores, &redis_leader) {
+            (Some(stores), Some(election)) => {
+                Some(Arc::new(containerproxy::service::LatestConfigService::new(
+                    stores.version_store(),
+                    election.clone(),
+                    identifiers.version,
+                    identifiers.instance_id.clone(),
+                )))
+            }
+            _ => None,
+        };
+
         let release = Arc::new(ReleaseService::new(
             &settings,
             proxies.clone(),
@@ -350,6 +366,7 @@ impl AppState {
             sessions,
             redis_sessions,
             session_store,
+            latest_config,
             metrics,
             logs,
             websockets: Arc::new(WebSocketCounter::new()),
@@ -379,7 +396,12 @@ impl AppState {
             sessions.clone().spawn_refresh();
         }
 
-        // take part in the leader election (and become the leader immediately when this server is alone)
+        // take part in the leader election (and become the leader immediately when this server is alone),
+        // unless a newer configuration is already running in this realm
+        if let Some(latest) = &self.latest_config {
+            latest.initialize();
+            latest.clone().spawn();
+        }
         if let Some(election) = &self.redis_leader {
             election.elect();
             election.clone().spawn();
