@@ -29,7 +29,8 @@ use crate::model::proxy::Proxy;
 /// Keeps the running proxies in memory.
 #[derive(Debug, Default)]
 pub struct MemoryProxyStore {
-    proxies: DashMap<String, Proxy>,
+    /// The proxies are shared, so the per-request lookups of the data plane never copy them.
+    proxies: DashMap<String, std::sync::Arc<Proxy>>,
     /// Whether user names are compared case sensitively (`proxy.username-case-sensitive`).
     case_sensitive_users: bool,
 }
@@ -56,16 +57,18 @@ impl ProxyStore for MemoryProxyStore {
     fn all_proxies(&self) -> Vec<Proxy> {
         self.proxies
             .iter()
-            .map(|entry| entry.value().clone())
+            .map(|entry| (**entry.value()).clone())
             .collect()
     }
 
     fn add_proxy(&self, proxy: &Proxy) {
-        self.proxies.insert(proxy.id.clone(), proxy.clone());
+        self.proxies
+            .insert(proxy.id.clone(), std::sync::Arc::new(proxy.clone()));
     }
 
     fn update_proxy(&self, proxy: &Proxy) {
-        self.proxies.insert(proxy.id.clone(), proxy.clone());
+        self.proxies
+            .insert(proxy.id.clone(), std::sync::Arc::new(proxy.clone()));
     }
 
     fn remove_proxy(&self, proxy: &Proxy) {
@@ -75,6 +78,25 @@ impl ProxyStore for MemoryProxyStore {
     fn proxy(&self, proxy_id: &str) -> Option<Proxy> {
         self.proxies
             .get(proxy_id)
+            .map(|entry| (**entry.value()).clone())
+    }
+
+    fn proxy_ref(&self, proxy_id: &str) -> Option<std::sync::Arc<Proxy>> {
+        self.proxies
+            .get(proxy_id)
+            .map(|entry| entry.value().clone())
+    }
+
+    fn find_user_proxy_by_target(
+        &self,
+        user_id: &str,
+        target_id: &str,
+    ) -> Option<std::sync::Arc<Proxy>> {
+        self.proxies
+            .iter()
+            .find(|entry| {
+                entry.value().target_id() == target_id && self.owns(entry.value(), user_id)
+            })
             .map(|entry| entry.value().clone())
     }
 
@@ -82,7 +104,7 @@ impl ProxyStore for MemoryProxyStore {
         self.proxies
             .iter()
             .filter(|entry| self.owns(entry.value(), user_id))
-            .map(|entry| entry.value().clone())
+            .map(|entry| (**entry.value()).clone())
             .collect()
     }
 }

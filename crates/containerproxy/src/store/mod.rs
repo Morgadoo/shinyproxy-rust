@@ -53,6 +53,27 @@ pub trait ProxyStore: Send + Sync + std::fmt::Debug {
     /// The proxy with the given id.
     fn proxy(&self, proxy_id: &str) -> Option<Proxy>;
 
+    /// The proxy with the given id, shared instead of copied.
+    ///
+    /// The data plane looks a proxy up on *every* request; copying one means cloning its runtime values
+    /// (two maps full of JSON documents), which showed up as roughly a tenth of the CPU of the proxy path.
+    /// The in-memory store hands out its `Arc` directly; other stores fall back to a copy.
+    fn proxy_ref(&self, proxy_id: &str) -> Option<std::sync::Arc<Proxy>> {
+        self.proxy(proxy_id).map(std::sync::Arc::new)
+    }
+
+    /// The proxy of a user whose target id matches, shared instead of copied (the data plane's lookup).
+    fn find_user_proxy_by_target(
+        &self,
+        user_id: &str,
+        target_id: &str,
+    ) -> Option<std::sync::Arc<Proxy>> {
+        self.user_proxies(user_id)
+            .into_iter()
+            .find(|proxy| proxy.target_id() == target_id)
+            .map(std::sync::Arc::new)
+    }
+
     /// The proxies owned by the given user.
     fn user_proxies(&self, user_id: &str) -> Vec<Proxy>;
 

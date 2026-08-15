@@ -86,7 +86,7 @@ pub async fn grafana(
     }
 
     let options = ForwardOptions {
-        extra_headers,
+        extra_headers: std::sync::Arc::new(extra_headers),
         force_identity_encoding: false,
     };
     match proxy_upgrade(

@@ -61,7 +61,7 @@ static CLIENT: Lazy<Client<HttpConnector, Body>> = Lazy::new(|| {
 #[derive(Debug, Clone, Default)]
 pub struct ForwardOptions {
     /// Headers to add to the request (the `http-headers` of the app plus `X-SP-*`).
-    pub extra_headers: BTreeMap<String, String>,
+    pub extra_headers: std::sync::Arc<BTreeMap<String, String>>,
     /// Ask the app not to compress the response, needed when the response is rewritten.
     pub force_identity_encoding: bool,
 }
@@ -106,7 +106,7 @@ pub async fn forward(
     if let Some(scheme) = parts.uri.scheme_str() {
         insert_header(&mut headers, "x-forwarded-proto", scheme);
     }
-    for (name, value) in &options.extra_headers {
+    for (name, value) in options.extra_headers.iter() {
         insert_header(&mut headers, name, value);
     }
     if options.force_identity_encoding {

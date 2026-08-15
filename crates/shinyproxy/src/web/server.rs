@@ -34,7 +34,7 @@ pub fn build(state: Arc<AppState>) -> Router {
     let secure_cookies = state.settings.server.secure_cookies();
     let same_site = session::same_site(state.settings.proxy.same_site_cookie());
     let cookie_name = session::cookie_name(state.settings.spring.session.is_redis()).to_string();
-    let context_path = state.context_path_with_slash();
+    let context_path = state.context_path_with_slash().to_string();
 
     // sessions live in Redis when Spring Session is configured that way, so that the servers of a realm
     // share them (`spring.session.store-type: redis`), and in memory otherwise

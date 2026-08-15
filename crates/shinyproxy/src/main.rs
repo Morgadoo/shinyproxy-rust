@@ -30,6 +30,11 @@ use containerproxy::spec::SpecProvider;
 use shinyproxy::web::AppState;
 use shinyproxy::VERSION;
 
+/// The reverse proxy is allocation heavy (per request: headers, URLs, session data); a profile showed almost
+/// half of the CPU of the proxy path inside glibc's allocator. mimalloc cuts that substantially.
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     if std::env::args().any(|arg| arg == "--version" || arg == "-V") {

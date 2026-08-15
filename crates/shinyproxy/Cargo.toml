@@ -29,6 +29,7 @@ futures.workspace = true
 lettre.workspace = true
 url.workspace = true
 uuid.workspace = true
+mimalloc.workspace = true
 mime_guess.workspace = true
 once_cell.workspace = true
 percent-encoding.workspace = true

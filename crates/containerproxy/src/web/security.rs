@@ -235,13 +235,19 @@ pub fn is_public_path(path: &str, instance_id: &str) -> bool {
         return true;
     }
     // the assets are public, both with and without the instance id prefix; `/favicon` is *not* (the Java
-    // implementation sends an unauthenticated request to the login page, verified with the parity fixture)
+    // implementation sends an unauthenticated request to the login page, verified with the parity fixture).
+    // This runs for every request, so it must not allocate.
     let unprefixed = path
-        .strip_prefix(&format!("/{instance_id}"))
+        .strip_prefix('/')
+        .and_then(|rest| rest.strip_prefix(instance_id))
+        .filter(|rest| rest.starts_with('/'))
         .unwrap_or(path);
-    super::assets::ASSET_PREFIXES
-        .iter()
-        .any(|prefix| unprefixed.starts_with(&format!("/{prefix}/")))
+    super::assets::ASSET_PREFIXES.iter().any(|prefix| {
+        unprefixed
+            .strip_prefix('/')
+            .and_then(|rest| rest.strip_prefix(prefix))
+            .is_some_and(|rest| rest.starts_with('/'))
+    })
 }
 
 /// Whether a path requires administrator rights.

@@ -41,7 +41,7 @@ use containerproxy::dataplane::inject::ScriptInjector;
 use containerproxy::dataplane::ws::{proxy_upgrade, TunnelObserver};
 use containerproxy::model::proxy::{now_millis, Proxy, ProxyStatus, ProxyStopReason};
 use containerproxy::model::runtime_value::{
-    RuntimeValue, HTTP_HEADERS, PUBLIC_PATH, {self as runtime_value},
+    RuntimeValue, PUBLIC_PATH, {self as runtime_value},
 };
 use containerproxy::model::spec::{CacheHeadersMode, ProxySpec};
 use containerproxy::service::runtime_values::parse_cache_headers_mode;
@@ -489,19 +489,19 @@ pub async fn app_proxy(
         return app_stopped_response();
     }
 
-    let query: HashMap<String, String> = request
+    // `sp_proxy_id` overrides the lookup, as in the Java implementation; the query is only parsed when the
+    // parameter can be there at all (this handler runs for every request an app receives)
+    let override_id = request
         .uri()
         .query()
-        .map(|query| {
+        .filter(|query| query.contains("sp_proxy_id"))
+        .and_then(|query| {
             url::form_urlencoded::parse(query.as_bytes())
-                .map(|(name, value)| (name.to_string(), value.to_string()))
-                .collect()
-        })
-        .unwrap_or_default();
-
-    // `sp_proxy_id` overrides the lookup, as in the Java implementation
-    let proxy = match query.get("sp_proxy_id") {
-        Some(proxy_id) => state.proxies.proxy(proxy_id),
+                .find(|(name, _)| name == "sp_proxy_id")
+                .map(|(_, value)| value.to_string())
+        });
+    let proxy = match override_id {
+        Some(proxy_id) => state.proxies.proxy_ref(&proxy_id),
         None => find_proxy_by_target(&state, user.as_ref(), target_id),
     };
 
@@ -521,7 +521,7 @@ pub async fn app_proxy(
     let url = resolved.url(request.uri().query());
 
     let mut options = ForwardOptions {
-        extra_headers: proxy_headers(&proxy),
+        extra_headers: state.proxy_headers(&proxy),
         force_identity_encoding: inject,
     };
     if !inject {
@@ -646,14 +646,6 @@ fn is_html(headers: &HeaderMap) -> bool {
 }
 
 /// The headers ShinyProxy adds to every request to the app.
-fn proxy_headers(proxy: &Proxy) -> BTreeMap<String, String> {
-    proxy
-        .runtime_values
-        .get(&HTTP_HEADERS)
-        .and_then(|value| value.data.parse_json::<BTreeMap<String, String>>())
-        .unwrap_or_default()
-}
-
 /// Decides between `app_crashed` and `app_stopped_or_non_existent` and stops a crashed app.
 async fn app_crashed_or_stopped(state: &Arc<AppState>, proxy: &Proxy) -> Response {
     let current = state.proxies.proxy(&proxy.id);
@@ -870,7 +862,7 @@ async fn forward_to_app(
 ) -> Response {
     let method = request.method().clone();
     let options = ForwardOptions {
-        extra_headers: proxy_headers(proxy),
+        extra_headers: state.proxy_headers(proxy),
         force_identity_encoding: false,
     };
     let heartbeat_rate =
@@ -1018,13 +1010,10 @@ fn find_proxy_by_target(
     state: &AppState,
     user: Option<&AuthenticatedUser>,
     target_id: &str,
-) -> Option<Proxy> {
+) -> Option<std::sync::Arc<Proxy>> {
     let user = user?;
-    state
-        .proxies
-        .user_proxies(&user.id)
-        .into_iter()
-        .find(|proxy| proxy.target_id() == target_id)
+    // shared instead of copied: this runs on every request an app receives
+    state.proxies.find_user_proxy_by_target(&user.id, target_id)
 }
 
 /// A proxy of the user that is currently available.

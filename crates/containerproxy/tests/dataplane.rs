@@ -130,10 +130,10 @@ async fn handler(State(state): State<ProxyState>, request: Request) -> Response 
     };
 
     let mut options = ForwardOptions {
-        extra_headers: BTreeMap::from([
+        extra_headers: std::sync::Arc::new(BTreeMap::from([
             ("X-SP-UserId".to_string(), "jack".to_string()),
             ("X-SP-UserGroups".to_string(), "SCIENTISTS".to_string()),
-        ]),
+        ])),
         force_identity_encoding: false,
     };
     if state.inject_script {

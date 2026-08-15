@@ -173,6 +173,16 @@ impl ProxyService {
         self.store.proxy(proxy_id)
     }
 
+    /// The proxy with the given id, shared instead of copied (the lookup of the data plane).
+    pub fn proxy_ref(&self, proxy_id: &str) -> Option<Arc<Proxy>> {
+        self.store.proxy_ref(proxy_id)
+    }
+
+    /// The proxy of a user whose target id matches, shared instead of copied.
+    pub fn find_user_proxy_by_target(&self, user_id: &str, target_id: &str) -> Option<Arc<Proxy>> {
+        self.store.find_user_proxy_by_target(user_id, target_id)
+    }
+
     /// The proxies of a user.
     pub fn user_proxies(&self, user_id: &str) -> Vec<Proxy> {
         self.store.user_proxies(user_id)

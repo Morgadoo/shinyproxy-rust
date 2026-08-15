@@ -46,6 +46,7 @@ serde_yaml_ng = "0.10"
 # --- web / ui ---
 minijinja = { version = "2", features = ["loader", "json", "builtins"] }
 rust-embed = { version = "8", features = ["include-exclude", "interpolate-folder-path"] }
+mimalloc = "0.1"
 mime_guess = "2"
 tower-sessions = { version = "0.14", default-features = false, features = ["axum-core", "memory-store"] }
 ammonia = "4"
@@ -103,6 +104,12 @@ proptest = "1"
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+
+# release performance with symbols, for `perf` (see docs/TESTING.md)
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = false
 
 [profile.dev]
 # faster incremental test cycles

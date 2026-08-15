@@ -104,9 +104,16 @@ impl ProxyRouter {
     /// The sub path may start with the name of a port mapping, in which case the request goes to that
     /// mapping and the name is removed from the path; otherwise the default mapping is used.
     pub fn resolve<'a>(&self, proxy: &'a Proxy, sub_path: &'a str) -> Option<ResolvedTarget> {
-        let targets = self
-            .targets(&proxy.id)
-            .or_else(|| Some(proxy.targets.clone()))?;
+        // the registered mappings are read under the guard, so this runs without copying the map
+        // (it is called on every request an app receives)
+        match self.targets.get(&proxy.id) {
+            Some(entry) => ProxyRouter::resolve_in(entry.value(), sub_path),
+            None => ProxyRouter::resolve_in(&proxy.targets, sub_path),
+        }
+    }
+
+    /// Resolves a sub path against a set of targets.
+    fn resolve_in(targets: &BTreeMap<String, String>, sub_path: &str) -> Option<ResolvedTarget> {
         if targets.is_empty() {
             return None;
         }

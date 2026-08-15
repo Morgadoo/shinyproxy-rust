@@ -96,6 +96,14 @@ pub struct AppState {
     pub session_store: Option<containerproxy::store::RedisSessionStore>,
     /// Checks whether this server runs the latest configuration of the realm (`proxy.version`).
     pub latest_config: Option<Arc<containerproxy::service::LatestConfigService>>,
+    /// The context path with its trailing slash, computed once (it is needed on every request).
+    context_path_with_slash: String,
+    /// The parsed `SHINYPROXY_HTTP_HEADERS` of the running proxies, keyed by proxy id and start time.
+    ///
+    /// Parsing the JSON per request showed up in the profile of the proxy path; the headers of a proxy
+    /// never change while it runs.
+    proxy_header_cache:
+        dashmap::DashMap<String, (i64, Arc<std::collections::BTreeMap<String, String>>)>,
     /// The scalers of the app definitions that use pre-started, shared containers.
     pub sharing_scalers: Vec<Arc<containerproxy::service::ProxySharingScaler>>,
     /// Usage statistics of this server (`/actuator/prometheus`).
@@ -452,6 +460,15 @@ impl AppState {
             redis_sessions,
             session_store,
             latest_config,
+            context_path_with_slash: {
+                let path = settings.server.context_path();
+                if path.is_empty() {
+                    "/".to_string()
+                } else {
+                    format!("{path}/")
+                }
+            },
+            proxy_header_cache: dashmap::DashMap::new(),
             sharing_scalers,
             metrics,
             logs,
@@ -550,13 +567,37 @@ impl AppState {
     }
 
     /// The context path, always ending with a slash (`ContextPathHelper.withEndingSlash`).
-    pub fn context_path_with_slash(&self) -> String {
-        let path = self.settings.server.context_path();
-        if path.is_empty() {
-            "/".to_string()
-        } else {
-            format!("{path}/")
+    pub fn context_path_with_slash(&self) -> &str {
+        &self.context_path_with_slash
+    }
+
+    /// The `SHINYPROXY_HTTP_HEADERS` of a proxy, parsed once per proxy instead of once per request.
+    pub fn proxy_headers(
+        &self,
+        proxy: &containerproxy::model::proxy::Proxy,
+    ) -> Arc<std::collections::BTreeMap<String, String>> {
+        use containerproxy::model::runtime_value::HTTP_HEADERS;
+
+        let stamp = proxy.startup_timestamp;
+        if let Some(entry) = self.proxy_header_cache.get(&proxy.id) {
+            if entry.value().0 == stamp {
+                return entry.value().1.clone();
+            }
         }
+        let headers: Arc<std::collections::BTreeMap<String, String>> = Arc::new(
+            proxy
+                .runtime_values
+                .get(&HTTP_HEADERS)
+                .and_then(|value| value.data.parse_json())
+                .unwrap_or_default(),
+        );
+        // entries of stopped proxies are trimmed opportunistically, so the cache cannot grow without bound
+        if self.proxy_header_cache.len() > 4096 {
+            self.proxy_header_cache.clear();
+        }
+        self.proxy_header_cache
+            .insert(proxy.id.clone(), (stamp, headers.clone()));
+        headers
     }
 
     /// The context path without a trailing slash (empty for the root).

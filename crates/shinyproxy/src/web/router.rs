@@ -624,7 +624,7 @@ async fn login_submit(
             let target = data
                 .auth_success_url
                 .clone()
-                .unwrap_or_else(|| context_path.clone());
+                .unwrap_or_else(|| context_path.to_string());
             data.user = Some(user);
             data.csrf_token = None;
             data.auth_success_url = None;
@@ -711,12 +711,12 @@ async fn auth_success(
     let target = query
         .get("continue")
         .cloned()
-        .unwrap_or_else(|| state.context_path_with_slash());
+        .unwrap_or_else(|| state.context_path_with_slash().to_string());
     // only local redirects are allowed (no open redirect)
     let target = if target.starts_with('/') && !target.starts_with("//") {
         target
     } else {
-        state.context_path_with_slash()
+        state.context_path_with_slash().to_string()
     };
     // the page redirects with `new URL(...)`, which needs an absolute URL; the Java implementation puts
     // an absolute URL in the model as well (ServletUriComponentsBuilder.fromCurrentContextPath())

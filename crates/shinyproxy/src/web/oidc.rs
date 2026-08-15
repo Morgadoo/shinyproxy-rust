@@ -188,7 +188,7 @@ pub async fn callback(
     let target = data
         .auth_success_url
         .clone()
-        .unwrap_or_else(|| state.context_path_with_slash());
+        .unwrap_or_else(|| state.context_path_with_slash().to_string());
     data.user = Some(user);
     data.auth_success_url = None;
     data.user_initiated_logout = false;
