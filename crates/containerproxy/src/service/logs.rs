@@ -163,7 +163,12 @@ impl LogService {
     }
 
     /// Follows the events of the server: attach on start/resume, detach on stop/pause.
-    pub fn subscribe(self: &Arc<Self>, events: &EventBus, backend: Arc<dyn ContainerBackend>) {
+    pub fn subscribe(
+        self: &Arc<Self>,
+        events: &EventBus,
+        backend: Arc<dyn ContainerBackend>,
+        leader: Arc<dyn crate::service::LeaderService>,
+    ) {
         if !self.is_enabled() {
             return;
         }
@@ -172,7 +177,10 @@ impl LogService {
         tokio::spawn(async move {
             while let Ok(event) = receiver.recv().await {
                 match &event {
-                    Event::ProxyStarted { proxy, .. } | Event::ProxyResumed { proxy } => {
+                    // only the leader collects the logs of a container (as in Java)
+                    Event::ProxyStarted { proxy, .. } | Event::ProxyResumed { proxy }
+                        if leader.is_leader() =>
+                    {
                         service.attach(proxy, &backend).await;
                     }
                     Event::ProxyStopped { proxy, .. } | Event::ProxyPaused { proxy } => {

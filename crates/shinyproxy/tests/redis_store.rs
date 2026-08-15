@@ -350,3 +350,65 @@ async fn heartbeats_are_shared() {
     clear_realm(&realm);
     clear_realm(&other_realm);
 }
+
+#[tokio::test]
+async fn only_one_server_of_a_realm_is_the_leader() {
+    if !enabled() {
+        eprintln!("skipping: set SP_TEST_REDIS=1 to run the Redis tests");
+        return;
+    }
+
+    let realm = format!("leader-{}", std::process::id());
+    clear_realm(&realm);
+
+    let first = TestInstance::start(&config(&realm)).await;
+    let second = TestInstance::start(&config(&realm)).await;
+
+    // exactly one of the two servers holds the lock
+    let leaders = [&first, &second]
+        .iter()
+        .filter(|instance| instance.state.leader.is_leader())
+        .count();
+    assert_eq!(leaders, 1, "exactly one server must be the leader");
+
+    // the lock holds the runtime id of that server
+    let url =
+        std::env::var("SP_TEST_REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1/".to_string());
+    let client = redis::Client::open(url).expect("client");
+    let mut connection = client.get_connection().expect("connection");
+    let holder: Option<String> = redis::cmd("GET")
+        .arg(format!("shinyproxy_{realm}__leader"))
+        .query(&mut connection)
+        .expect("lock");
+    let holder = holder.expect("the lock is taken");
+    let expected = if first.state.leader.is_leader() {
+        first.state.identifiers.runtime_id.clone()
+    } else {
+        second.state.identifiers.runtime_id.clone()
+    };
+    assert_eq!(holder, expected);
+
+    // the lock expires, so a server that disappears does not block the realm forever
+    let ttl: i64 = redis::cmd("TTL")
+        .arg(format!("shinyproxy_{realm}__leader"))
+        .query(&mut connection)
+        .expect("ttl");
+    assert!(ttl > 0 && ttl <= 30, "the lock must expire: {ttl}");
+
+    // a single server (no Redis) is always the leader
+    let alone = TestInstance::start(
+        r##"
+proxy:
+  authentication: none
+  container-backend: local
+  specs: []
+"##,
+    )
+    .await;
+    assert!(alone.state.leader.is_leader());
+
+    first.stop();
+    second.stop();
+    alone.stop();
+    clear_realm(&realm);
+}

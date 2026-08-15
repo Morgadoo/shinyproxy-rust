@@ -84,6 +84,10 @@ pub struct AppState {
     pub recovery: Arc<AppRecoveryService>,
     /// Releases apps that are inactive or too old.
     pub release: Arc<ReleaseService>,
+    /// Which server of the realm does the work that must happen once.
+    pub leader: Arc<dyn containerproxy::service::LeaderService>,
+    /// The Redis leader election, when this server takes part in one.
+    redis_leader: Option<Arc<containerproxy::service::RedisLeaderService>>,
     /// Usage statistics of this server (`/actuator/prometheus`).
     pub metrics: Arc<Metrics>,
     /// Collects the output of the containers (`proxy.container-log-path`).
@@ -163,6 +167,7 @@ impl AppState {
         );
         // `proxy.store-mode: Redis` shares the state with the other servers of the realm
         let mut port_registry: Option<Box<dyn containerproxy::backend::ports::PortRegistry>> = None;
+        let mut redis_stores: Option<RedisStores> = None;
         let (store, heartbeats): (Arc<dyn ProxyStore>, Arc<dyn HeartbeatStore>) =
             if settings.proxy.store_mode().eq_ignore_ascii_case("redis") {
                 let url = RedisStores::url_of(&settings);
@@ -178,6 +183,7 @@ impl AppState {
                 port_registry = Some(Box::new(containerproxy::store::RedisPortRegistry::new(
                     stores.clone(),
                 )));
+                redis_stores = Some(stores.clone());
                 (
                     Arc::new(stores.proxy_store()),
                     Arc::new(stores.heartbeat_store()),
@@ -236,10 +242,29 @@ impl AppState {
         let logs = Arc::new(LogService::new(&settings));
         logs.initialize();
 
+        // in a high availability setup the servers elect a leader that does the work of the realm
+        let (leader, redis_leader): (
+            Arc<dyn containerproxy::service::LeaderService>,
+            Option<Arc<containerproxy::service::RedisLeaderService>>,
+        ) = match &redis_stores {
+            Some(stores) => {
+                let service = Arc::new(containerproxy::service::RedisLeaderService::new(
+                    stores.leader_lock(),
+                    identifiers.runtime_id.clone(),
+                ));
+                (service.clone(), Some(service))
+            }
+            None => (
+                Arc::new(containerproxy::service::MemoryLeaderService::new()),
+                None,
+            ),
+        };
+
         let release = Arc::new(ReleaseService::new(
             &settings,
             proxies.clone(),
             heartbeats.clone(),
+            leader.clone(),
         ));
 
         Ok(AppState {
@@ -263,6 +288,8 @@ impl AppState {
             router: Arc::new(ProxyRouter::new()),
             recovery,
             release,
+            leader,
+            redis_leader,
             metrics,
             logs,
             websockets: Arc::new(WebSocketCounter::new()),
@@ -281,8 +308,17 @@ impl AppState {
         // the metrics and the container logs follow the events of the server (this needs a runtime,
         // hence not in `new`)
         self.metrics.subscribe(self.proxies.events());
-        self.logs
-            .subscribe(self.proxies.events(), self.backend.clone());
+        self.logs.subscribe(
+            self.proxies.events(),
+            self.backend.clone(),
+            self.leader.clone(),
+        );
+
+        // take part in the leader election (and become the leader immediately when this server is alone)
+        if let Some(election) = &self.redis_leader {
+            election.elect();
+            election.clone().spawn();
+        }
 
         let state = self.clone();
         tokio::spawn(async move {

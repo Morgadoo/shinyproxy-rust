@@ -57,6 +57,8 @@ pub enum ReleaseStrategy {
 pub struct ReleaseService {
     proxies: Arc<ProxyService>,
     heartbeats: Arc<dyn HeartbeatStore>,
+    /// Only the leader of the realm releases apps.
+    leader: Arc<dyn crate::service::LeaderService>,
     strategy: ReleaseStrategy,
     /// `2 × proxy.heartbeat-rate`, the interval of the silence check.
     cleanup_interval: Duration,
@@ -70,11 +72,13 @@ impl ReleaseService {
         settings: &crate::config::Settings,
         proxies: Arc<ProxyService>,
         heartbeats: Arc<dyn HeartbeatStore>,
+        leader: Arc<dyn crate::service::LeaderService>,
     ) -> Self {
         let rate = settings.proxy.heartbeat_rate_ms().max(1) as u64;
         ReleaseService {
             proxies,
             heartbeats,
+            leader,
             strategy: ReleaseStrategy::default(),
             cleanup_interval: Duration::from_millis(rate * 2),
             lifetime_interval: Duration::from_secs(5 * 60),
@@ -130,6 +134,10 @@ impl ReleaseService {
 
     /// Releases the apps that have been silent for too long (`performCleanup`).
     pub async fn release_inactive_proxies(&self) {
+        if !self.leader.is_leader() {
+            // in a high availability setup only the leader releases apps
+            return;
+        }
         let now = now_millis();
         for proxy in self.proxies.all_proxies() {
             if let Some(silence) = self.silence_of(&proxy, now) {
@@ -168,6 +176,9 @@ impl ReleaseService {
 
     /// Releases the apps that reached their max lifetime (`ProxyMaxLifetimeService`).
     pub async fn release_expired_proxies(&self) {
+        if !self.leader.is_leader() {
+            return;
+        }
         let now = now_millis();
         for proxy in self.proxies.all_proxies() {
             if must_be_released_for_age(&proxy, now) {
@@ -338,6 +349,7 @@ mod tests {
 
     #[test]
     fn derives_the_cleanup_interval_from_the_heartbeat_rate() {
+        // (the interval is derived from proxy.heartbeat-rate; see `ReleaseService::new`)
         let settings: crate::config::Settings =
             serde_yaml_ng::from_str("proxy:\n  heartbeat-rate: 5000\n").expect("settings");
         let rate = settings.proxy.heartbeat_rate_ms();

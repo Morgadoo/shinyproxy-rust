@@ -144,6 +144,11 @@ impl RedisStores {
         }
     }
 
+    /// The leader lock of these stores.
+    pub fn leader_lock(&self) -> RedisLock {
+        RedisLock::leader(self.clone())
+    }
+
     /// The heartbeat store of these stores.
     pub fn heartbeat_store(&self) -> RedisHeartbeatStore {
         RedisHeartbeatStore {
@@ -368,6 +373,84 @@ impl crate::backend::ports::PortRegistry for RedisPortRegistry {
             return;
         };
         let _: Result<(), _> = connection.hdel(self.stores.ports_key(), owner_id);
+    }
+}
+
+/// A lock in Redis, used to elect the leader of a realm (`RedisLockRegistry`).
+///
+/// The key `shinyproxy_{realmId}__leader` holds the runtime id of the leader and expires, so a server that
+/// disappears loses the lock automatically.
+#[derive(Debug, Clone)]
+pub struct RedisLock {
+    stores: RedisStores,
+    key: String,
+}
+
+impl RedisLock {
+    /// The leader lock of a realm.
+    pub fn leader(stores: RedisStores) -> Self {
+        let key = format!("{}__leader", stores.prefix);
+        RedisLock { stores, key }
+    }
+
+    /// Takes the lock, or renews it when this owner already holds it.
+    ///
+    /// Returns whether the caller holds the lock afterwards.
+    pub fn acquire(&self, owner: &str, ttl: std::time::Duration) -> bool {
+        let Some(mut connection) = self.stores.connection() else {
+            return false;
+        };
+        let seconds = ttl.as_secs().max(1) as i64;
+
+        // take the lock when it is free
+        let taken: bool = redis::cmd("SET")
+            .arg(&self.key)
+            .arg(owner)
+            .arg("NX")
+            .arg("EX")
+            .arg(seconds)
+            .query(&mut connection)
+            .unwrap_or(false);
+        if taken {
+            return true;
+        }
+
+        // renew it when this server holds it
+        let holder: Option<String> = redis::cmd("GET")
+            .arg(&self.key)
+            .query(&mut connection)
+            .unwrap_or_default();
+        if holder.as_deref() == Some(owner) {
+            let _: Result<(), _> = redis::cmd("EXPIRE")
+                .arg(&self.key)
+                .arg(seconds)
+                .query(&mut connection);
+            return true;
+        }
+        false
+    }
+
+    /// Releases the lock when this owner holds it.
+    pub fn release(&self, owner: &str) {
+        let Some(mut connection) = self.stores.connection() else {
+            return;
+        };
+        let holder: Option<String> = redis::cmd("GET")
+            .arg(&self.key)
+            .query(&mut connection)
+            .unwrap_or_default();
+        if holder.as_deref() == Some(owner) {
+            let _: Result<(), _> = redis::cmd("DEL").arg(&self.key).query(&mut connection);
+        }
+    }
+
+    /// The current holder of the lock (used by tests).
+    pub fn holder(&self) -> Option<String> {
+        let mut connection = self.stores.connection()?;
+        redis::cmd("GET")
+            .arg(&self.key)
+            .query(&mut connection)
+            .unwrap_or_default()
     }
 }
 
