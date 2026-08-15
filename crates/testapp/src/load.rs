@@ -77,6 +77,12 @@ pub enum Target {
     Index,
     /// The JSON API.
     Api,
+    /// A 64 KB body streamed through the proxy (measures the data plane, not the routing).
+    Big,
+    /// A 64 KB body posted through the proxy (measures the request body path).
+    Upload,
+    /// WebSocket churn: connect, exchange one message, close (measures the handshake path).
+    WsChurn,
 }
 
 impl Target {
@@ -85,6 +91,9 @@ impl Target {
         match value.to_ascii_lowercase().as_str() {
             "index" | "page" => Target::Index,
             "api" => Target::Api,
+            "big" | "download" => Target::Big,
+            "upload" => Target::Upload,
+            "ws-churn" | "wschurn" => Target::WsChurn,
             _ => Target::App,
         }
     }
@@ -95,9 +104,15 @@ impl Target {
             Target::App => "app",
             Target::Index => "index",
             Target::Api => "api",
+            Target::Big => "big",
+            Target::Upload => "upload",
+            Target::WsChurn => "ws_churn",
         }
     }
 }
+
+/// How large the bodies of the `big` and `upload` targets are.
+pub const BODY_BYTES: usize = 64 * 1024;
 
 impl Options {
     /// Reads the options from the command line.
@@ -190,6 +205,11 @@ pub async fn run(options: Options) -> anyhow::Result<()> {
     let counters = Arc::new(Counters::default());
     let deadline = Instant::now() + options.duration;
 
+    // WebSocket churn is its own loop: connect, one message, close
+    if options.target == Target::WsChurn {
+        return websocket_churn(&options, &proxy_id, &cookie, counters).await;
+    }
+
     // the WebSocket connections, which the proxy keeps alive with its heartbeat pings
     let mut tasks = Vec::new();
     for _ in 0..options.websockets {
@@ -209,25 +229,34 @@ pub async fn run(options: Options) -> anyhow::Result<()> {
         Target::App => format!("{}/app_proxy/{proxy_id}/", options.base_url),
         Target::Index => format!("{}/", options.base_url),
         Target::Api => format!("{}/api/proxy", options.base_url),
+        Target::Big => format!("{}/app_proxy/{proxy_id}/big/{BODY_BYTES}", options.base_url),
+        Target::Upload => format!("{}/app_proxy/{proxy_id}/upload", options.base_url),
+        Target::WsChurn => unreachable!("handled above"),
     };
     let latencies = Arc::new(std::sync::Mutex::new(Vec::<u64>::new()));
+    let upload_body = bytes::Bytes::from(vec![b'x'; BODY_BYTES]);
     for connection in 0..options.connections {
         // a session of its own for the pages and the API (see the note at the top of this file)
         let client = match options.target {
-            Target::App => client.clone(),
+            Target::App | Target::Big | Target::Upload | Target::WsChurn => client.clone(),
             Target::Index | Target::Api => {
                 let (client, _) = logged_in_client(&options).await?;
                 let _ = connection;
                 client
             }
         };
+        let upload = (options.target == Target::Upload).then(|| upload_body.clone());
         let url = target_url.clone();
         let counters = counters.clone();
         let latencies = latencies.clone();
         tasks.push(tokio::spawn(async move {
             while Instant::now() < deadline {
                 let started = Instant::now();
-                match client.get(&url).send().await {
+                let request = match &upload {
+                    Some(body) => client.post(&url).body(body.clone()),
+                    None => client.get(&url),
+                };
+                match request.send().await {
                     Ok(response) => {
                         let ok = response.status().is_success();
                         // the body has to be read, otherwise the connection cannot be reused
@@ -469,6 +498,123 @@ async fn measure_start_cycles(client: &reqwest::Client, options: &Options) -> an
     if options.machine_readable {
         println!("METRIC app_start_ms {start_median:.1}");
         println!("METRIC app_stop_ms {stop_median:.1}");
+    }
+    Ok(())
+}
+
+/// Opens and closes WebSocket connections as fast as it can (the handshake path of the tunnel).
+async fn websocket_churn(
+    options: &Options,
+    proxy_id: &str,
+    cookie: &str,
+    counters: Arc<Counters>,
+) -> anyhow::Result<()> {
+    let deadline = Instant::now() + options.duration;
+    let latencies = Arc::new(std::sync::Mutex::new(Vec::<u64>::new()));
+    let url = format!(
+        "{}/app_proxy/{proxy_id}/ws",
+        options.base_url.replace("http://", "ws://")
+    );
+
+    let mut tasks = Vec::new();
+    for _ in 0..options.connections {
+        let url = url.clone();
+        let cookie = cookie.to_string();
+        let counters = counters.clone();
+        let latencies = latencies.clone();
+        tasks.push(tokio::spawn(async move {
+            use futures::{SinkExt, StreamExt};
+            while Instant::now() < deadline {
+                let started = Instant::now();
+                let request = match tokio_tungstenite::tungstenite::http::Request::builder()
+                    .uri(&url)
+                    .header(
+                        "Host",
+                        url.trim_start_matches("ws://")
+                            .split('/')
+                            .next()
+                            .unwrap_or("localhost"),
+                    )
+                    .header("Cookie", cookie.clone())
+                    .header("Connection", "Upgrade")
+                    .header("Upgrade", "websocket")
+                    .header("Sec-WebSocket-Version", "13")
+                    .header(
+                        "Sec-WebSocket-Key",
+                        tokio_tungstenite::tungstenite::handshake::client::generate_key(),
+                    )
+                    .body(())
+                {
+                    Ok(request) => request,
+                    Err(_) => {
+                        counters.errors.fetch_add(1, Ordering::Relaxed);
+                        continue;
+                    }
+                };
+                match tokio_tungstenite::connect_async(request).await {
+                    Ok((mut socket, _)) => {
+                        let round_trip = socket
+                            .send(tokio_tungstenite::tungstenite::Message::Text(
+                                "churn".into(),
+                            ))
+                            .await
+                            .is_ok()
+                            && matches!(socket.next().await, Some(Ok(_)));
+                        let _ = socket.close(None).await;
+                        if round_trip {
+                            counters.requests.fetch_add(1, Ordering::Relaxed);
+                            latencies
+                                .lock()
+                                .expect("the latency list is not poisoned")
+                                .push(started.elapsed().as_micros() as u64);
+                        } else {
+                            counters.errors.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                    Err(_) => {
+                        counters.errors.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }
+        }));
+    }
+    for task in tasks {
+        let _ = task.await;
+    }
+
+    let mut samples = latencies
+        .lock()
+        .expect("the latency list is not poisoned")
+        .clone();
+    samples.sort_unstable();
+    let percentile = |fraction: f64| -> f64 {
+        if samples.is_empty() {
+            return 0.0;
+        }
+        let index = ((samples.len() as f64 - 1.0) * fraction).round() as usize;
+        samples[index] as f64 / 1000.0
+    };
+    let handshakes = counters.requests.load(Ordering::Relaxed);
+    println!();
+    println!("target: ws_churn");
+    println!(
+        "websocket_handshakes_per_second: {:.0}",
+        handshakes as f64 / options.duration.as_secs_f64()
+    );
+    println!("errors: {}", counters.errors.load(Ordering::Relaxed));
+    println!(
+        "handshake_ms: p50 {:.1} p99 {:.1}",
+        percentile(0.50),
+        percentile(0.99)
+    );
+    if options.machine_readable {
+        println!(
+            "METRIC requests_per_second {:.1}",
+            handshakes as f64 / options.duration.as_secs_f64()
+        );
+        println!("METRIC errors {}", counters.errors.load(Ordering::Relaxed));
+        println!("METRIC latency_p50_ms {:.2}", percentile(0.50));
+        println!("METRIC latency_p99_ms {:.2}", percentile(0.99));
     }
     Ok(())
 }

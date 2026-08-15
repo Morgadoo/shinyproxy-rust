@@ -26,10 +26,15 @@
 #
 #   startup      how long until the login page answers, and the resident memory right after that
 #   app-cycles   how long the server needs to start an app and to stop it again (median of N cycles)
-#   proxy        requests per second and latency through the reverse proxy (`/app_proxy/{id}/`)
+#   proxy        requests per second and latency through the reverse proxy, at 8, 32 and 128 connections
 #   index        requests per second and latency of a page the server renders itself (`/`)
 #   api          requests per second and latency of the JSON API (`/api/proxy`)
-#   websockets   the same proxy load with N WebSocket connections held open, plus the memory at the end
+#   big          a 64 KB body streamed through the proxy (megabytes per second)
+#   upload       a 64 KB body posted through the proxy
+#   ws-churn     WebSocket connect + message + close, as fast as possible (handshakes per second)
+#   websockets   the proxy load with N WebSocket connections held open, plus the memory at the end
+#
+# Every phase also reports the CPU seconds the *server* burned, so throughput per CPU can be compared.
 #
 # Usage:
 #   ./scripts/build-test-image.sh                                  # the app image both servers start
@@ -97,6 +102,12 @@ rss_kb() { # pid
     awk '/VmRSS/ {print $2}' "/proc/$1/status" 2>/dev/null || echo 0
 }
 
+# CPU seconds (user+system, including reaped children) of a process so far.
+cpu_seconds() { # pid
+    awk -v hz="$(getconf CLK_TCK)" '{printf "%.2f", ($14 + $15 + $16 + $17) / hz}' \
+        "/proc/$1/stat" 2>/dev/null || echo 0
+}
+
 metric() { # file, name, value
     echo "$2 $3" >>"$1"
 }
@@ -140,22 +151,34 @@ benchmark_one() { # name, command...
         --measure-start-cycles "$CYCLES" |
         grep '^METRIC ' | sed 's/^METRIC //' >>"$metrics" || true
 
-    # the three request paths, without WebSocket connections
-    local target
-    for target in app index api; do
-        echo "  load: $target ($SECONDS_PER_PHASE s, $CONNECTIONS connections)"
+    # one phase: target, connections, websockets, metric prefix
+    phase() {
+        local target="$1" phase_connections="$2" phase_websockets="$3" prefix="$4"
+        echo "  load: $prefix ($target, $SECONDS_PER_PHASE s, $phase_connections connections, $phase_websockets websockets)"
+        local cpu_before cpu_after
+        cpu_before="$(cpu_seconds "$pid")"
         "$LOAD" --load-test --machine-readable \
             --base-url "http://127.0.0.1:$PORT" --spec 01_hello --target "$target" \
-            --websockets 0 --connections "$CONNECTIONS" --seconds "$SECONDS_PER_PHASE" |
-            grep '^METRIC ' | sed "s/^METRIC /${target}_/" >>"$metrics" || true
-    done
+            --websockets "$phase_websockets" --connections "$phase_connections" \
+            --seconds "$SECONDS_PER_PHASE" |
+            grep '^METRIC ' | sed "s/^METRIC /${prefix}_/" >>"$metrics" || true
+        cpu_after="$(cpu_seconds "$pid")"
+        metric "$metrics" "${prefix}_cpu_seconds" \
+            "$(awk -v a="$cpu_after" -v b="$cpu_before" 'BEGIN {printf "%.2f", a - b}')"
+    }
+
+    # the stress ramp of the proxy path, then the other request paths
+    phase app 8 0 app8
+    phase app "$CONNECTIONS" 0 app
+    phase app 128 0 app128
+    phase index "$CONNECTIONS" 0 index
+    phase api "$CONNECTIONS" 0 api
+    phase big "$CONNECTIONS" 0 big
+    phase upload "$CONNECTIONS" 0 upload
+    phase ws-churn "$CONNECTIONS" 0 churn
 
     # the proxy path again, this time with WebSocket connections held open
-    echo "  load: app with $WEBSOCKETS websockets"
-    "$LOAD" --load-test --machine-readable \
-        --base-url "http://127.0.0.1:$PORT" --spec 01_hello --target app \
-        --websockets "$WEBSOCKETS" --connections "$CONNECTIONS" --seconds "$SECONDS_PER_PHASE" |
-        grep '^METRIC ' | sed 's/^METRIC /ws_/' >>"$metrics" || true
+    phase app "$CONNECTIONS" "$WEBSOCKETS" ws
 
     metric "$metrics" rss_under_load_mb "$(( $(rss_kb "$pid") / 1024 ))"
 
@@ -216,6 +239,29 @@ rust = read("rust")
 java = read("java")
 if rust is None:
     raise SystemExit("no metrics for this implementation")
+BODY_KB = 64
+
+
+def derive(values):
+    """The numbers that are computed from the raw metrics."""
+    if values is None:
+        return
+    for prefix in ("big", "upload"):
+        rate = values.get(f"{prefix}_requests_per_second")
+        if rate is not None:
+            values[f"{prefix}_mb_per_second"] = rate * BODY_KB / 1024.0
+    rate = values.get("app_requests_per_second")
+    cpu = values.get("app_cpu_seconds")
+    if rate and cpu is not None and rate > 0:
+        total_requests = rate * float(seconds)
+        if total_requests > 0:
+            values["app_cpu_per_1k"] = cpu * 1000.0 * 1000.0 / total_requests  # ms per 1k requests
+
+
+
+
+derive(rust)
+derive(java)
 
 # name, label, unit, higher_is_better
 ROWS = [
@@ -224,15 +270,23 @@ ROWS = [
     ("rss_under_load_mb", "Resident memory after the load phases", "MB", False),
     ("app_start_ms", "Starting an app (median)", "ms", False),
     ("app_stop_ms", "Stopping an app (median)", "ms", False),
-    ("app_requests_per_second", "Requests per second through the proxy", "req/s", True),
+    ("app8_requests_per_second", "Proxy requests per second, 8 connections", "req/s", True),
+    ("app_requests_per_second", f"Proxy requests per second, {connections} connections", "req/s", True),
+    ("app128_requests_per_second", "Proxy requests per second, 128 connections", "req/s", True),
     ("app_latency_p50_ms", "Proxy latency p50", "ms", False),
     ("app_latency_p99_ms", "Proxy latency p99", "ms", False),
+    ("app128_latency_p99_ms", "Proxy latency p99 at 128 connections", "ms", False),
+    ("app_cpu_per_1k", "Server CPU per 1000 proxied requests", "ms", False),
     ("index_requests_per_second", "Requests per second of the index page", "req/s", True),
     ("index_latency_p99_ms", "Index latency p99", "ms", False),
     ("api_requests_per_second", "Requests per second of the JSON API", "req/s", True),
     ("api_latency_p99_ms", "API latency p99", "ms", False),
-    ("ws_requests_per_second", f"Requests per second with {websockets} websockets", "req/s", True),
-    ("ws_latency_p99_ms", f"Proxy latency p99 with {websockets} websockets", "ms", False),
+    ("big_mb_per_second", f"Streaming a {BODY_KB} KB body through the proxy", "MB/s", True),
+    ("upload_mb_per_second", f"Posting a {BODY_KB} KB body through the proxy", "MB/s", True),
+    ("churn_requests_per_second", "WebSocket handshakes per second (connect + message + close)", "req/s", True),
+    ("churn_latency_p99_ms", "WebSocket handshake p99", "ms", False),
+    ("ws_requests_per_second", f"Proxy requests per second with {websockets} websockets open", "req/s", True),
+    ("ws_latency_p99_ms", f"Proxy latency p99 with {websockets} websockets open", "ms", False),
 ]
 
 
@@ -301,10 +355,15 @@ else:
         )
 
 errors = [
-    ("app_errors", "proxy phase"),
-    ("index_errors", "index phase"),
-    ("api_errors", "API phase"),
-    ("ws_errors", "websocket phase"),
+    ("app8_errors", "proxy, 8 connections"),
+    ("app_errors", "proxy"),
+    ("app128_errors", "proxy, 128 connections"),
+    ("index_errors", "index page"),
+    ("api_errors", "JSON API"),
+    ("big_errors", "streamed body"),
+    ("upload_errors", "posted body"),
+    ("churn_errors", "websocket churn"),
+    ("ws_errors", "proxy with websockets"),
     ("ws_websocket_errors", "websocket connections"),
 ]
 lines += ["", "## Errors", "", "| Phase | This implementation | Java 3.2.4 |", "| --- | --- | --- |"]
