@@ -17,17 +17,20 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 | P7 | REST API parity | ✅ | all documented endpoints (specs, proxies, status+watch, transfer, details, admin pages/data, issue reporting, delegate-proxy, app_direct, api/route) plus the OpenAPI document; the Java integration test classes are all covered |
 | P8 | Docker & Docker Swarm backends | ✅ | bollard based `docker` and `docker-swarm` backends, app recovery with the startup page and the readiness gate; verified end to end against a real Docker daemon (see `crates/shinyproxy/tests/docker.rs`, `SP_TEST_DOCKER=1`) |
 | P9 | UI parity completion | ✅ | parameters (validation, form, conversion, runtime values), admin pages, `/grafana/**`, my-apps modes, template groups, logos, notification message, body classes, hide-navbar and landing page; every page is locked down by an HTML snapshot |
-| P10 | Operational features (logs, metrics, timeouts, stats) | ⬜ | |
-| P11 | Authentication backends (OIDC, LDAP, SAML, ...) | ⬜ | |
-| P12 | High availability (Redis), Kubernetes, ECS, proxy sharing | ⬜ | |
+| P10 | Operational features (logs, metrics, timeouts, stats) | ✅ | release timers (heartbeat timeout, max lifetime, logout), management server (health/readiness/recyclable/prometheus on `management.server.port`), Micrometer-compatible metrics, container log collection, `proxy.log-as-json` + `logging.*`, CSV and SQL usage statistics collectors. Documented gaps: S3 log storage, InfluxDB collector, `logging.requestdump`, attribute expressions |
+| P11 | Authentication backends (OIDC, LDAP, SAML, ...) | 🟨 | `none`, `simple`, `custom-header`, `webservice`, `openid` (auth-code flow, PKCE, JWKS, token refresh, ms-graph groups), `ldap` (verified against a real OpenLDAP) and oauth2 bearer tokens; `saml` and `keycloak` fail at startup with explicit migration messages |
+| P12 | High availability (Redis), Kubernetes, ECS, proxy sharing | 🟨 | Redis proxy/heartbeat/port stores and the leader election work (verified against a real Redis); Redis sessions, `RedisCheckLatestConfigService`, the Kubernetes and ECS backends and proxy sharing remain |
 | P13 | Java decommission & packaging | ⬜ | |
 | P14 | Validation & hardening | ⬜ | |
 
 ## Test inventory
 
+447 tests pass with `cargo test --workspace`; the Docker (4), LDAP (3) and Redis (4) suites need their
+service and are enabled with `SP_TEST_DOCKER=1`, `SP_TEST_LDAP=1` and `SP_TEST_REDIS=1`.
+
 | Suite | Tests | Notes |
 | --- | --- | --- |
-| `containerproxy` unit | 167 | config tree/schema/loader/settings/warnings, canonical YAML, identifiers |
+| `containerproxy` unit | 246 | config tree/schema/loader/settings/warnings, canonical YAML, identifiers |
 | `containerproxy` golden | 2 | canonical YAML + SHA-1 vs Java reference output |
 | `containerproxy` dataplane (end to end) | 6 | streamed bodies, header forwarding, WebSocket + heartbeats, cache headers, injection, crashed app |
 | `shinyproxy` docker backend (end to end, `SP_TEST_DOCKER=1`) | 4 | container create request (labels, env, published ports), HTTP + WebSocket proxying, stop/cleanup, pause/resume, app recovery after a restart and the instanceId check |
@@ -45,8 +48,8 @@ Legend: ⬜ not started · 🟨 in progress · ✅ done
 | `containerproxy` lifecycle (end to end) | 8 | real app processes: start/reachable/env vars/stop/cleanup, failed start, max instances, shutdown behaviour, events |
 | `shinyproxy` config fixtures | 15 | 13 realistic configurations (docker, kubernetes, openid, ldap, saml, HA, parameters, template groups, usage stats, ecs, proxy sharing, api security) |
 | `shinyproxy` docs/schema sync | 2 | generated CONFIGURATION.md + Java property inventory coverage |
-| `shinyproxy` unit | 38 | schema lookups, generated docs, spec conversion, page model, state (access control, admin, max instances, logos) |
-| `shinyproxy` ui (end to end) | 14 | login/logout/CSRF, index rendering, admin authorization, assets, security headers, context path, landing page, JSON 401 |
+| `shinyproxy` unit | 45 | schema lookups, generated docs, spec conversion, page model, state (access control, admin, max instances, logos) |
+| `shinyproxy` ui (end to end) | 16 | login/logout/CSRF, index rendering, admin authorization, assets, security headers, context path, landing page, JSON 401 |
 | `shinyproxy` spec conversion | 3 | every fixture yields usable specs; docker/template-group details |
 | `testapp` fixture contract | 5 | routes used by the integration tests |
 | `spel` | 40 | unit tests + 116 expression corpus cross-validated against Spring |
