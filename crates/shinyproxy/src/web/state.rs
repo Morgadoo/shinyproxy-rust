@@ -355,11 +355,11 @@ impl AppState {
         }
 
         if let Some(user) = user {
-            if access.groups.iter().any(|group| user.is_member_of(group)) {
+            if access.groups().iter().any(|group| user.is_member_of(group)) {
                 return true;
             }
             if access
-                .users
+                .users()
                 .iter()
                 .any(|allowed| self.username_equals(&user.id, allowed))
             {

@@ -34,6 +34,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::config::StringList;
+
 use super::spel_field::{
     ResolveError, SpecResolver, SpelLong, SpelString, SpelStringList, SpelStringMap,
 };
@@ -54,10 +56,11 @@ pub enum CacheHeadersMode {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct AccessControl {
-    /// Groups that may access the app.
-    pub groups: Vec<String>,
-    /// Users that may access the app.
-    pub users: Vec<String>,
+    /// Groups that may access the app (a single group may be written as a scalar, as Spring's relaxed
+    /// binding allows).
+    pub groups: StringList,
+    /// Users that may access the app (a single user may be written as a scalar).
+    pub users: StringList,
     /// Expression that grants access when it evaluates to true.
     pub expression: Option<String>,
     /// Expression that must always evaluate to true.
@@ -68,6 +71,16 @@ impl AccessControl {
     /// Whether groups are configured.
     pub fn has_group_access(&self) -> bool {
         !self.groups.is_empty()
+    }
+
+    /// The groups that may access the app.
+    pub fn groups(&self) -> &[String] {
+        self.groups.values()
+    }
+
+    /// The users that may access the app.
+    pub fn users(&self) -> &[String] {
+        self.users.values()
     }
 
     /// Whether users are configured.
@@ -226,13 +239,24 @@ pub struct ParameterValueSet {
     /// Who may use this value set.
     pub access_control: Option<AccessControl>,
     /// Allowed values per parameter id.
-    pub values: BTreeMap<String, Vec<String>>,
+    ///
+    /// A single value may be written as a scalar (`memory: 2G`), exactly as Spring's relaxed binding
+    /// accepts it in the Java implementation.
+    pub values: BTreeMap<String, StringList>,
 }
 
 impl ParameterValueSet {
     /// Whether this value set defines values for the given parameter.
     pub fn contains_parameter(&self, parameter_id: &str) -> bool {
         self.values.contains_key(parameter_id)
+    }
+
+    /// The allowed values of a parameter.
+    pub fn values_of(&self, parameter_id: &str) -> &[String] {
+        self.values
+            .get(parameter_id)
+            .map(|values| values.values())
+            .unwrap_or_default()
     }
 }
 
@@ -650,7 +674,7 @@ mod tests {
     fn access_control_helpers() {
         let mut access = AccessControl::default();
         assert!(access.is_open());
-        access.groups = vec!["scientists".into()];
+        access.groups = StringList(vec!["scientists".into()]);
         assert!(access.has_group_access());
         assert!(!access.is_open());
 

@@ -257,8 +257,8 @@ impl RawSpec {
         };
 
         let access_control = AccessControl {
-            groups: self.access_groups.0,
-            users: self.access_users.0,
+            groups: self.access_groups,
+            users: self.access_users,
             expression: self.access_expression,
             strict_expression: self.access_strict_expression,
         };
@@ -466,7 +466,7 @@ mod tests {
             Some("Application which demonstrates the basics of a Shiny app")
         );
         assert_eq!(
-            hello.access_control.groups,
+            hello.access_control.groups(),
             ["scientists", "mathematicians"]
         );
         assert_eq!(hello.max_total_instances, -1);
@@ -493,7 +493,7 @@ mod tests {
 
         // scalar access-groups notation is accepted as well
         let tabsets = provider.spec("06_tabsets").expect("06_tabsets");
-        assert_eq!(tabsets.access_control.groups, ["scientists"]);
+        assert_eq!(tabsets.access_control.groups(), ["scientists"]);
     }
 
     #[test]

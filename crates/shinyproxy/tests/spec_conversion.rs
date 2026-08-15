@@ -91,7 +91,7 @@ fn docker_fixture_specs_match_the_configuration() {
     let spec = provider.spec("01_hello").expect("01_hello");
 
     assert_eq!(spec.display_name.as_deref(), Some("Hello Application"));
-    assert_eq!(spec.access_control.groups, ["scientists"]);
+    assert_eq!(spec.access_control.groups(), ["scientists"]);
     assert_eq!(spec.max_total_instances, 10);
     assert_eq!(spec.stop_on_logout, Some(true));
     assert_eq!(

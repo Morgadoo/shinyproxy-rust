@@ -22,11 +22,16 @@
 //! Services: the stateful components of the engine.
 
 pub mod identifier;
+pub mod parameters;
 pub mod proxy_service;
 pub mod recovery;
 pub mod runtime_values;
 
 pub use identifier::Identifiers;
+pub use parameters::{
+    allowed_parameters_for_user, parse_and_validate_request, AllowedParametersForUser,
+    InvalidParameters, ParameterName, ParameterNames, ParameterValues,
+};
 pub use proxy_service::{ProxyService, StartError};
 pub use recovery::AppRecoveryService;
 pub use runtime_values::{PortMappings, RuntimeValueService};
