@@ -1,0 +1,10 @@
+target/
+.git/
+.github/
+docs/
+tools/
+*.log
+shinyproxy.log
+application.yml
+.idea/
+.vscode/

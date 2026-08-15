@@ -34,8 +34,11 @@ use shinyproxy::VERSION;
 async fn main() -> anyhow::Result<()> {
     if std::env::args().any(|arg| arg == "--version" || arg == "-V") {
         println!(
-            "shinyproxy {VERSION} (Rust implementation, compatible with ShinyProxy {})",
-            containerproxy::COMPATIBLE_WITH_JAVA_VERSION
+            "shinyproxy {VERSION} (Rust implementation, compatible with ShinyProxy {})\n\
+             commit {}, built {}",
+            containerproxy::COMPATIBLE_WITH_JAVA_VERSION,
+            env!("SHINYPROXY_GIT_COMMIT"),
+            env!("SHINYPROXY_BUILD_TIMESTAMP"),
         );
         return Ok(());
     }

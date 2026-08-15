@@ -87,11 +87,14 @@ fn render_admin(state: &AppState, user: Option<&AuthenticatedUser>, sub_page: &s
     }
 }
 
-/// Description of this build.
+/// Description of this build (what the Java page shows as the build information).
 fn build_info() -> String {
     format!(
-        "{} (rustc {}, {} profile)",
+        "{} (compatible with ShinyProxy {}, commit {}, built {}, rustc {}, {} profile)",
         env!("CARGO_PKG_VERSION"),
+        containerproxy::COMPATIBLE_WITH_JAVA_VERSION,
+        GIT_COMMIT,
+        BUILD_TIMESTAMP,
         RUSTC_VERSION,
         PROFILE
     )
@@ -101,6 +104,10 @@ fn build_info() -> String {
 const RUSTC_VERSION: &str = env!("SHINYPROXY_RUSTC_VERSION");
 /// Build profile (`debug`/`release`).
 const PROFILE: &str = env!("SHINYPROXY_PROFILE");
+/// The commit this binary was built from.
+const GIT_COMMIT: &str = env!("SHINYPROXY_GIT_COMMIT");
+/// When this binary was built.
+const BUILD_TIMESTAMP: &str = env!("SHINYPROXY_BUILD_TIMESTAMP");
 
 /// The command line of this process, one argument per line (as the Java page does for JVM arguments).
 fn process_arguments() -> String {
@@ -160,6 +167,13 @@ mod tests {
         let info = build_info();
         assert!(info.contains(env!("CARGO_PKG_VERSION")), "{info}");
         assert!(info.contains("rustc"), "{info}");
+        // the commit and the build time let an operator identify a binary exactly
+        assert!(info.contains("commit "), "{info}");
+        assert!(info.contains("built "), "{info}");
+        assert!(
+            info.contains(containerproxy::COMPATIBLE_WITH_JAVA_VERSION),
+            "{info}"
+        );
     }
 
     #[test]
