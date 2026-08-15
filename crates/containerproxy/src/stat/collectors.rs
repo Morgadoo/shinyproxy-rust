@@ -257,6 +257,14 @@ pub fn database_url(jdbc_url: &str, username: Option<&str>, password: Option<&st
         without_prefix
     };
 
+    // JDBC creates a SQLite database that does not exist yet; sqlx only does so when it is asked
+    let url = if url.starts_with("sqlite:") && !url.contains("mode=") {
+        let separator = if url.contains('?') { '&' } else { '?' };
+        format!("{url}{separator}mode=rwc")
+    } else {
+        url
+    };
+
     // the credentials are configured separately in ShinyProxy, but SQL URLs carry them
     match (username, password) {
         (Some(username), password) if !url.contains('@') => {
@@ -601,9 +609,15 @@ mod tests {
             database_url("jdbc:mysql://db:3306/shinyproxy", None, None),
             "mysql://db:3306/shinyproxy"
         );
+        // a SQLite database that does not exist yet is created, as JDBC does
         assert_eq!(
             database_url("jdbc:sqlite:/tmp/usage.db", None, None),
-            "sqlite:/tmp/usage.db"
+            "sqlite:/tmp/usage.db?mode=rwc"
+        );
+        assert_eq!(
+            database_url("jdbc:sqlite:/tmp/usage.db?mode=ro", None, None),
+            "sqlite:/tmp/usage.db?mode=ro",
+            "an explicit mode wins"
         );
         assert_eq!(
             database_url(

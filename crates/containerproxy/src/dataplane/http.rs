@@ -41,6 +41,9 @@ const HOP_BY_HOP: &[&str] = &[
     "trailer",
     "proxy-authenticate",
     "proxy-authorization",
+    // `Upgrade` only means something for the hop it was sent on; it is kept for the handshake of a
+    // WebSocket (see `filter_headers`) and dropped everywhere else
+    "upgrade",
 ];
 
 /// The pooled HTTP client used for proxying, shared by all proxies.
@@ -152,8 +155,9 @@ pub async fn forward(
 
 /// Copies the headers of a request/response, dropping the hop-by-hop ones.
 ///
-/// `Connection: upgrade` is kept, because otherwise the WebSocket handshake of an app would never reach
-/// it (`Upgrade` itself is not a hop-by-hop header).
+/// `Connection: upgrade` and `Upgrade` are kept for a handshake, because otherwise the WebSocket handshake
+/// of an app would never reach it; on a normal request they are dropped, so a client cannot smuggle them
+/// into the app.
 pub fn filter_headers(headers: &HeaderMap) -> HeaderMap {
     let upgrading = headers
         .get(axum::http::header::CONNECTION)
@@ -162,7 +166,9 @@ pub fn filter_headers(headers: &HeaderMap) -> HeaderMap {
 
     let mut result = HeaderMap::with_capacity(headers.len());
     for (name, value) in headers {
-        if name == axum::http::header::CONNECTION && upgrading {
+        if upgrading
+            && (name == axum::http::header::CONNECTION || name == axum::http::header::UPGRADE)
+        {
             result.append(name.clone(), value.clone());
             continue;
         }
@@ -219,6 +225,27 @@ mod tests {
         let filtered = filter_headers(&headers);
         assert_eq!(filtered.get("connection").unwrap(), "Upgrade");
         assert_eq!(filtered.get("upgrade").unwrap(), "websocket");
+    }
+
+    #[test]
+    fn drops_the_upgrade_header_of_a_normal_request() {
+        let mut headers = HeaderMap::new();
+        headers.insert("upgrade", HeaderValue::from_static("h2c"));
+        headers.insert("x-ok", HeaderValue::from_static("value"));
+        let filtered = filter_headers(&headers);
+        assert!(
+            filtered.get("upgrade").is_none(),
+            "a client must not be able to send Upgrade to the app"
+        );
+        assert_eq!(filtered.get("x-ok").unwrap(), "value");
+
+        // during a handshake it is needed
+        let mut headers = HeaderMap::new();
+        headers.insert("connection", HeaderValue::from_static("Upgrade"));
+        headers.insert("upgrade", HeaderValue::from_static("websocket"));
+        let filtered = filter_headers(&headers);
+        assert_eq!(filtered.get("upgrade").unwrap(), "websocket");
+        assert_eq!(filtered.get("connection").unwrap(), "Upgrade");
     }
 
     #[test]
