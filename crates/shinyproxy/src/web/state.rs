@@ -128,7 +128,10 @@ pub enum StateError {
 
 impl AppState {
     /// Builds the state from the loaded configuration.
-    pub fn new(raw: RawConfig, settings: Settings) -> Result<Self, StateError> {
+    ///
+    /// Asynchronous because some container backends (Kubernetes) connect to their API when they are
+    /// created.
+    pub async fn new(raw: RawConfig, settings: Settings) -> Result<Self, StateError> {
         let identifiers =
             Identifiers::from_config(&raw, std::env::var("SP_KUBE_POD_NAME").ok().as_deref());
         let specs = ShinyProxySpecProvider::from_settings(&settings)?;
@@ -209,14 +212,20 @@ impl AppState {
             ),
         });
 
-        let backend = backend::create(
+        let backend = backend::create_async(
             &settings,
             backend::BackendContext {
                 port_allocator: port_allocator.clone(),
                 registry: runtime_values.clone(),
                 realm_id: identifiers.realm_id.clone(),
+                // the authorized Kubernetes patches and manifests of an app are evaluated with the
+                // access control of the server; without a user the open ones apply
+                access_check: Some(Arc::new(|access| {
+                    access.map(|access| access.is_open()).unwrap_or(true)
+                })),
             },
-        )?;
+        )
+        .await?;
         let recovery = Arc::new(AppRecoveryService::new(&settings, &identifiers));
         let proxies = Arc::new(ProxyService::new(
             settings.clone(),
@@ -746,7 +755,7 @@ mod tests {
     use super::*;
     use containerproxy::config::LoadOptions;
 
-    fn build_state(yaml: &str) -> AppState {
+    async fn build_state(yaml: &str) -> AppState {
         let directory = tempfile::tempdir().expect("temp dir");
         let path = directory.path().join("application.yml");
         std::fs::write(&path, yaml).expect("write");
@@ -759,14 +768,14 @@ mod tests {
         if settings.proxy.container_backend.is_none() {
             settings.proxy.container_backend = Some("local".to_string());
         }
-        AppState::new(raw, settings).expect("state")
+        AppState::new(raw, settings).await.expect("state")
     }
 
-    #[test]
-    fn resolves_title_and_logo_expressions() {
+    #[tokio::test]
+    async fn resolves_title_and_logo_expressions() {
         let state = build_state(
             "proxy:\n  title: 'Proxy of #{userId}'\n  logo-url: 'https://example.com/#{userId}.png'\n  authentication: simple\n  users:\n    - name: jack\n      password: pw\n  specs: []\n",
-        );
+        ).await;
         let user = AuthenticatedUser::new("jack", vec![]);
         assert_eq!(state.resolve_title(Some(&user)), "Proxy of jack");
         assert_eq!(
@@ -775,24 +784,25 @@ mod tests {
         );
     }
 
-    #[test]
-    fn inlines_file_logos_as_data_uris() {
+    #[tokio::test]
+    async fn inlines_file_logos_as_data_uris() {
         let directory = tempfile::tempdir().expect("temp dir");
         let logo = directory.path().join("logo.png");
         std::fs::write(&logo, b"\x89PNG\r\n\x1a\nfake").expect("write logo");
         let state = build_state(&format!(
             "proxy:\n  logo-url: 'file://{}'\n  authentication: none\n  specs: []\n",
             logo.display()
-        ));
+        ))
+        .await;
         let resolved = state.resolve_logo(None).expect("logo");
         assert!(resolved.starts_with("data:image/png;base64,"), "{resolved}");
     }
 
-    #[test]
-    fn evaluates_access_control() {
+    #[tokio::test]
+    async fn evaluates_access_control() {
         let state = build_state(
             "proxy:\n  authentication: simple\n  username-case-sensitive: false\n  users:\n    - name: jack\n      password: pw\n      groups: scientists\n  specs:\n    - id: open\n      container-image: img\n    - id: by-group\n      container-image: img\n      access-groups: SCIENTISTS\n    - id: by-user\n      container-image: img\n      access-users: JACK\n    - id: by-expression\n      container-image: img\n      access-expression: \"#{userId == 'jack'}\"\n    - id: denied\n      container-image: img\n      access-groups: admins\n    - id: strict\n      container-image: img\n      access-groups: scientists\n      access-strict-expression: \"#{userId == 'jill'}\"\n",
-        );
+        ).await;
         let user = AuthenticatedUser::new("jack", vec!["scientists".into()]);
         let accessible: Vec<&str> = state
             .specs
@@ -804,22 +814,22 @@ mod tests {
         assert_eq!(accessible, ["open", "by-group", "by-user", "by-expression"]);
     }
 
-    #[test]
-    fn anonymous_users_only_have_access_without_authentication() {
-        let state = build_state("proxy:\n  authentication: none\n  specs:\n    - id: open\n      container-image: img\n");
+    #[tokio::test]
+    async fn anonymous_users_only_have_access_without_authentication() {
+        let state = build_state("proxy:\n  authentication: none\n  specs:\n    - id: open\n      container-image: img\n").await;
         assert!(state.can_access(None, &state.specs.specs()[0]));
 
         let state = build_state(
             "proxy:\n  authentication: simple\n  users:\n    - name: jack\n      password: pw\n  specs:\n    - id: open\n      container-image: img\n",
-        );
+        ).await;
         assert!(!state.can_access(None, &state.specs.specs()[0]));
     }
 
-    #[test]
-    fn detects_administrators() {
+    #[tokio::test]
+    async fn detects_administrators() {
         let state = build_state(
             "proxy:\n  authentication: simple\n  admin-groups: [ admins ]\n  admin-users: [ root ]\n  users:\n    - name: jack\n      password: pw\n  specs: []\n",
-        );
+        ).await;
         assert!(state.is_admin(Some(&AuthenticatedUser::new("x", vec!["admins".into()]))));
         assert!(state.is_admin(Some(&AuthenticatedUser::new("root", vec![]))));
         assert!(!state.is_admin(Some(&AuthenticatedUser::new(
@@ -830,15 +840,17 @@ mod tests {
 
         // without authentication nobody is an administrator
         let state =
-            build_state("proxy:\n  authentication: none\n  admin-users: [ root ]\n  specs: []\n");
+            build_state("proxy:\n  authentication: none\n  admin-users: [ root ]\n  specs: []\n")
+                .await;
         assert!(!state.is_admin(Some(&AuthenticatedUser::new("root", vec![]))));
     }
 
-    #[test]
-    fn resolves_max_instances_per_app() {
+    #[tokio::test]
+    async fn resolves_max_instances_per_app() {
         let state = build_state(
             "proxy:\n  authentication: simple\n  default-max-instances: 2\n  users:\n    - name: jack\n      password: pw\n      groups: scientists\n  specs:\n    - id: default\n      container-image: img\n    - id: fixed\n      container-image: img\n      max-instances: 5\n    - id: expression\n      container-image: img\n      max-instances: \"#{groups.contains('SCIENTISTS') ? 10 : 1}\"\n",
-        );
+        )
+        .await;
         let user = AuthenticatedUser::new("jack", vec!["scientists".into()]);
         let instances = state.max_instances(Some(&user));
         assert_eq!(instances.get("default"), Some(&2));
@@ -846,11 +858,11 @@ mod tests {
         assert_eq!(instances.get("expression"), Some(&10));
     }
 
-    #[test]
-    fn builds_app_urls() {
+    #[tokio::test]
+    async fn builds_app_urls() {
         let state = build_state(
             "proxy:\n  authentication: none\n  specs:\n    - id: plain\n      container-image: img\n    - id: hidden\n      container-image: img\n      hide-navbar-on-main-page-link: true\n    - id: external\n      external-url: https://example.com/app\n",
-        );
+        ).await;
         let urls: Vec<String> = state
             .specs
             .specs()

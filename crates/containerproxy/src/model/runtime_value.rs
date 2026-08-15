@@ -411,6 +411,51 @@ impl RuntimeValueRegistry {
     }
 }
 
+impl RuntimeValueRegistry {
+    /// Parses labels *and* annotations into runtime values (`parseLabelsAndAnnotationsAsRuntimeValues`).
+    ///
+    /// Kubernetes stores the values with `include_as_label` as labels and those with
+    /// `include_as_annotation` as annotations, so both maps are needed. Returns `None` when a required
+    /// value is missing, which is how the Java implementation decides that a pod is not recoverable.
+    pub fn parse_labels_and_annotations<'a>(
+        &self,
+        labels: impl IntoIterator<Item = (&'a str, &'a str)>,
+        annotations: impl IntoIterator<Item = (&'a str, &'a str)>,
+    ) -> Option<RuntimeValues> {
+        let labels: BTreeMap<&str, &str> = labels.into_iter().collect();
+        let annotations: BTreeMap<&str, &str> = annotations.into_iter().collect();
+
+        let mut values = RuntimeValues::new();
+        for key in &self.keys {
+            let raw = if key.include_as_label {
+                labels.get(key.label).copied()
+            } else if key.include_as_annotation {
+                annotations.get(key.label).copied()
+            } else {
+                None
+            };
+            match raw {
+                Some(raw) => match RuntimeValue::parse(key, raw) {
+                    Ok(value) => values.add(value, true),
+                    Err(error) => {
+                        tracing::warn!("ignoring invalid runtime value on a pod: {error}");
+                        return None;
+                    }
+                },
+                None if key.required && (key.include_as_label || key.include_as_annotation) => {
+                    tracing::warn!(
+                        "Ignoring container because no label or annotation named {} is found",
+                        key.label
+                    );
+                    return None;
+                }
+                None => {}
+            }
+        }
+        Some(values)
+    }
+}
+
 /// A backend container name, optionally namespaced (`namespace/name`).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct BackendContainerName {

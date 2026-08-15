@@ -282,7 +282,7 @@ mod tests {
     use containerproxy::model::proxy::{Proxy, ProxyStatus};
     use containerproxy::model::runtime_value::RuntimeValue;
 
-    fn build_state(yaml: &str) -> AppState {
+    async fn build_state(yaml: &str) -> AppState {
         let directory = tempfile::tempdir().expect("temp dir");
         let path = directory.path().join("application.yml");
         std::fs::write(&path, yaml).expect("write");
@@ -292,14 +292,14 @@ mod tests {
         };
         let (raw, mut settings) = crate::load_config(options).expect("config");
         settings.proxy.container_backend = Some("local".to_string());
-        AppState::new(raw, settings).expect("state")
+        AppState::new(raw, settings).await.expect("state")
     }
 
-    #[test]
-    fn builds_the_java_mail_body() {
+    #[tokio::test]
+    async fn builds_the_java_mail_body() {
         let state = build_state(
             "proxy:\n  authentication: none\n  support:\n    mail-to-address: support@example.com\n  container-log-path: /var/log/sp\n  specs:\n    - id: 01_hello\n      container-image: sp-testapp\n",
-        );
+        ).await;
         let user = AuthenticatedUser::new("jack", vec![]);
         let mut proxy = Proxy::new("proxy-1", ProxyStatus::Up);
         proxy.spec_id = Some("01_hello".into());
@@ -339,11 +339,11 @@ mod tests {
         assert!(name.starts_with("01_hello_proxy-1_"), "{name}");
     }
 
-    #[test]
-    fn apps_can_override_recipient_and_subject() {
+    #[tokio::test]
+    async fn apps_can_override_recipient_and_subject() {
         let state = build_state(
             "proxy:\n  authentication: none\n  support:\n    mail-to-address: support@example.com\n    mail-from-address: sp@example.com\n    mail-subject: 'Global subject'\n  specs:\n    - id: 01_hello\n      container-image: sp-testapp\n      support-mail-to-address: app-support@example.com\n      support-mail-subject: 'App subject'\n",
-        );
+        ).await;
         let user = AuthenticatedUser::new("jack", vec![]);
         let mut proxy = Proxy::new("proxy-1", ProxyStatus::Up);
         proxy.spec_id = Some("01_hello".into());

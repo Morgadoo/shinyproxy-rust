@@ -132,11 +132,16 @@ fn kubernetes_configuration() {
         settings.proxy.kubernetes.image_pull_secrets.values(),
         ["registry-secret"]
     );
+    // the node selector accepts a map (this fixture) and the `key=value,key=value` string of Java
     assert_eq!(
         settings
             .proxy
             .kubernetes
             .node_selector
+            .as_ref()
+            .expect("node selector")
+            .pairs()
+            .expect("pairs")
             .get("kubernetes.io/hostname")
             .map(String::as_str),
         Some("node-1")

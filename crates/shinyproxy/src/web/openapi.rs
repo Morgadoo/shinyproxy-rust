@@ -235,7 +235,7 @@ mod tests {
     use super::*;
     use containerproxy::config::LoadOptions;
 
-    fn build_state(yaml: &str) -> AppState {
+    async fn build_state(yaml: &str) -> AppState {
         let directory = tempfile::tempdir().expect("temp dir");
         let path = directory.path().join("application.yml");
         std::fs::write(&path, yaml).expect("write");
@@ -245,12 +245,12 @@ mod tests {
         };
         let (raw, mut settings) = crate::load_config(options).expect("config");
         settings.proxy.container_backend = Some("local".to_string());
-        AppState::new(raw, settings).expect("state")
+        AppState::new(raw, settings).await.expect("state")
     }
 
-    #[test]
-    fn describes_every_documented_endpoint() {
-        let state = build_state("proxy:\n  authentication: none\n  specs: []\n");
+    #[tokio::test]
+    async fn describes_every_documented_endpoint() {
+        let state = build_state("proxy:\n  authentication: none\n  specs: []\n").await;
         let document = document(&state);
         assert_eq!(document["openapi"], "3.0.1");
         assert_eq!(document["info"]["version"], crate::VERSION);
@@ -279,11 +279,11 @@ mod tests {
             .any(|parameter| parameter["name"] == "watch"));
     }
 
-    #[test]
-    fn uses_the_context_path_as_server() {
+    #[tokio::test]
+    async fn uses_the_context_path_as_server() {
         let state = build_state(
             "proxy:\n  authentication: none\n  specs: []\nserver:\n  servlet:\n    context-path: /shinyproxy\n",
-        );
+        ).await;
         let document = document(&state);
         assert_eq!(document["servers"][0]["url"], "/shinyproxy");
     }

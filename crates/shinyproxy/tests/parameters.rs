@@ -395,7 +395,8 @@ proxy:
         template: |
           <div th:each="parameter : ${parameterDefinitions}"></div>
 "##,
-    );
+    )
+    .await;
     assert!(error.contains("th:each"), "{error}");
     assert!(error.contains("MiniJinja"), "{error}");
 
@@ -415,7 +416,8 @@ proxy:
           - values:
               dataset: public
 "##,
-    );
+    )
+    .await;
     assert_eq!(
         error,
         "Configuration error: error in parameters of spec '01_hello', error: duplicate parameter id \
@@ -424,7 +426,7 @@ proxy:
 }
 
 /// Loads a configuration and returns the error it produces.
-fn start_and_expect_error(yaml: &str) -> String {
+async fn start_and_expect_error(yaml: &str) -> String {
     let directory = tempfile::tempdir().expect("temp dir");
     let path = directory.path().join("application.yml");
     std::fs::write(&path, yaml).expect("write configuration");
@@ -435,6 +437,7 @@ fn start_and_expect_error(yaml: &str) -> String {
     let (raw, mut settings) = shinyproxy::load_config(options).expect("configuration loads");
     settings.proxy.container_backend = Some("local".to_string());
     shinyproxy::web::AppState::new(raw, settings)
+        .await
         .expect_err("the configuration must be refused")
         .to_string()
 }

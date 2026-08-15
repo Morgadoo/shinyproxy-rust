@@ -26,6 +26,7 @@
 //! `IContainerBackend`.
 
 pub mod docker;
+pub mod kubernetes;
 pub mod local;
 pub mod ports;
 pub mod swarm;
@@ -185,11 +186,36 @@ pub trait ContainerBackend: Send + Sync + std::fmt::Debug {
     }
 }
 
+/// Creates the configured container backend, connecting to the cluster when needed.
+pub async fn create_async(
+    settings: &Settings,
+    context: BackendContext,
+) -> Result<Arc<dyn ContainerBackend>, CreateError> {
+    let name = settings
+        .proxy
+        .container_backend()
+        .to_ascii_lowercase()
+        .replace(['-', '_'], "");
+    if name != "kubernetes" {
+        return create(settings, context);
+    }
+
+    let config = kubernetes::KubernetesConfig::from_settings(settings)
+        .map_err(CreateError::Configuration)?;
+    let mut backend =
+        kubernetes::KubernetesBackend::connect(config, context.registry.clone()).await?;
+    if let Some(access_check) = context.access_check.clone() {
+        backend = backend.with_access_check(access_check);
+    }
+    Ok(Arc::new(backend))
+}
+
 /// The configured container backend is not implemented yet.
 #[derive(Debug, thiserror::Error)]
 #[error(
     "container backend '{name}' is not supported yet by this implementation \
-     (supported: docker, docker-swarm, local); see docs/PROGRESS.md for the phase that adds it"
+     (supported: docker, docker-swarm, kubernetes, local); see docs/PROGRESS.md for the phase that \
+     adds it"
 )]
 pub struct UnsupportedBackend {
     /// The configured value of `proxy.container-backend`.
@@ -211,7 +237,7 @@ pub enum CreateError {
 }
 
 /// Everything a backend may need besides the settings.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct BackendContext {
     /// Ports that can be published on the host.
     pub port_allocator: Arc<PortAllocator>,
@@ -219,9 +245,24 @@ pub struct BackendContext {
     pub registry: Arc<crate::model::runtime_value::RuntimeValueRegistry>,
     /// The realm of this server (used in the Loki labels).
     pub realm_id: Option<String>,
+    /// Evaluates the access control of the authorized Kubernetes patches and manifests.
+    pub access_check: Option<kubernetes::AccessCheck>,
+}
+
+impl std::fmt::Debug for BackendContext {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("BackendContext")
+            .field("port_allocator", &self.port_allocator)
+            .field("realm_id", &self.realm_id)
+            .finish()
+    }
 }
 
 /// Creates the configured container backend.
+///
+/// The Kubernetes backend has to connect to the cluster, which is asynchronous; [`create`] therefore
+/// refuses it and [`create_async`] is used by the server.
 pub fn create(
     settings: &Settings,
     context: BackendContext,
@@ -230,6 +271,7 @@ pub fn create(
         port_allocator,
         registry,
         realm_id,
+        access_check: _,
     } = context;
     match settings
         .proxy
@@ -257,6 +299,10 @@ pub fn create(
             )?))
         }
         "local" => Ok(Arc::new(local::LocalBackend::new(settings, port_allocator))),
+        // the Kubernetes client connects asynchronously; see `create_async`
+        "kubernetes" => Err(CreateError::Configuration(
+            "the kubernetes backend must be created with backend::create_async".to_string(),
+        )),
         other => Err(UnsupportedBackend {
             name: other.to_string(),
         }
@@ -273,6 +319,7 @@ mod tests {
             port_allocator: Arc::new(PortAllocator::new(20000, None)),
             registry: Arc::new(crate::model::runtime_value::RuntimeValueRegistry::engine()),
             realm_id: None,
+            access_check: None,
         }
     }
 
@@ -288,9 +335,9 @@ mod tests {
     #[test]
     fn reports_unsupported_backends() {
         let settings: Settings =
-            serde_yaml_ng::from_str("proxy:\n  container-backend: kubernetes\n").unwrap();
+            serde_yaml_ng::from_str("proxy:\n  container-backend: ecs\n").unwrap();
         let error = create(&settings, context()).unwrap_err();
-        assert!(error.to_string().contains("kubernetes"), "{error}");
+        assert!(error.to_string().contains("ecs"), "{error}");
         assert!(error.to_string().contains("not supported yet"), "{error}");
     }
 

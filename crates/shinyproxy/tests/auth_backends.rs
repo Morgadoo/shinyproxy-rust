@@ -267,6 +267,7 @@ async fn webservice_authentication_needs_its_configuration() {
     let (raw, mut settings) = shinyproxy::load_config(options).expect("configuration loads");
     settings.proxy.container_backend = Some("local".to_string());
     let error = shinyproxy::web::AppState::new(raw, settings)
+        .await
         .expect_err("the configuration must be refused")
         .to_string();
     assert_eq!(

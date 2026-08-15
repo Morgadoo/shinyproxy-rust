@@ -64,7 +64,7 @@ async fn main() -> anyhow::Result<()> {
 
     let bind_address = settings.proxy.bind_address().to_string();
     let port = settings.proxy.port();
-    let state = Arc::new(AppState::new(raw, settings)?);
+    let state = Arc::new(AppState::new(raw, settings).await?);
     state.identifiers.log();
     tracing::info!(
         "Serving {} app(s), authentication: {}",

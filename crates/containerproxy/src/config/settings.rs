@@ -549,6 +549,55 @@ impl DockerSettings {
     }
 }
 
+/// The node selector of the pods, written as a string (`a=b,c=d`, as Java reads it) or as a map.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum NodeSelector {
+    /// `node-selector: "disk=ssd,zone=a"`
+    Text(String),
+    /// `node-selector: {disk: ssd, zone: a}`
+    Pairs(BTreeMap<String, String>),
+}
+
+impl NodeSelector {
+    /// The selector as key/value pairs.
+    pub fn pairs(&self) -> Result<BTreeMap<String, String>, String> {
+        match self {
+            NodeSelector::Pairs(pairs) => Ok(pairs.clone()),
+            NodeSelector::Text(text) if text.trim().is_empty() => Ok(BTreeMap::new()),
+            NodeSelector::Text(text) => {
+                let mut pairs = BTreeMap::new();
+                for entry in text.split(',') {
+                    let Some((key, value)) = entry.split_once('=') else {
+                        return Err(format!(
+                            "invalid proxy.kubernetes.node-selector '{text}': expected key=value pairs"
+                        ));
+                    };
+                    pairs.insert(key.trim().to_string(), value.trim().to_string());
+                }
+                Ok(pairs)
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for NodeSelector {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        match value {
+            serde_json::Value::String(text) => Ok(NodeSelector::Text(text)),
+            serde_json::Value::Object(_) => {
+                let pairs: BTreeMap<String, String> =
+                    serde_json::from_value(value).map_err(serde::de::Error::custom)?;
+                Ok(NodeSelector::Pairs(pairs))
+            }
+            other => Err(serde::de::Error::custom(format!(
+                "node-selector must be a string or a map, got {other}"
+            ))),
+        }
+    }
+}
+
 /// `proxy.kubernetes.*`
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default, rename_all = "kebab-case")]
@@ -560,7 +609,10 @@ pub struct KubernetesSettings {
     pub image_pull_policy: Option<String>,
     pub image_pull_secrets: StringList,
     pub image_pull_secret: Option<String>,
-    pub node_selector: BTreeMap<String, String>,
+    /// Namespaces that are scanned for existing pods (app recovery).
+    pub app_namespaces: StringList,
+    /// Node selector of the pods; Java reads a single `key=value,key=value` string, a map is accepted too.
+    pub node_selector: Option<NodeSelector>,
     pub cluster_domain: Option<String>,
     pub internal_networking: Option<FlexBool>,
     pub container_protocol: Option<String>,

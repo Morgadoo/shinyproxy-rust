@@ -66,7 +66,10 @@ moka = { version = "0.12", features = ["sync", "future"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 redis = { version = "0.27", default-features = false, features = ["sentinel"] }
 regex = "1"
+json-patch = "3"
 jsonwebtoken = "9"
+k8s-openapi = { version = "0.23", features = ["v1_30"] }
+kube = { version = "0.96", default-features = false, features = ["client", "rustls-tls", "runtime"] }
 ldap3 = { version = "0.11", default-features = false, features = ["tls-rustls"] }
 sha1 = "0.10"
 sha2 = "0.10"

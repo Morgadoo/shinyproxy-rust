@@ -111,7 +111,7 @@ impl TestInstance {
             Some(containerproxy::config::FlexI64(range_start as i64));
         settings.proxy.docker.port_range_max =
             Some(containerproxy::config::FlexI64(range_max as i64));
-        let state = Arc::new(AppState::new(raw, settings).expect("state"));
+        let state = Arc::new(AppState::new(raw, settings).await.expect("state"));
         // the same startup sequence as `main`: recovery runs before requests are served
         state
             .spawn_startup_tasks()

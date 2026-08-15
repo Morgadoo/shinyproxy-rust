@@ -265,7 +265,7 @@ mod tests {
     use crate::web::state::AppState;
     use containerproxy::config::LoadOptions;
 
-    fn build_state(yaml: &str) -> AppState {
+    async fn build_state(yaml: &str) -> AppState {
         let directory = tempfile::tempdir().expect("temp dir");
         let path = directory.path().join("application.yml");
         std::fs::write(&path, yaml).expect("write");
@@ -278,18 +278,19 @@ mod tests {
         if settings.proxy.container_backend.is_none() {
             settings.proxy.container_backend = Some("local".to_string());
         }
-        AppState::new(raw, settings).expect("state")
+        AppState::new(raw, settings).await.expect("state")
     }
 
     fn user() -> AuthenticatedUser {
         AuthenticatedUser::new("jack", vec!["scientists".into()])
     }
 
-    #[test]
-    fn builds_the_index_model() {
+    #[tokio::test]
+    async fn builds_the_index_model() {
         let state = build_state(
             "proxy:\n  title: My Proxy\n  authentication: simple\n  admin-groups: admins\n  users:\n    - name: jack\n      password: pw\n      groups: scientists\n  specs:\n    - id: 01_hello\n      display-name: Hello\n      description: 'A <b>demo</b><script>bad()</script>'\n      container-image: img\n      access-groups: scientists\n    - id: 02_secret\n      container-image: img\n      access-groups: admins\n",
-        );
+        )
+        .await;
         let model = prepare_model(&state, Page::Index, Some(&user()), false);
 
         assert_eq!(model["title"], json!("My Proxy"));
@@ -316,20 +317,20 @@ mod tests {
         assert_eq!(model["templateGroups"].as_array().map(Vec::len), Some(0));
     }
 
-    #[test]
-    fn admins_see_the_admin_button_and_all_apps() {
+    #[tokio::test]
+    async fn admins_see_the_admin_button_and_all_apps() {
         let state = build_state(
             "proxy:\n  authentication: simple\n  admin-groups: scientists\n  users:\n    - name: jack\n      password: pw\n      groups: scientists\n  specs:\n    - id: app\n      container-image: img\n",
-        );
+        ).await;
         let model = prepare_model(&state, Page::Index, Some(&user()), false);
         assert_eq!(model["isAdmin"], json!(true));
     }
 
-    #[test]
-    fn groups_apps_by_template_group() {
+    #[tokio::test]
+    async fn groups_apps_by_template_group() {
         let state = build_state(
             "proxy:\n  authentication: none\n  template-groups:\n    - id: reporting\n      properties:\n        display-name: Reporting\n    - id: empty\n      properties:\n        display-name: Empty\n  specs:\n    - id: report\n      container-image: img\n      template-group: reporting\n    - id: other\n      container-image: img\n",
-        );
+        ).await;
         let model = prepare_model(&state, Page::Index, None, false);
         assert_eq!(model["templateGroups"].as_array().map(Vec::len), Some(1));
         assert_eq!(model["templateGroups"][0]["id"], json!("reporting"));
@@ -344,11 +345,11 @@ mod tests {
         assert_eq!(model["ungroupedApps"].as_array().map(Vec::len), Some(1));
     }
 
-    #[test]
-    fn honours_navbar_and_context_path_settings() {
+    #[tokio::test]
+    async fn honours_navbar_and_context_path_settings() {
         let state = build_state(
             "proxy:\n  authentication: none\n  hide-navbar: true\n  body-classes: [ dark, compact ]\n  notification-message: '<b>hi</b><script>x</script>'\n  my-apps-mode: Inline\n  specs: []\nserver:\n  servlet:\n    context-path: /shinyproxy\n",
-        );
+        ).await;
         let model = prepare_model(&state, Page::Index, None, false);
         assert_eq!(model["showNavbar"], json!(false));
         assert_eq!(model["bodyClasses"], json!("dark compact"));
@@ -362,9 +363,9 @@ mod tests {
             .starts_with("/shinyproxy/"));
     }
 
-    #[test]
-    fn hide_navbar_query_parameter_overrides_the_setting() {
-        let state = build_state("proxy:\n  authentication: none\n  specs: []\n");
+    #[tokio::test]
+    async fn hide_navbar_query_parameter_overrides_the_setting() {
+        let state = build_state("proxy:\n  authentication: none\n  specs: []\n").await;
         let model = prepare_model(&state, Page::Index, None, true);
         assert_eq!(model["showNavbar"], json!(false));
     }

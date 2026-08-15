@@ -100,6 +100,7 @@ Property names are matched leniently: `port-range-start`, `portRangeStart` and `
 | `proxy.heartbeat-timeout` | value | planned (P6) |
 | `proxy.hide-navbar` | value | planned (P4) |
 | `proxy.kubernetes.api-version` | value | planned (P12) |
+| `proxy.kubernetes.app-namespaces` | list of values | planned (P12) |
 | `proxy.kubernetes.authorized-additional-manifests` | list of values | planned (P12) |
 | `proxy.kubernetes.authorized-additional-persistent-manifests` | list of values | planned (P12) |
 | `proxy.kubernetes.authorized-pod-patches` | list of values | planned (P12) |
@@ -112,6 +113,7 @@ Property names are matched leniently: `port-range-start`, `portRangeStart` and `
 | `proxy.kubernetes.image-pull-secrets` | list of values | planned (P12) |
 | `proxy.kubernetes.internal-networking` | value | planned (P12) |
 | `proxy.kubernetes.namespace` | value | planned (P12) |
+| `proxy.kubernetes.node-selector` | value | planned (P12) |
 | `proxy.kubernetes.node-selector` | map (free form keys) | planned (P12) |
 | `proxy.kubernetes.pod-wait-time` | value | planned (P12) |
 | `proxy.kubernetes.privileged` | value | planned (P12) |

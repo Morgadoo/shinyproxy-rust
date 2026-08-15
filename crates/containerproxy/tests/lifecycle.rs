@@ -62,6 +62,7 @@ fn build_service(yaml: &str, port_range_start: u16) -> (Arc<ProxyService>, Arc<P
             port_allocator: allocator.clone(),
             registry: Arc::new(RuntimeValueRegistry::engine()),
             realm_id: None,
+            access_check: None,
         },
     )
     .expect("backend");
