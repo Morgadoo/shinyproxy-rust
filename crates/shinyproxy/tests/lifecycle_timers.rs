@@ -261,7 +261,7 @@ proxy:
         .send()
         .await
         .expect("logout request");
-    assert_eq!(response.status(), 303);
+    assert_eq!(response.status(), 302);
 
     for _ in 0..25 {
         if instance.state.store.count() == 1 {

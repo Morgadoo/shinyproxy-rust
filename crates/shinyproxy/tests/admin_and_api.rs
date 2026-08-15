@@ -400,7 +400,7 @@ async fn app_direct_starts_the_app_and_proxies_to_it() {
         .send()
         .await
         .expect("app_direct request");
-    assert_eq!(response.status(), 303);
+    assert_eq!(response.status(), 302);
     assert_eq!(
         response
             .headers()
@@ -607,7 +607,7 @@ proxy:
         .send()
         .await
         .expect("request");
-    assert_eq!(response.status(), 303);
+    assert_eq!(response.status(), 302);
     assert_eq!(
         response
             .headers()

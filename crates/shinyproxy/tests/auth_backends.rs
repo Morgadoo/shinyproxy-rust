@@ -61,7 +61,7 @@ proxy:
         .send()
         .await
         .expect("request");
-    assert_eq!(response.status(), 303);
+    assert_eq!(response.status(), 302);
     assert_eq!(
         response
             .headers()
@@ -228,7 +228,7 @@ proxy:
         .send()
         .await
         .expect("login request");
-    assert_eq!(response.status(), 303);
+    assert_eq!(response.status(), 302);
     assert_eq!(
         response
             .headers()

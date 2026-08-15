@@ -311,6 +311,7 @@ impl Proxy {
         object.insert("userId".into(), optional_string(&self.user_id));
         object.insert("specId".into(), optional_string(&self.spec_id));
         object.insert("displayName".into(), optional_string(&self.display_name));
+        object.insert("targetId".into(), optional_string(&self.target_id));
         object.insert(
             "containers".into(),
             Value::Array(self.containers.iter().map(Container::api_json).collect()),
@@ -534,7 +535,7 @@ mod tests {
         container.add_runtime_value(
             RuntimeValue::json(
                 &PORT_MAPPINGS,
-                json!({"portMappings": [{"name": "default", "port": 3838, "targetPath": ""}]}),
+                json!([{"name": "default", "port": 3838, "targetPath": ""}]),
             ),
             false,
         );
@@ -552,6 +553,8 @@ mod tests {
                 "status": "Up",
                 "startupTimestamp": 1234,
                 "createdTimestamp": 1234,
+                // the target id is part of the document (verified against the Java implementation)
+                "targetId": "5f39a7cf-c9ff-4a85-9313-d561ec79cca9",
                 "userId": "jack",
                 "specId": "01_hello",
                 "displayName": "01_hello",

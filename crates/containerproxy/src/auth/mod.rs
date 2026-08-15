@@ -191,6 +191,14 @@ pub trait AuthBackend: Send + Sync + std::fmt::Debug {
             "auth-error"
         }
     }
+
+    /// Where a user lands after signing out (`IAuthenticationBackend.getLogoutSuccessURL`).
+    ///
+    /// The default is the login page; `custom-header` shows the logout page instead (a user of a reverse
+    /// proxy cannot log in again here) and `openid` uses `proxy.openid.logout-url` when it is set.
+    fn logout_success_url(&self) -> String {
+        "/login".to_string()
+    }
 }
 
 /// Why the authentication backend could not be created.

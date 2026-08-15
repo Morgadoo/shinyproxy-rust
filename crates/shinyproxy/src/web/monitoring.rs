@@ -30,7 +30,7 @@ use std::sync::Arc;
 
 use axum::extract::{Request, State};
 use axum::http::StatusCode;
-use axum::response::{IntoResponse, Redirect, Response};
+use axum::response::{IntoResponse, Response};
 use containerproxy::dataplane::http::ForwardOptions;
 use containerproxy::dataplane::ws::{proxy_upgrade, TunnelObserver};
 
@@ -68,7 +68,7 @@ pub async fn grafana(
 
     // Grafana needs to be served from a path that ends with a slash
     if path_within_application == "/grafana" {
-        return Redirect::to(&format!("{context}grafana/")).into_response();
+        return containerproxy::web::security::found(&format!("{context}grafana/"));
     }
     let Some(rest) = path_within_application.strip_prefix("/grafana/") else {
         return (StatusCode::FORBIDDEN, "Forbidden\n").into_response();

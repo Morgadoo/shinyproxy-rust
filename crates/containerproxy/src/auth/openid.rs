@@ -407,6 +407,14 @@ impl AuthBackend for OpenIdAuthenticationBackend {
         // the login page of the Java implementation redirects to the provider
         "login"
     }
+
+    fn logout_success_url(&self) -> String {
+        // the provider ends the session of the user when it has a logout URL
+        match self.logout_url.clone().filter(|url| !url.trim().is_empty()) {
+            Some(url) => url,
+            None => "/login".to_string(),
+        }
+    }
 }
 
 /// What the browser has to be sent to, and what the session has to remember.

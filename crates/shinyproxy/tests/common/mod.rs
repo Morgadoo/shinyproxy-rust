@@ -182,7 +182,7 @@ impl TestInstance {
             .send()
             .await
             .expect("login request");
-        assert_eq!(response.status(), 303, "login must redirect");
+        assert_eq!(response.status(), 302, "login must redirect");
         let location = response
             .headers()
             .get("location")

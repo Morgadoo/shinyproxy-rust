@@ -32,7 +32,7 @@ use std::sync::Arc;
 
 use axum::extract::{Query, State};
 use axum::http::HeaderMap;
-use axum::response::{IntoResponse, Redirect, Response};
+use axum::response::{IntoResponse, Response};
 use containerproxy::auth::openid::{OpenIdAuthenticationBackend, CALLBACK_PATH};
 use containerproxy::web::security::absolute_url;
 use containerproxy::web::session::{OidcRequest, OidcTokens, SessionData};
@@ -65,7 +65,7 @@ pub async fn start_authorization(
     });
     data.store(&session).await;
 
-    Redirect::to(&request.url).into_response()
+    containerproxy::web::security::found(&request.url)
 }
 
 /// `GET /login/oauth2/code/shinyproxy` — the provider sends the user back here.
@@ -201,12 +201,11 @@ pub async fn callback(
     });
     data.store(&session).await;
 
-    Redirect::to(&format!(
+    containerproxy::web::security::found(&format!(
         "{}auth-success?continue={}",
         state.context_path_with_slash(),
         super::router::urlencode(&target)
     ))
-    .into_response()
 }
 
 /// The OpenID Connect backend, when it is the configured one.
@@ -216,7 +215,7 @@ fn openid_backend(state: &AppState) -> Option<&OpenIdAuthenticationBackend> {
 
 /// The redirect to the error page, as the Java failure handler does.
 fn auth_error(state: &AppState) -> Response {
-    Redirect::to(&format!("{}auth-error", state.context_path_with_slash())).into_response()
+    containerproxy::web::security::found(&format!("{}auth-error", state.context_path_with_slash()))
 }
 
 /// Refreshes the access token of a session when it is about to expire (`OpenIdReAuthorizeFilter`).

@@ -27,12 +27,12 @@ use std::sync::Arc;
 use axum::extract::{Query, Request, State};
 use axum::http::{header, HeaderMap, StatusCode, Uri};
 use axum::middleware::Next;
-use axum::response::{Html, IntoResponse, Redirect, Response};
+use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{any, get, post};
 use axum::{Form, Router};
 use containerproxy::auth::{AuthError, AuthenticatedUser, LoginForm};
 use containerproxy::spec::SpecProvider;
-use containerproxy::web::security::{is_admin_path, is_public_path, no_cache_headers};
+use containerproxy::web::security::{found, is_admin_path, is_public_path, no_cache_headers};
 use containerproxy::web::session::SessionData;
 use containerproxy::web::{assets, session};
 use minijinja::Value as TemplateValue;
@@ -229,7 +229,7 @@ async fn app_recovery_filter(
 
 /// Redirects `/{context-path}` to `/{context-path}/`.
 async fn redirect_to_index(State(state): State<Arc<AppState>>) -> Response {
-    Redirect::to(&state.context_path_with_slash()).into_response()
+    found(&state.context_path_with_slash())
 }
 
 /// The current user of a request, resolved from the session.
@@ -307,7 +307,7 @@ async fn authorize(
         data.user = None;
         data.store(&session).await;
         let _ = session.flush().await;
-        return Redirect::to(&format!(
+        return found(&format!(
             "{}login?error=expired",
             state.context_path_with_slash()
         ))
@@ -326,12 +326,16 @@ async fn authorize(
 
     if !is_public_path(&path, &state.identifiers.instance_id) {
         if state.auth.has_authorization() && user.is_none() {
-            return if wants_json(request.headers()) {
+            // only the API paths answer with the document; every other path redirects to the login page,
+            // whatever the request asked for (verified against the Java implementation)
+            return if needs_authentication_answer(&path) {
+                // `AuthenticationRequiredFilter`: the API paths answer 410 with this exact document, which
+                // the browser code of the app page recognises to reload the page
                 (
-                    StatusCode::UNAUTHORIZED,
+                    StatusCode::GONE,
                     axum::Json(serde_json::json!({
                         "status": "fail",
-                        "message": "shinyproxy_authentication_required"
+                        "data": "shinyproxy_authentication_required"
                     })),
                 )
                     .into_response()
@@ -343,7 +347,7 @@ async fn authorize(
                     data.auth_success_url = Some(request.uri().to_string());
                 }
                 data.store(&session).await;
-                Redirect::to(&format!(
+                found(&format!(
                     "{}{}",
                     state.context_path_with_slash(),
                     state.auth.login_redirect()
@@ -352,7 +356,12 @@ async fn authorize(
             };
         }
         if is_admin_path(&path) && !state.is_admin(user.as_ref()) {
-            return (StatusCode::FORBIDDEN, "Forbidden\n").into_response();
+            // Spring's access denied handler answers with the API document, whatever the request asked for
+            return (
+                StatusCode::FORBIDDEN,
+                axum::Json(serde_json::json!({"status": "fail", "data": "forbidden"})),
+            )
+                .into_response();
         }
     }
 
@@ -361,7 +370,33 @@ async fn authorize(
     for (name, value) in state.security_headers.headers() {
         headers.insert(name.clone(), value.clone());
     }
+    // Spring Security adds the cache headers to every answer of the server itself; the answers of an app
+    // keep the headers the app chose (`/app_proxy` and `/api/route` set them per the cache headers mode)
+    if !is_proxied_path(&path) {
+        for (name, value) in no_cache_headers() {
+            headers.entry(name).or_insert(value);
+        }
+    }
     response
+}
+
+/// Whether a path carries the answer of an app instead of a page of ShinyProxy.
+fn is_proxied_path(path: &str) -> bool {
+    path.starts_with("/app_proxy/")
+        || path.starts_with("/api/route/")
+        || path.starts_with("/app_direct/")
+        || path.starts_with("/app_direct_i/")
+        || path.starts_with("/grafana/")
+}
+
+/// Whether an unauthenticated request to this path is answered with the API document instead of a redirect
+/// to the login page (`AuthenticationRequiredFilter.REQUEST_MATCHER`).
+fn needs_authentication_answer(path: &str) -> bool {
+    path.starts_with("/app_proxy/")
+        || path.starts_with("/heartbeat/")
+        || path.starts_with("/api/")
+        || path == "/admin/data"
+        || path == "/issue"
 }
 
 /// Whether the access token is refreshed for this path (`OpenIdReAuthorizeFilter.REQUEST_MATCHER`).
@@ -443,13 +478,13 @@ async fn index(
         "/" => {}
         "FirstApp" => {
             if let Some(first) = accessible.first() {
-                return Redirect::to(&format!("{}app/{first}", state.context_path_with_slash()))
+                return found(&format!("{}app/{first}", state.context_path_with_slash()))
                     .into_response();
             }
         }
         "SingleApp" => {
             if accessible.len() == 1 {
-                return Redirect::to(&format!(
+                return found(&format!(
                     "{}app/{}",
                     state.context_path_with_slash(),
                     accessible[0]
@@ -463,7 +498,7 @@ async fn index(
                 state.context_path_with_slash(),
                 other.trim_start_matches('/')
             );
-            return Redirect::to(&target).into_response();
+            return found(&target);
         }
     }
 
@@ -480,7 +515,7 @@ async fn login_page(
 ) -> Response {
     if state.auth.name() == containerproxy::auth::openid::NAME {
         // the Java login page redirects to the provider
-        return Redirect::to(&format!(
+        return found(&format!(
             "{}{}",
             state.context_path(),
             containerproxy::auth::openid::AUTHORIZATION_PATH
@@ -488,7 +523,7 @@ async fn login_page(
         .into_response();
     }
     if !state.auth.uses_login_form() {
-        return Redirect::to(&state.context_path_with_slash()).into_response();
+        return found(&state.context_path_with_slash());
     }
 
     let mut data = SessionData::load(&session).await;
@@ -542,7 +577,7 @@ async fn login_submit(
     // CSRF check, with the same redirect as the Java implementation when the token is missing/expired
     let token = form.get("_csrf").map(String::as_str).unwrap_or_default();
     if !data.csrf_token_matches(token) {
-        return Redirect::to(&format!("{context_path}login?error=expired")).into_response();
+        return found(&format!("{context_path}login?error=expired"));
     }
 
     let credentials = LoginForm {
@@ -570,13 +605,13 @@ async fn login_submit(
             data.auth_success_url = None;
             data.user_initiated_logout = false;
             data.store(&session).await;
-            Redirect::to(&format!(
+            found(&format!(
                 "{context_path}auth-success?continue={}",
                 urlencode(&target)
             ))
             .into_response()
         }
-        Err(AuthError::NoFormLogin) => Redirect::to(&context_path).into_response(),
+        Err(AuthError::NoFormLogin) => found(&context_path),
         Err(error) => {
             tracing::info!(
                 "Authentication failure [user: {}] [error: {error}]",
@@ -588,7 +623,7 @@ async fn login_submit(
                 .publish(containerproxy::events::Event::AuthenticationFailed {
                     user_id: credentials.username.clone(),
                 });
-            Redirect::to(&format!("{context_path}login?error=true")).into_response()
+            found(&format!("{context_path}login?error=true"))
         }
     }
 }
@@ -626,11 +661,20 @@ async fn logout(State(state): State<Arc<AppState>>, session: Session) -> Respons
     state.sessions.forget(&session::session_id(&session));
     data.store(&session).await;
     let _ = session.flush().await;
-    Redirect::to(&format!(
-        "{}logout-success",
-        state.context_path_with_slash()
-    ))
-    .into_response()
+
+    // where a user lands after signing out depends on the authentication backend (`/login` by default,
+    // `/logout-success` for header based authentication and the provider for OpenID Connect)
+    let target = state.auth.logout_success_url();
+    let target = if target.starts_with("http://") || target.starts_with("https://") {
+        target
+    } else {
+        format!(
+            "{}{}",
+            state.context_path_with_slash(),
+            target.trim_start_matches('/')
+        )
+    };
+    found(&target)
 }
 
 /// The page shown after a successful authentication, which redirects to the requested page.

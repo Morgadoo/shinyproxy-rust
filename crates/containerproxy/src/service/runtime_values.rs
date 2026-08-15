@@ -46,11 +46,40 @@ use crate::service::identifier::Identifiers;
 use crate::spec::expression::UserContext;
 
 /// The port mappings of a container, as stored in the `SHINYPROXY_PORT_MAPPINGS` runtime value.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+///
+/// The Java class carries a `@JsonValue` list, so the value is a bare JSON array (not an object with a
+/// `portMappings` field). Containers created by either implementation are therefore readable by both, which
+/// app recovery depends on.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PortMappings {
     /// One entry per configured port mapping.
     pub port_mappings: Vec<PortMappingEntry>,
+}
+
+impl Serialize for PortMappings {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.port_mappings.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for PortMappings {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // a bare array is what both implementations write; the object form is accepted as well, because
+        // earlier builds of this implementation wrote it
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Either {
+            List(Vec<PortMappingEntry>),
+            Object {
+                #[serde(rename = "portMappings", default)]
+                port_mappings: Vec<PortMappingEntry>,
+            },
+        }
+        Ok(match Either::deserialize(deserializer)? {
+            Either::List(port_mappings) => PortMappings { port_mappings },
+            Either::Object { port_mappings } => PortMappings { port_mappings },
+        })
+    }
 }
 
 /// One port mapping of a container.
@@ -459,21 +488,6 @@ mod tests {
     }
 
     #[test]
-    fn port_mappings_serialise_like_java() {
-        let mappings = PortMappings {
-            port_mappings: vec![PortMappingEntry {
-                name: "default".into(),
-                port: 3838,
-                target_path: String::new(),
-            }],
-        };
-        assert_eq!(
-            serde_json::to_value(&mappings).unwrap(),
-            serde_json::json!({"portMappings": [{"name": "default", "port": 3838, "targetPath": ""}]})
-        );
-    }
-
-    #[test]
     fn parses_cache_headers_modes() {
         assert_eq!(
             parse_cache_headers_mode("EnforceNoCache"),
@@ -484,5 +498,38 @@ mod tests {
             Some(CacheHeadersMode::Passthrough)
         );
         assert_eq!(parse_cache_headers_mode("nonsense"), None);
+    }
+}
+
+#[cfg(test)]
+mod port_mapping_tests {
+    use super::*;
+
+    #[test]
+    fn port_mappings_are_a_bare_json_array_like_java() {
+        let mappings = PortMappings {
+            port_mappings: vec![PortMappingEntry {
+                name: "default".to_string(),
+                port: 3838,
+                target_path: String::new(),
+            }],
+        };
+        assert_eq!(
+            serde_json::to_string(&mappings).expect("json"),
+            r#"[{"name":"default","port":3838,"targetPath":""}]"#
+        );
+
+        // and both shapes are read back
+        let from_array: PortMappings =
+            serde_json::from_str(r#"[{"name":"default","port":3838,"targetPath":"/x"}]"#)
+                .expect("array");
+        assert_eq!(from_array.port_mappings.len(), 1);
+        assert_eq!(from_array.port_mappings[0].target_path, "/x");
+
+        let from_object: PortMappings = serde_json::from_str(
+            r#"{"portMappings":[{"name":"default","port":3838,"targetPath":""}]}"#,
+        )
+        .expect("object");
+        assert_eq!(from_object.port_mappings.len(), 1);
     }
 }

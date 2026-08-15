@@ -32,7 +32,7 @@ use std::time::Duration;
 use axum::body::Body;
 use axum::extract::{Path, Query, Request, State};
 use axum::http::{header, HeaderMap, Method, StatusCode};
-use axum::response::{IntoResponse, Redirect, Response};
+use axum::response::{IntoResponse, Response};
 use axum::Json;
 use containerproxy::auth::AuthenticatedUser;
 use containerproxy::dataplane::cache_headers;
@@ -118,7 +118,7 @@ pub async fn app_page(
         .external_url
         .filter(|url| !url.trim().is_empty())
     {
-        return Redirect::to(&url).into_response();
+        return containerproxy::web::security::found(&url);
     }
 
     // a sub path that names a port mapping must end with a slash
@@ -340,7 +340,7 @@ fn redirect_for_mapping(
         target.push('?');
         target.push_str(query);
     }
-    Some(Redirect::to(&target).into_response())
+    Some(containerproxy::web::security::found(&target))
 }
 
 /// `POST /app_i/{specId}/{instance}` — starts an app.
@@ -705,7 +705,7 @@ pub async fn app_direct(
             target.push('?');
             target.push_str(query);
         }
-        return Redirect::to(&target).into_response();
+        return containerproxy::web::security::found(&target);
     };
 
     let Some(user) = user else {
@@ -1076,7 +1076,7 @@ fn api_fail(message: &str) -> Response {
 fn app_stopped_api_response() -> Response {
     (
         StatusCode::GONE,
-        Json(json!({"status": "fail", "message": "app_stopped_or_non_existent"})),
+        Json(json!({"status": "fail", "data": "app_stopped_or_non_existent"})),
     )
         .into_response()
 }

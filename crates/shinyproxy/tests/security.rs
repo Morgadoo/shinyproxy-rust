@@ -81,7 +81,8 @@ enum Visitor {
 enum Expected {
     /// The request is served.
     Ok,
-    /// The visitor is sent to the login page (HTML) or refused with 401 (JSON).
+    /// The visitor is sent to the login page, or — on the API paths — answered with the document of
+    /// `AuthenticationRequiredFilter` (410 and `shinyproxy_authentication_required`).
     Unauthenticated,
     /// The visitor is logged in but may not do this.
     Forbidden,
@@ -90,6 +91,16 @@ enum Expected {
     /// The route answers successfully, but without any information about the app of the other user
     /// (`/api/proxy/{id}/status` reports an unknown app as stopped, exactly as in Java).
     StoppedStub,
+}
+
+/// The paths that answer an unauthenticated request with the API document instead of a redirect
+/// (`AuthenticationRequiredFilter` in the Java implementation).
+fn needs_authentication_answer(path: &str) -> bool {
+    path.starts_with("/app_proxy/")
+        || path.starts_with("/heartbeat/")
+        || path.starts_with("/api/")
+        || path == "/admin/data"
+        || path == "/issue"
 }
 
 /// Starts an app for the owner and returns its proxy id.
@@ -312,7 +323,12 @@ async fn every_route_checks_who_is_asking() {
 
             let matches = match expected {
                 Expected::Ok => status == 200,
-                Expected::Unauthenticated => status == 401 || status == 302 || status == 303,
+                Expected::Unauthenticated => {
+                    (status == 302 && !body.contains("shinyproxy_authentication_required"))
+                        || (status == 410
+                            && body.contains("shinyproxy_authentication_required")
+                            && needs_authentication_answer(&path))
+                }
                 Expected::Forbidden => status == 403,
                 // a JSON failure is reported with 200 and a `fail` status, or with 403/404
                 Expected::Failure => {
@@ -465,7 +481,7 @@ async fn redirects_stay_on_this_server() {
         .send()
         .await
         .expect("index request");
-    assert_eq!(response.status(), 303);
+    assert_eq!(response.status(), 302);
 
     let token = instance.csrf_token(&client).await;
     let response = client

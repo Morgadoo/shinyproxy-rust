@@ -219,7 +219,7 @@ async fn starts_an_app_and_proxies_requests_to_it() {
         .expect("proxy request");
     assert_eq!(response.status(), 410);
     let json: serde_json::Value = response.json().await.expect("json");
-    assert_eq!(json["message"], "app_stopped_or_non_existent");
+    assert_eq!(json["data"], "app_stopped_or_non_existent");
 
     instance.stop();
 }

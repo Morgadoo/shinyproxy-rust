@@ -407,7 +407,7 @@ pub async fn proxy_details(
 fn app_stopped() -> Response {
     (
         StatusCode::GONE,
-        Json(json!({"status": "fail", "message": "app_stopped_or_non_existent"})),
+        Json(json!({"status": "fail", "data": "app_stopped_or_non_existent"})),
     )
         .into_response()
 }

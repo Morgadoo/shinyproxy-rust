@@ -86,6 +86,11 @@ impl AuthBackend for CustomHeaderAuthenticationBackend {
         false
     }
 
+    fn logout_success_url(&self) -> String {
+        // the user cannot log in again through ShinyProxy, so the logout page is shown
+        "/logout-success".to_string()
+    }
+
     fn user_from_headers(&self, headers: &HeaderMap) -> Option<AuthenticatedUser> {
         let username = header_value(headers, &self.username_header)?;
         if username.trim().is_empty() {

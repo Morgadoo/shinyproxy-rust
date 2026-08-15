@@ -130,6 +130,29 @@ impl SecurityHeaders {
     }
 }
 
+/// A `302 Found` redirect, which is what Spring's `sendRedirect` produces.
+///
+/// axum's `Redirect::to` answers `303 See Other`; the Java implementation answers `302` everywhere, and some
+/// clients (and the tests of the browser code) look at the status.
+pub fn found(location: &str) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    match HeaderValue::from_str(location) {
+        Ok(value) => {
+            let mut response = axum::response::Response::new(axum::body::Body::empty());
+            *response.status_mut() = axum::http::StatusCode::FOUND;
+            response
+                .headers_mut()
+                .insert(axum::http::header::LOCATION, value);
+            response
+        }
+        Err(_) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            "Invalid redirect\n",
+        )
+            .into_response(),
+    }
+}
+
 /// Cache headers that the Java implementation adds to its own (non proxied) responses.
 pub fn no_cache_headers() -> [(HeaderName, HeaderValue); 3] {
     [

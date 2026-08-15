@@ -543,7 +543,7 @@ async fn two_servers_share_their_sessions() {
 
     // signing out on one server ends the session on both
     let response = jack.get(first.url("/logout")).send().await.expect("logout");
-    assert_eq!(response.status(), 303);
+    assert_eq!(response.status(), 302);
     let response = jack
         .get(second.url("/api/proxy"))
         .header("Accept", "application/json")

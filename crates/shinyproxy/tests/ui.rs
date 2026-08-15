@@ -65,7 +65,7 @@ async fn unauthenticated_requests_are_redirected_to_the_login_page() {
     let client = instance.client();
 
     let response = client.get(instance.url("/")).send().await.expect("request");
-    assert_eq!(response.status(), 303);
+    assert_eq!(response.status(), 302);
     assert_eq!(
         response
             .headers()
@@ -123,7 +123,7 @@ async fn wrong_credentials_are_rejected() {
         .send()
         .await
         .expect("request");
-    assert_eq!(response.status(), 303);
+    assert_eq!(response.status(), 302);
     assert_eq!(
         response
             .headers()
@@ -134,7 +134,7 @@ async fn wrong_credentials_are_rejected() {
 
     // the index page is still unreachable
     let response = client.get(instance.url("/")).send().await.expect("request");
-    assert_eq!(response.status(), 303);
+    assert_eq!(response.status(), 302);
 
     instance.stop();
 }
@@ -150,7 +150,7 @@ async fn missing_csrf_token_shows_the_expired_message() {
         .send()
         .await
         .expect("request");
-    assert_eq!(response.status(), 303);
+    assert_eq!(response.status(), 302);
     assert_eq!(
         response
             .headers()
@@ -226,7 +226,7 @@ async fn auth_success_page_redirects_with_an_absolute_url() {
         .send()
         .await
         .expect("request");
-    assert_eq!(response.status(), 303);
+    assert_eq!(response.status(), 302);
 
     let response = client
         .post(instance.url("/login"))
@@ -368,13 +368,15 @@ async fn logout_clears_the_session() {
         .send()
         .await
         .expect("request");
-    assert_eq!(response.status(), 303);
+    assert_eq!(response.status(), 302);
+    // the default logout target of the Java implementation is the login page; the logout page is only used
+    // by the backends that cannot log a user in again (`custom-header`)
     assert_eq!(
         response
             .headers()
             .get("location")
             .and_then(|value| value.to_str().ok()),
-        Some("/logout-success")
+        Some("/login")
     );
 
     let body = client
@@ -392,7 +394,7 @@ async fn logout_clears_the_session() {
 
     // the index page requires authentication again
     let response = client.get(instance.url("/")).send().await.expect("request");
-    assert_eq!(response.status(), 303);
+    assert_eq!(response.status(), 302);
 
     instance.stop();
 }
@@ -415,7 +417,7 @@ async fn anonymous_access_without_authentication() {
         .send()
         .await
         .expect("request");
-    assert_eq!(response.status(), 303);
+    assert_eq!(response.status(), 302);
 
     instance.stop();
 }
@@ -606,7 +608,7 @@ server:
         .send()
         .await
         .expect("request");
-    assert_eq!(response.status(), 303);
+    assert_eq!(response.status(), 302);
     assert_eq!(
         response
             .headers()
@@ -668,7 +670,7 @@ proxy:
     let client = instance.client();
 
     let response = client.get(instance.url("/")).send().await.expect("request");
-    assert_eq!(response.status(), 303);
+    assert_eq!(response.status(), 302);
     assert_eq!(
         response
             .headers()
@@ -691,10 +693,11 @@ async fn api_requests_of_unauthenticated_users_get_json() {
         .send()
         .await
         .expect("request");
-    assert_eq!(response.status(), 401);
+    // `AuthenticationRequiredFilter` answers the API paths with 410 and this exact document
+    assert_eq!(response.status(), 410);
     let json: serde_json::Value = response.json().await.expect("json");
     assert_eq!(json["status"], "fail");
-    assert_eq!(json["message"], "shinyproxy_authentication_required");
+    assert_eq!(json["data"], "shinyproxy_authentication_required");
 
     instance.stop();
 }

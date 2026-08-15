@@ -312,7 +312,7 @@ async fn the_whole_login_flow() {
         .send()
         .await
         .expect("request");
-    assert_eq!(response.status(), 303);
+    assert_eq!(response.status(), 302);
     assert_eq!(
         response
             .headers()
@@ -326,7 +326,7 @@ async fn the_whole_login_flow() {
         .send()
         .await
         .expect("request");
-    assert_eq!(response.status(), 303);
+    assert_eq!(response.status(), 302);
     assert_eq!(
         response
             .headers()
@@ -341,7 +341,7 @@ async fn the_whole_login_flow() {
         .send()
         .await
         .expect("request");
-    assert_eq!(response.status(), 303);
+    assert_eq!(response.status(), 302);
     let location = response
         .headers()
         .get("location")
@@ -367,6 +367,7 @@ async fn the_whole_login_flow() {
         .send()
         .await
         .expect("provider request");
+    // the fake provider of this test redirects with a 303
     assert_eq!(response.status(), 303, "the provider redirects back");
 
     let request = provider
@@ -388,7 +389,7 @@ async fn the_whole_login_flow() {
         .send()
         .await
         .expect("callback request");
-    assert_eq!(response.status(), 303);
+    assert_eq!(response.status(), 302);
     let location = response
         .headers()
         .get("location")
@@ -484,7 +485,7 @@ async fn a_wrong_state_is_refused() {
         .send()
         .await
         .expect("callback request");
-    assert_eq!(response.status(), 303);
+    assert_eq!(response.status(), 302);
     assert_eq!(
         response
             .headers()
@@ -594,7 +595,7 @@ async fn pkce_is_used_when_configured() {
         .send()
         .await
         .expect("callback request");
-    assert_eq!(response.status(), 303);
+    assert_eq!(response.status(), 302);
     let body = client
         .get(instance.url("/"))
         .send()
@@ -653,7 +654,11 @@ proxy:
         .send()
         .await
         .expect("request");
-    assert_eq!(response.status(), 401);
+    // an unauthenticated request to the API is answered like the Java `AuthenticationRequiredFilter` does
+    assert_eq!(response.status(), 410);
+    let body: serde_json::Value = response.json().await.expect("json");
+    assert_eq!(body["status"], "fail");
+    assert_eq!(body["data"], "shinyproxy_authentication_required");
 
     // a token of the provider is accepted, and its groups decide what the client sees
     let token = provider.issue_access_token("api-client", "shinyproxy-client", 600);
@@ -678,9 +683,11 @@ proxy:
         .send()
         .await
         .expect("request");
+    // a token that is not accepted leaves the request unauthenticated, which the API answers like any
+    // other unauthenticated API request
     assert_eq!(
         response.status(),
-        401,
+        410,
         "the audience must match the resource id"
     );
 
@@ -694,7 +701,7 @@ proxy:
         .send()
         .await
         .expect("request");
-    assert_eq!(response.status(), 401);
+    assert_eq!(response.status(), 410);
 
     // and a token without the username claim
     let token = provider.issue_token(serde_json::json!({
@@ -709,7 +716,7 @@ proxy:
         .send()
         .await
         .expect("request");
-    assert_eq!(response.status(), 401);
+    assert_eq!(response.status(), 410);
 
     instance.stop();
     provider_task.abort();
@@ -742,7 +749,7 @@ async fn login(instance: &TestInstance, provider: &Provider) -> common::TestClie
         .send()
         .await
         .expect("callback request");
-    assert_eq!(response.status(), 303, "the login must succeed");
+    assert_eq!(response.status(), 302, "the login must succeed");
     client
 }
 
@@ -840,7 +847,7 @@ async fn a_session_ends_when_the_token_cannot_be_refreshed() {
         .refuse_refresh
         .store(true, std::sync::atomic::Ordering::SeqCst);
     let response = client.get(instance.url("/")).send().await.expect("request");
-    assert_eq!(response.status(), 303);
+    assert_eq!(response.status(), 302);
     assert_eq!(
         response
             .headers()
