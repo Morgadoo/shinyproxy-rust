@@ -1,0 +1,22 @@
+proxy:
+  port: 8080
+  authentication: simple
+  store-mode: Redis
+  stop-proxies-on-shutdown: false
+  seat-wait-time: 60000
+  users:
+    - name: jack
+      password: password
+  specs:
+    - id: shared
+      container-image: openanalytics/shinyproxy-demo
+      minimum-seats-available: 2
+      seats-per-container: 4
+      scale-down-delay: 5
+      allow-container-re-use: true
+spring:
+  session:
+    store-type: redis
+  data:
+    redis:
+      host: redis

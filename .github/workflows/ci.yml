@@ -1,0 +1,159 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  lint:
+    name: Lint (fmt, clippy, license headers)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: License headers
+        run: ./scripts/license-header.sh --check
+      - name: Formatting
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Audit
+        run: cargo audit
+
+  test:
+    name: Test (no external services)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: Test
+        run: cargo test --workspace --all-targets
+      - name: The benchmarks keep compiling
+        run: cargo bench --workspace --no-run
+
+  docker:
+    name: Test (Docker backend)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the test image
+        run: ./scripts/build-test-image.sh
+      - name: Test
+        env:
+          SP_TEST_DOCKER: "1"
+        run: cargo test -p shinyproxy --test docker -- --test-threads=1
+
+  kubernetes:
+    name: Test (Kubernetes backend)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the test image
+        run: ./scripts/build-test-image.sh
+      - name: Start a cluster
+        run: ./scripts/start-test-k3s.sh
+      - name: Test
+        env:
+          SP_TEST_K8S: "1"
+          KUBECONFIG: /tmp/k3s/kubeconfig.yaml
+        run: cargo test -p shinyproxy --test kubernetes -- --test-threads=1
+
+  redis:
+    name: Test (high availability)
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: Test
+        env:
+          SP_TEST_REDIS: "1"
+        run: |
+          cargo test -p containerproxy --lib
+          cargo test -p shinyproxy --test redis_store -- --test-threads=1
+
+  ldap:
+    name: Test (LDAP authentication)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: Start a directory
+        run: ./scripts/start-test-ldap.sh
+      - name: Test
+        env:
+          SP_TEST_LDAP: "1"
+        run: cargo test -p shinyproxy --test ldap -- --test-threads=1
+
+  build:
+    name: Release build + demo smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release --workspace
+      - name: Version smoke test
+        run: ./target/release/shinyproxy --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shinyproxy-linux-x86_64
+          path: target/release/shinyproxy
+          if-no-files-found: error
+
+  image:
+    name: Container image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the image
+        run: docker build --build-arg GIT_COMMIT=${{ github.sha }} -t shinyproxy-rust:ci .
+      - name: The image serves the demo configuration
+        run: |
+          set -euo pipefail
+          docker run -d --name shinyproxy-ci -p 8080:8080 \
+              -v /var/run/docker.sock:/var/run/docker.sock \
+              -v "$PWD/examples/application-demo.yml:/opt/shinyproxy/application.yml:ro" \
+              shinyproxy-rust:ci
+          for _ in $(seq 1 30); do
+              if curl -fsS http://127.0.0.1:8080/login > /dev/null; then
+                  break
+              fi
+              sleep 1
+          done
+          curl -fsS http://127.0.0.1:8080/login | grep -q "Shiny Proxy"
+          docker exec shinyproxy-ci /usr/local/bin/shinyproxy --version
+          docker rm -f shinyproxy-ci

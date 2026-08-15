@@ -1,0 +1,84 @@
+{#
+    ShinyProxy
+
+    Copyright (C) 2016-2026 Open Analytics
+
+    ===========================================================================
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the Apache License as published by
+    The Apache Software Foundation, either version 2 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    Apache License for more details.
+
+    You should have received a copy of the Apache License
+    along with this program.  If not, see <http://www.apache.org/licenses/>
+
+    Ported from src/main/resources/templates/fragments/navbar.html (Thymeleaf).
+#}
+{% macro navbar() %}
+{% if showNavbar %}
+<div id="navbar">
+    <nav class="navbar navbar-inverse navbar-fixed-top navbar-height">
+        <div class="container-fluid">
+            <div class="navbar-header">
+                <button type="button" class="navbar-toggle collapsed" data-toggle="collapse" data-target="#navbar-collapse" aria-expanded="false">
+                    <span class="sr-only">Toggle navigation</span>
+                    <span class="icon-bar"></span>
+                    <span class="icon-bar"></span>
+                    <span class="icon-bar"></span>
+                </button>
+                {% if logo %}<img class="navbar-brand" src="{{ logo }}"/>{% endif %}
+                <a class="navbar-brand" href="{{ contextPath }}">{{ title }}</a>
+            </div>
+            <div class="collapse navbar-collapse" id="navbar-collapse">
+                <div class="navbar-form navbar-right navbar-buttons">
+                    {% if page == 'app' and appMaxInstances[appName] != 1 %}
+                    <a class="btn btn-primary btn-sm" role="button" id="switchInstancesModal-btn">Switch instance</a>
+                    {% endif %}
+                    {% if page == 'app' and appMaxInstances[appName] == 1 %}
+                    <a class="btn btn-primary btn-sm app-details-current-btn" role="button">App details</a>
+                    <a class="btn btn-primary btn-sm app-restart-btn" role="button">Restart app</a>
+                    <a class="btn btn-primary btn-sm app-stop-current-btn" role="button">Stop app</a>
+                    {% if pauseSupported %}
+                    <a class="btn btn-primary btn-sm app-pause-current-btn" role="button">Pause app</a>
+                    {% endif %}
+                    {% endif %}
+                    {% if page == 'index' and myAppsMode == 'Modal' %}
+                    <a class="btn btn-primary btn-sm" id="myAppsModal-btn" role="button">My apps</a>
+                    {% endif %}
+                    {% if isSupportEnabled %}
+                    <a class="btn btn-primary btn-sm report-issue-btn" role="button">Report Issue</a>
+                    {% endif %}
+                    {% if isAdmin %}
+                    <a class="btn btn-primary btn-sm" role="button" href="{{ contextPath }}admin">Admin</a>
+                    {% endif %}
+                    {% if isLoggedIn %}
+                    <a class="btn btn-primary btn-sm" role="button" href="{{ logoutUrl }}">Sign Out</a>
+                    {% endif %}
+                </div>
+                {% if isLoggedIn %}
+                <div class="navbar-right">
+                    <div class="navbar-text">
+                        <span class="glyphicon glyphicon-user"></span>
+                        <span>{{ userId }}</span>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </nav>
+    <script>
+        // fix padding of body as soon as navbar is rendered
+        let navbarHeight = $('.navbar-height').height();
+        if (navbarHeight !== undefined) {
+            $('body').css('padding-top', navbarHeight + 'px');
+        }
+    </script>
+</div>
+{% endif %}
+{% endmacro %}

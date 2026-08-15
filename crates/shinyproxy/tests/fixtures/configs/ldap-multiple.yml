@@ -1,0 +1,13 @@
+proxy:
+  port: 8080
+  authentication: ldap
+  ldap:
+    - url: ldap://ldap1.example.com:389/dc=example,dc=com
+      user-dn-pattern: uid={0}
+    - url: ldap://ldap2.example.com:389/dc=other,dc=com
+      user-search-base: ou=people
+      user-search-filter: (uid={0})
+      starttls: simple
+  specs:
+    - id: 01_hello
+      container-image: openanalytics/shinyproxy-demo

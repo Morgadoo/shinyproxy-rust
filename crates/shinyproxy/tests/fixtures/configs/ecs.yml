@@ -1,0 +1,32 @@
+proxy:
+  port: 8080
+  authentication: none
+  container-backend: ecs
+  ecs:
+    name: shinyproxy-cluster
+    region: eu-west-1
+    subnets: [ subnet-123, subnet-456 ]
+    security-groups: [ sg-123 ]
+    enable-cloudwatch: true
+    cloud-watch-group-prefix: /ecs/
+    service-wait-time: 120000
+  specs:
+    - id: 01_hello
+      container-image: openanalytics/shinyproxy-demo
+      container-cpu-limit: 1
+      container-memory-limit: 2g
+      ecs-task-role: arn:aws:iam::123456789012:role/task
+      ecs-execution-role: arn:aws:iam::123456789012:role/execution
+      ecs-cpu-architecture: X86_64
+      ecs-ephemeral-storage-size: 30
+      ecs-enable-execute-command: true
+      ecs-efs-volumes:
+        - name: data
+          file-system-id: fs-123
+          root-directory: /data
+          transit-encryption: true
+          transit-encryption-port: 2049
+      ecs-managed-secrets:
+        - name: API_KEY
+          value-from: arn:aws:ssm:eu-west-1:123456789012:parameter/api-key
+      ecs-bind-volumes: [ "/data" ]

@@ -1,0 +1,82 @@
+[package]
+name = "containerproxy"
+description = "ContainerProxy engine: proxy lifecycle, container backends, authentication and the reverse proxy data plane"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+spel.workspace = true
+
+ammonia.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+aws-config.workspace = true
+aws-sdk-ecs.workspace = true
+aws-sdk-sts.workspace = true
+bollard.workspace = true
+axum.workspace = true
+axum-extra.workspace = true
+bcrypt.workspace = true
+base64.workspace = true
+bytes.workspace = true
+dashmap.workspace = true
+futures.workspace = true
+hex.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+mime_guess.workspace = true
+minijinja.workspace = true
+indexmap.workspace = true
+itertools.workspace = true
+moka.workspace = true
+once_cell.workspace = true
+json-patch.workspace = true
+jsonwebtoken.workspace = true
+k8s-openapi.workspace = true
+kube.workspace = true
+ldap3.workspace = true
+percent-encoding.workspace = true
+sqlx.workspace = true
+rand.workspace = true
+redis.workspace = true
+regex.workspace = true
+reqwest.workspace = true
+rustls.workspace = true
+rust-embed.workspace = true
+sha2.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml_ng.workspace = true
+sha1.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+tower-sessions.workspace = true
+tracing.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+axum = { workspace = true, features = ["ws"] }
+hex.workspace = true
+futures.workspace = true
+insta.workspace = true
+reqwest.workspace = true
+rustls.workspace = true
+testapp = { path = "../testapp" }
+tokio-tungstenite.workspace = true
+rstest.workspace = true
+tempfile.workspace = true
+
+[[bench]]
+name = "engine"
+harness = false

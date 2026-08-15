@@ -1,0 +1,340 @@
+/*
+ * ShinyProxy
+ *
+ * Copyright (C) 2016-2026 Open Analytics
+ *
+ * ===========================================================================
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the Apache License as published by
+ * The Apache Software Foundation, either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * Apache License for more details.
+ *
+ * You should have received a copy of the Apache License
+ * along with this program.  If not, see <http://www.apache.org/licenses/>
+ */
+
+//! Security headers and route classification.
+//!
+//! The headers and their configuration switches mirror the Java `WebSecurityConfig`.
+
+use axum::http::header::{HeaderName, HeaderValue};
+use axum::http::HeaderMap;
+
+use crate::config::Settings;
+
+/// The security headers that are added to every response.
+#[derive(Debug, Clone, Default)]
+pub struct SecurityHeaders {
+    headers: Vec<(HeaderName, HeaderValue)>,
+}
+
+impl SecurityHeaders {
+    /// Builds the headers from the configuration.
+    pub fn from_settings(settings: &Settings) -> Self {
+        let api_security = &settings.proxy.api_security;
+        let mut headers = Vec::new();
+
+        if !api_security
+            .disable_no_sniff_header
+            .map(|value| value.0)
+            .unwrap_or(false)
+        {
+            headers.push((
+                HeaderName::from_static("x-content-type-options"),
+                HeaderValue::from_static("nosniff"),
+            ));
+        }
+        if !api_security
+            .disable_xss_protection_header
+            .map(|value| value.0)
+            .unwrap_or(false)
+        {
+            headers.push((
+                HeaderName::from_static("x-xss-protection"),
+                HeaderValue::from_static("0"),
+            ));
+        }
+        if !api_security
+            .disable_hsts_header
+            .map(|value| value.0)
+            .unwrap_or(false)
+        {
+            headers.push((
+                HeaderName::from_static("strict-transport-security"),
+                HeaderValue::from_static("max-age=31536000 ; includeSubDomains"),
+            ));
+        }
+
+        match settings
+            .server
+            .frame_options()
+            .to_ascii_uppercase()
+            .as_str()
+        {
+            "DISABLE" => {}
+            "DENY" => headers.push((
+                HeaderName::from_static("x-frame-options"),
+                HeaderValue::from_static("DENY"),
+            )),
+            "SAMEORIGIN" => headers.push((
+                HeaderName::from_static("x-frame-options"),
+                HeaderValue::from_static("SAMEORIGIN"),
+            )),
+            other if other.starts_with("ALLOW-FROM") => {
+                if let Ok(value) = HeaderValue::from_str(settings.server.frame_options()) {
+                    headers.push((HeaderName::from_static("x-frame-options"), value));
+                }
+            }
+            _ => {}
+        }
+
+        // custom headers may override the ones above (Java: OverridingHeaderWriter)
+        for custom in &api_security.custom_headers {
+            let (Some(name), Some(value)) = (&custom.name, &custom.value) else {
+                tracing::warn!("Missing header value for header {:?}", custom.name);
+                continue;
+            };
+            match (
+                HeaderName::try_from(name.as_str()),
+                HeaderValue::from_str(value),
+            ) {
+                (Ok(name), Ok(value)) => {
+                    headers.retain(|(existing, _)| existing != name);
+                    headers.push((name, value));
+                }
+                _ => tracing::warn!("Ignoring invalid custom header {name}"),
+            }
+        }
+
+        SecurityHeaders { headers }
+    }
+
+    /// The headers as a map.
+    pub fn header_map(&self) -> HeaderMap {
+        let mut map = HeaderMap::new();
+        for (name, value) in &self.headers {
+            map.insert(name.clone(), value.clone());
+        }
+        map
+    }
+
+    /// The configured headers.
+    pub fn headers(&self) -> &[(HeaderName, HeaderValue)] {
+        &self.headers
+    }
+}
+
+/// A `302 Found` redirect, which is what Spring's `sendRedirect` produces.
+///
+/// axum's `Redirect::to` answers `303 See Other`; the Java implementation answers `302` everywhere, and some
+/// clients (and the tests of the browser code) look at the status.
+pub fn found(location: &str) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    match HeaderValue::from_str(location) {
+        Ok(value) => {
+            let mut response = axum::response::Response::new(axum::body::Body::empty());
+            *response.status_mut() = axum::http::StatusCode::FOUND;
+            response
+                .headers_mut()
+                .insert(axum::http::header::LOCATION, value);
+            response
+        }
+        Err(_) => (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            "Invalid redirect\n",
+        )
+            .into_response(),
+    }
+}
+
+/// Cache headers that the Java implementation adds to its own (non proxied) responses.
+pub fn no_cache_headers() -> [(HeaderName, HeaderValue); 3] {
+    [
+        (
+            HeaderName::from_static("cache-control"),
+            HeaderValue::from_static("no-cache, no-store, max-age=0, must-revalidate"),
+        ),
+        (
+            HeaderName::from_static("pragma"),
+            HeaderValue::from_static("no-cache"),
+        ),
+        (
+            HeaderName::from_static("expires"),
+            HeaderValue::from_static("0"),
+        ),
+    ]
+}
+
+/// Builds an absolute URL for a path of this server, like Spring's
+/// `ServletUriComponentsBuilder.fromCurrentContextPath()`.
+///
+/// The scheme and host come from the `X-Forwarded-*` headers when a reverse proxy set them (which is what
+/// `server.forward-headers-strategy: native` does in the Java implementation), else from the `Host`
+/// header. The pages that redirect with JavaScript need an absolute URL, because `new URL(...)` does not
+/// accept a path.
+pub fn absolute_url(headers: &HeaderMap, path: &str) -> String {
+    let header = |name: &str| {
+        headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            // a chain of proxies produces a comma separated list; the first entry is the client side
+            .map(|value| value.split(',').next().unwrap_or(value).trim().to_string())
+            .filter(|value| !value.is_empty())
+    };
+
+    let scheme = header("x-forwarded-proto").unwrap_or_else(|| "http".to_string());
+    let host = header("x-forwarded-host")
+        .or_else(|| header("host"))
+        .unwrap_or_else(|| "localhost".to_string());
+    let port = header("x-forwarded-port").filter(|port| {
+        // the default ports are not part of the URL
+        !((port == "80" && scheme == "http") || (port == "443" && scheme == "https"))
+    });
+
+    let host = match port {
+        Some(port) if !host.contains(':') => format!("{host}:{port}"),
+        _ => host,
+    };
+    format!("{scheme}://{host}{path}")
+}
+
+/// Whether a path is public (no authentication needed).
+pub fn is_public_path(path: &str, instance_id: &str) -> bool {
+    const PUBLIC: &[&str] = &[
+        "/login",
+        "/auth-error",
+        "/error",
+        "/app-access-denied",
+        "/logout-success",
+        "/favicon.ico",
+        "/saml/metadata",
+    ];
+    const PUBLIC_PREFIXES: &[&str] = &[
+        "/signin/",
+        "/actuator/",
+        "/v3/api-docs",
+        "/swagger-ui/",
+        // the endpoints of the OpenID Connect flow (Spring permits `/oauth2/**` and `/login/oauth2/**`)
+        "/oauth2/",
+        "/login/oauth2/",
+    ];
+
+    if PUBLIC.contains(&path) {
+        return true;
+    }
+    if PUBLIC_PREFIXES
+        .iter()
+        .any(|prefix| path.starts_with(prefix))
+    {
+        return true;
+    }
+    // the assets are public, both with and without the instance id prefix; `/favicon` is *not* (the Java
+    // implementation sends an unauthenticated request to the login page, verified with the parity fixture).
+    // This runs for every request, so it must not allocate.
+    let unprefixed = path
+        .strip_prefix('/')
+        .and_then(|rest| rest.strip_prefix(instance_id))
+        .filter(|rest| rest.starts_with('/'))
+        .unwrap_or(path);
+    super::assets::ASSET_PREFIXES.iter().any(|prefix| {
+        unprefixed
+            .strip_prefix('/')
+            .and_then(|rest| rest.strip_prefix(prefix))
+            .is_some_and(|rest| rest.starts_with('/'))
+    })
+}
+
+/// Whether a path requires administrator rights.
+pub fn is_admin_path(path: &str) -> bool {
+    path == "/admin" || path.starts_with("/admin/") || path.starts_with("/grafana/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn settings(yaml: &str) -> Settings {
+        serde_yaml_ng::from_str(yaml).expect("settings")
+    }
+
+    #[test]
+    fn adds_the_default_security_headers() {
+        let headers = SecurityHeaders::from_settings(&Settings::default()).header_map();
+        assert_eq!(headers.get("x-content-type-options").unwrap(), "nosniff");
+        assert!(headers.contains_key("x-xss-protection"));
+        assert!(headers.contains_key("strict-transport-security"));
+        // frame options default to `disable`, so no header
+        assert!(!headers.contains_key("x-frame-options"));
+    }
+
+    #[test]
+    fn honours_the_disable_switches_and_frame_options() {
+        let headers = SecurityHeaders::from_settings(&settings(
+            "proxy:\n  api-security:\n    disable-no-sniff-header: true\n    disable-hsts-header: true\n    disable-xss-protection-header: true\nserver:\n  frame-options: sameorigin\n",
+        ))
+        .header_map();
+        assert!(!headers.contains_key("x-content-type-options"));
+        assert!(!headers.contains_key("strict-transport-security"));
+        assert!(!headers.contains_key("x-xss-protection"));
+        assert_eq!(headers.get("x-frame-options").unwrap(), "SAMEORIGIN");
+    }
+
+    #[test]
+    fn custom_headers_override_defaults() {
+        let headers = SecurityHeaders::from_settings(&settings(
+            "proxy:\n  api-security:\n    custom-headers:\n      - name: X-Content-Type-Options\n        value: custom\n      - name: X-Custom\n        value: value\n",
+        ))
+        .header_map();
+        assert_eq!(headers.get("x-content-type-options").unwrap(), "custom");
+        assert_eq!(headers.get("x-custom").unwrap(), "value");
+    }
+
+    #[test]
+    fn classifies_public_and_admin_paths() {
+        let instance = "abc123";
+        for path in [
+            "/login",
+            "/error",
+            "/auth-error",
+            "/logout-success",
+            "/app-access-denied",
+            "/favicon.ico",
+            "/css/default.css",
+            "/js/shiny.common.js",
+            "/webjars/jquery/3.7.1/jquery.min.js",
+            "/abc123/js/shiny.common.js",
+            "/actuator/health",
+            "/v3/api-docs",
+            "/swagger-ui/index.html",
+            "/oauth2/authorization/shinyproxy",
+            "/login/oauth2/code/shinyproxy",
+        ] {
+            assert!(is_public_path(path, instance), "{path} must be public");
+        }
+        for path in [
+            "/",
+            "/app/01_hello",
+            "/api/proxy",
+            "/admin",
+            "/heartbeat/x",
+            // the favicon of an app is not public: the Java implementation sends an unauthenticated
+            // request to the login page (verified with the parity fixture)
+            "/favicon",
+            "/abc123/favicon",
+        ] {
+            assert!(!is_public_path(path, instance), "{path} must not be public");
+        }
+
+        assert!(is_admin_path("/admin"));
+        assert!(is_admin_path("/admin/data"));
+        assert!(is_admin_path("/grafana/dashboard"));
+        assert!(!is_admin_path("/administration"));
+        assert!(!is_admin_path("/"));
+    }
+}

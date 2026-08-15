@@ -1,0 +1,107 @@
+# Apps as Kubernetes pods
+#
+# ShinyProxy creates one pod per app (`sp-pod-{proxyId}-{index}`). When it runs inside the cluster
+# (`internal-networking: true`) the pods are reached directly through the headless service
+# `sp-headless-service`; when it runs outside the cluster a `NodePort` service is created per app and the
+# pods are reached on the address of their node.
+#
+# The API server is found the same way `kubectl` finds it: the service account of the pod inside the cluster,
+# or the kubeconfig of the user (`KUBECONFIG`) outside it. `proxy.kubernetes.url` and
+# `proxy.kubernetes.cert-path` override that.
+#
+# The behaviour is covered by `crates/shinyproxy/tests/kubernetes.rs` (`SP_TEST_K8S=1`, see
+# `scripts/start-test-k3s.sh`).
+
+proxy:
+  title: ShinyProxy on Kubernetes
+  port: 8080
+  authentication: simple
+  admin-groups: admins
+
+  container-backend: kubernetes
+  # a pod may take a while to be scheduled and to pull its image
+  container-wait-timeout: 120000
+
+  kubernetes:
+    namespace: shinyproxy
+    # namespaces that are scanned for apps that are still running after a restart
+    app-namespaces: [ shinyproxy ]
+    # set to true when ShinyProxy itself runs in the cluster
+    internal-networking: true
+    cluster-domain: cluster.local
+    image-pull-policy: IfNotPresent
+    # image-pull-secrets: [ registry-credentials ]
+    # node-selector: "kubernetes.io/os=linux"
+    pod-wait-time: 120000
+    # print every pod (and additional manifest) that is created, to debug the patches below
+    debug-patches: false
+
+  heartbeat-rate: 10000
+  heartbeat-timeout: 60000
+
+  users:
+    - name: jack
+      password: password
+      groups: scientists
+    - name: root
+      password: rootpw
+      groups: admins
+
+  specs:
+    - id: 01_hello
+      display-name: Hello Application
+      container-image: openanalytics/shinyproxy-demo
+      container-cmd: [ "R", "-e", "shinyproxy::run_01_hello()" ]
+      port: 3838
+      access-groups: [ scientists, admins ]
+      container-cpu-request: 500m
+      container-memory-request: 1Gi
+      container-cpu-limit: "1"
+      container-memory-limit: 2Gi
+
+      # JSON patches (RFC 6902, written in YAML) that are applied to the pod before it is created
+      kubernetes-pod-patches: |
+        - op: add
+          path: /spec/serviceAccountName
+          value: shinyproxy-apps
+        - op: add
+          path: /spec/containers/0/env/-
+          value:
+            name: MY_VARIABLE
+            value: my-value
+
+      # patches that only apply to the users that pass their access control
+      kubernetes-authorized-pod-patches:
+        - access-control:
+            groups: [ admins ]
+          patches: |
+            - op: add
+              path: /spec/containers/0/resources/limits/nvidia.com~1gpu
+              value: "1"
+
+      # resources that are created next to the pod and removed with the app
+      kubernetes-additional-manifests:
+        - |
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: sp-app-secret
+          type: Opaque
+          stringData:
+            token: example
+
+      # resources that survive the app; the annotation decides what happens when they already exist
+      # (CreateOnce, Patch, Delete or Replace)
+      kubernetes-additional-persistent-manifests:
+        - |
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: "home-dir-pvc-#{proxy.userId}"
+            annotations:
+              openanalytics.eu/sp-additional-manifest-policy: CreateOnce
+          spec:
+            accessModes: [ ReadWriteOnce ]
+            resources:
+              requests:
+                storage: 5Gi

@@ -1,0 +1,38 @@
+---
+bools:
+  no_val: false
+  yes_val: true
+deep:
+  a:
+    b:
+      c: 1
+empties:
+  list: []
+  map: {}
+list_of_lists:
+- - "a"
+  - "b"
+- - "c"
+nested:
+  kubernetes.io/hostname: "node-1"
+  "on": "value"
+  "y": "value2"
+nulls:
+  explicit: null
+  tilde: null
+numbers:
+  big: 123456789012345
+  exp: 1000.0
+  float: 1.5
+  int: 42
+  negative: -1
+strings:
+  backslash: "a\\b"
+  colon: "a: b"
+  empty: ""
+  numeric_string: "8080"
+  plain: "hello"
+  tab: "a\tb"
+  unicode: "héllo → ✓"
+  with_newline: "line1\nline2"
+  with_quote: "he said \"hi\""

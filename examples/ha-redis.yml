@@ -1,0 +1,74 @@
+# High availability with Redis
+#
+# Two or more ShinyProxy servers of one realm share their state through Redis, so any server can serve any
+# request: an app that was started through server A is reachable (and stoppable) through server B, the
+# sessions are shared, and the host ports of the apps are handed out from one pool. One of the servers is
+# elected leader and does the work that must happen once in the realm (releasing inactive and expired apps,
+# collecting container logs, scaling the pre-initialized containers).
+#
+# Run it with two servers behind any TCP load balancer without sticky sessions, for example:
+#
+#   redis-server --port 6379 &
+#   PROXY_PORT=8080 ./shinyproxy --spring.config.location=examples/ha-redis.yml &
+#   PROXY_PORT=8081 ./shinyproxy --spring.config.location=examples/ha-redis.yml &
+#   # any TCP balancer, e.g.:  socat TCP-LISTEN:8000,fork,reuseaddr TCP:127.0.0.1:8080
+#
+# The behaviour is covered by `crates/shinyproxy/tests/redis_store.rs` (`SP_TEST_REDIS=1`).
+
+proxy:
+  title: ShinyProxy (high availability)
+  port: 8080
+  authentication: simple
+  admin-groups: admins
+
+  # every server of the realm uses the same realm id: it is the prefix of all keys in Redis
+  realm-id: production
+  # the apps, their heartbeats and the host ports live in Redis instead of in the memory of one server
+  store-mode: Redis
+  # bump this number when the configuration changes: servers with an older version step out of the leader
+  # election, so a rolling update moves the work of the realm to the new servers
+  version: 1
+
+  heartbeat-rate: 10000
+  heartbeat-timeout: 60000
+
+  users:
+    - name: jack
+      password: password
+      groups: scientists
+    - name: root
+      password: rootpw
+      groups: admins
+
+  docker:
+    # the servers hand out ports from this range without ever colliding (the allocation goes through Redis)
+    port-range-start: 20000
+    port-range-max: 20100
+
+  specs:
+    - id: 01_hello
+      display-name: Hello Application
+      description: Application which demonstrates the basics of a Shiny app
+      container-image: openanalytics/shinyproxy-demo
+      container-cmd: [ "R", "-e", "shinyproxy::run_01_hello()" ]
+      access-groups: [ scientists, admins ]
+
+spring:
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      # password: secret
+      # sentinel:
+      #   master: shinyproxy
+      #   nodes: [ sentinel-1:26379, sentinel-2:26379 ]
+  session:
+    # the sessions of the realm are shared as well, so a user does not have to log in again when the load
+    # balancer sends them to another server (the cookie is named SESSION instead of JSESSIONID)
+    store-type: redis
+    timeout: 30m
+
+# the health of a server (used by the load balancer) and whether it may be replaced
+management:
+  server:
+    port: 9090

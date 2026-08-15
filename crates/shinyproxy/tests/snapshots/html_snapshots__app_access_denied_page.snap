@@ -1,0 +1,31 @@
+---
+source: crates/shinyproxy/tests/html_snapshots.rs
+expression: "page_with_status(&instance, &client, \"/app-access-denied\", 403).await"
+---
+
+<!DOCTYPE html>
+<html>
+    <head lang="en">
+        <title>My ShinyProxy</title>
+        <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1"/>
+        <link rel="icon" href="/{instance-id}/favicon">
+        <link media="screen" rel="stylesheet" href="/css/bootstrap.css"/>
+        <link media="screen" rel="stylesheet" href="/css/login.css"/>
+        <script src="/webjars/jquery/3.7.1/jquery.min.js"></script>
+        <script src="/js/bootstrap.js"></script>
+    </head>
+    <body>
+        <div class="container">
+            <h2>You do not have access to this application.</h2>
+            <p>Your account does not have the required roles or groups required for accessing this application.</p>
+            <p>Please contact your administrator if you believe this is a mistake.</p>
+        </div>
+        <style>
+            h2 {
+                margin-bottom: 20px;
+                margin-top: 20px;
+            }
+        </style>
+    </body>
+</html>

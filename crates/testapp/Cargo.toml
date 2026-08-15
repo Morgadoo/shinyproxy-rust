@@ -1,0 +1,39 @@
+[package]
+name = "testapp"
+description = "Test fixture application used by the ShinyProxy integration tests (HTTP, WebSocket, env dump)"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+name = "testapp"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sp-testapp"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+axum = { workspace = true, features = ["ws"] }
+bytes.workspace = true
+futures.workspace = true
+http.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+# the load generator (`--load-test`) drives the server through HTTP and WebSocket connections
+reqwest.workspace = true
+tokio-tungstenite.workspace = true
+
+[dev-dependencies]
+reqwest.workspace = true
+tokio-tungstenite.workspace = true
+futures.workspace = true

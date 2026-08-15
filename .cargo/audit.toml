@@ -1,0 +1,17 @@
+# Advisories that `cargo audit` reports and that this project accepts, with the reason.
+#
+# Everything else must be fixed; `cargo audit` runs in CI (see .github/workflows/ci.yml).
+
+[advisories]
+ignore = [
+    # RSA (via sqlx-mysql): the Marvin attack is a timing sidechannel in RSA decryption. There is no fixed
+    # release of the `rsa` crate. It is only reachable through the RSA based authentication handshake of
+    # MySQL, which ShinyProxy uses when `proxy.usage-stats-url` points at a MySQL database; dropping it would
+    # mean dropping MySQL support for the usage statistics.
+    "RUSTSEC-2023-0071",
+    # `backoff`, `instant` and `rustls-pemfile` are unmaintained (not vulnerable) and come from the Kubernetes
+    # and AWS clients; they disappear when those crates update.
+    "RUSTSEC-2025-0012",
+    "RUSTSEC-2024-0384",
+    "RUSTSEC-2025-0134",
+]
