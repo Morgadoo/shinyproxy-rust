@@ -77,6 +77,7 @@ statistics, request dumping). See [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)
 * [docs/TESTING.md](docs/TESTING.md) — how to run the test suites, including the ones that need Docker,
   Kubernetes, Redis or LDAP.
 * [docs/PROGRESS.md](docs/PROGRESS.md) — phases, test inventory and what is left.
+* [docs/reviews/](docs/reviews/) — delivery waves (Wave 1–3 status and gap closure tracker).
 * The upstream documentation of the configuration format lives at <https://shinyproxy.io>.
 
 ## Repository layout

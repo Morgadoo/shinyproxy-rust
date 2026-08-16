@@ -3,6 +3,9 @@
 ShinyProxy is being reimplemented in Rust. This file tracks the phases of the rewrite; the full plan lives
 in the agent plan documents and is summarised in [ARCHITECTURE.md](ARCHITECTURE.md).
 
+Delivery waves (Wave 1 core, Wave 2 enterprise + release, Wave 3 gap closure) are tracked in
+[reviews/](reviews/). Wave 1 and Wave 2 are complete; Wave 3 closes the documented remaining gaps.
+
 Legend: ⬜ not started · 🟨 in progress · ✅ done
 
 | Phase | Title | Status | Notes |
