@@ -192,7 +192,7 @@ types. Allow-listed static types: `java.lang.System.getenv`, `java.lang.String.v
 | SQL collector (`jdbc:`) | The JDBC URL is translated to the driver URL (`jdbc:postgresql:` → `postgres:`, `jdbc:mysql:`, `jdbc:sqlite:`), the table is created with the Java DDL, extra attribute columns are added to an existing table, and the rows are the same; `proxy.usage-stats-hikari.*` maps onto the connection pool | ✅ |
 | Recorded events | `Login`, `Logout`, `ProxyStart` and `ProxyStop`, as in `AbstractDbCollector` (which also ignores failed starts and failed logins) | ✅ |
 | Attribute expressions | The names become columns; each `expression` is evaluated with SpEL against the event (`userId`, and `proxy` for start/stop). A failed expression is logged and written as an empty value | ✅ |
-| InfluxDB (`/write?db=`) | Not implemented; the server refuses to start with a clear message instead of ignoring the setting | 🟨 |
+| InfluxDB (`/write?db=`) | Posts the Java line protocol (`event,username=…,type=… data="…"`) to the write URL; a 204 answer means success | ✅ |
 
 ## Authentication backends
 
@@ -226,11 +226,11 @@ types. Allow-listed static types: `java.lang.System.getenv`, `java.lang.String.v
 
 ## Not yet implemented
 
-Documented gaps still open for [Wave 3](reviews/wave-3.md) (SAML, S3 log storage, InfluxDB
-collector, `logging.requestdump`, usage-stats attribute expressions, ECS `sp-to-delete` cleanup,
-and optional Spring config extras). Everything else in [PROGRESS.md](PROGRESS.md) that is not
-marked ✅ is listed there. Properties whose behaviour is not implemented yet are still parsed and
-validated, and appear with their support status in [CONFIGURATION.md](CONFIGURATION.md).
+Documented gaps still open for [Wave 3](reviews/wave-3.md) (SAML, S3 log storage,
+`logging.requestdump`, ECS `sp-to-delete` cleanup, and optional Spring config extras). Everything else in
+[PROGRESS.md](PROGRESS.md) that is not marked ✅ is listed there. Properties whose behaviour is not
+implemented yet are still parsed and validated, and appear with their support status in
+[CONFIGURATION.md](CONFIGURATION.md).
 
 ## Cross validation against the Java implementation
 

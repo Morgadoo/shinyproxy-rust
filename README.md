@@ -62,9 +62,9 @@ docker run --rm -p 8080:8080 -v /var/run/docker.sock:/var/run/docker.sock \
 | Pre-initialized containers | `minimum-seats-available` with the seat model, the scaler and the delegate proxies |
 
 Known gaps: SAML authentication (fails at startup with a migration message), the ECS backend has not been
-validated against a real AWS account, and a few operational extras (S3 log storage, InfluxDB usage
-statistics, request dumping). See [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) for the full list and
-[docs/PROGRESS.md](docs/PROGRESS.md) for the state of the rewrite.
+validated against a real AWS account, and a few operational extras (S3 log storage, request dumping). See
+[docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) for the full list and [docs/PROGRESS.md](docs/PROGRESS.md)
+for the state of the rewrite.
 
 ## Documentation
 

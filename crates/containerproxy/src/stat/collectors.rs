@@ -20,7 +20,7 @@
  */
 
 //! Usage statistics collectors (`StatCollectorFactory`, `AbstractDbCollector`, `JDBCCollector`,
-//! `CSVCollector`).
+//! `CSVCollector`, `InfluxDBCollector`).
 //!
 //! `proxy.usage-stats-url` selects the collector by its value, exactly like the Java factory:
 //!
@@ -29,11 +29,13 @@
 //! | `micrometer` | the Prometheus metrics of [`super::Metrics`] |
 //! | something ending in `.csv` | a CSV file |
 //! | a `jdbc:` URL | a SQL database |
+//! | a URL containing `/write?db=` | InfluxDB 1.x |
 //! | anything else | a configuration error |
 //!
 //! The rows are the ones the Java implementation writes: `event_time`, `username`, `type` (`Login`,
 //! `Logout`, `ProxyStart`, `ProxyStop`) and `data` (the app id for the proxy events), plus one column per
-//! `proxy.usage-stats-attributes` entry.
+//! `proxy.usage-stats-attributes` entry (CSV and SQL). InfluxDB receives the same line-protocol body as
+//! Java (`event,username=…,type=… data="…"`).
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -211,6 +213,68 @@ impl CollectorKind {
         } else {
             Err(CollectorError::UnrecognisedUrl(url.to_string()))
         }
+    }
+}
+
+/// Writes the records to InfluxDB 1.x (`InfluxDBCollector`).
+///
+/// The body matches the Java collector exactly:
+/// `event,username=<user>,type=<kind> data="<specId>"`
+/// posted to the configured `/write?db=...` URL. A 204 answer means success.
+#[derive(Debug)]
+pub struct InfluxDbCollector {
+    url: String,
+    client: reqwest::Client,
+}
+
+impl InfluxDbCollector {
+    /// Creates the collector for the given write URL.
+    pub fn new(url: String) -> Self {
+        InfluxDbCollector {
+            url,
+            client: reqwest::Client::new(),
+        }
+    }
+}
+
+/// The InfluxDB line-protocol body of one event (byte-compatible with the Java collector).
+pub fn influx_line(record: &UsageRecord) -> String {
+    format!(
+        "event,username={},type={} data=\"{}\"",
+        escape_influx_tag(&record.username),
+        escape_influx_tag(&record.kind),
+        record.data.as_deref().unwrap_or("")
+    )
+}
+
+/// Escapes a tag value the way the Java collector does (spaces only).
+fn escape_influx_tag(value: &str) -> String {
+    value.replace(' ', "\\ ")
+}
+
+#[async_trait::async_trait]
+impl StatCollector for InfluxDbCollector {
+    async fn write(&self, record: &UsageRecord) -> Result<(), String> {
+        let body = influx_line(record);
+        let response = self
+            .client
+            .post(&self.url)
+            .body(body)
+            .send()
+            .await
+            .map_err(|error| format!("cannot reach InfluxDB at {}: {error}", self.url))?;
+        let status = response.status();
+        if status.as_u16() == 204 {
+            return Ok(());
+        }
+        let detail = response
+            .text()
+            .await
+            .unwrap_or_else(|_| status.to_string());
+        Err(format!(
+            "InfluxDB at {} answered {status}: {detail}",
+            self.url
+        ))
     }
 }
 
@@ -570,7 +634,7 @@ pub async fn create_collectors(
                 ));
             }
             CollectorKind::InfluxDb(url) => {
-                return Err(CollectorError::Unsupported(url));
+                collectors.push(Arc::new(InfluxDbCollector::new(url)));
             }
         }
     }
@@ -878,6 +942,79 @@ mod tests {
         .expect("record");
         assert_eq!(record.attributes.get("user").map(String::as_str), Some("jack"));
         assert_eq!(record.attributes.get("realm").map(String::as_str), Some(""));
+    }
+
+    #[test]
+    fn builds_the_java_influx_line_protocol() {
+        let record = UsageRecord {
+            event_time: 1,
+            username: "jack smith".to_string(),
+            kind: "Proxy Start".to_string(),
+            data: Some("01_hello".to_string()),
+            attributes: BTreeMap::new(),
+        };
+        assert_eq!(
+            influx_line(&record),
+            "event,username=jack\\ smith,type=Proxy\\ Start data=\"01_hello\""
+        );
+        let login = UsageRecord {
+            kind: "Login".to_string(),
+            data: None,
+            username: "jack".to_string(),
+            ..record
+        };
+        assert_eq!(
+            influx_line(&login),
+            "event,username=jack,type=Login data=\"\""
+        );
+    }
+
+    #[tokio::test]
+    async fn posts_events_to_influxdb() {
+        use axum::extract::State;
+        use axum::http::StatusCode;
+        use axum::routing::post;
+        use axum::Router;
+        use std::sync::Mutex;
+
+        let bodies: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let state = bodies.clone();
+        let app = Router::new().route(
+            "/write",
+            post(
+                |State(bodies): State<Arc<Mutex<Vec<String>>>>, body: String| async move {
+                    bodies.lock().expect("lock").push(body);
+                    StatusCode::NO_CONTENT
+                },
+            ),
+        ).with_state(state);
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let address = listener.local_addr().expect("addr");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.ok();
+        });
+
+        let url = format!("http://{address}/write?db=shinyproxy");
+        let collector = InfluxDbCollector::new(url);
+        collector
+            .write(&UsageRecord {
+                event_time: 1,
+                username: "jack".to_string(),
+                kind: "ProxyStart".to_string(),
+                data: Some("01_hello".to_string()),
+                attributes: BTreeMap::new(),
+            })
+            .await
+            .expect("write");
+
+        let written = bodies.lock().expect("lock").clone();
+        assert_eq!(
+            written,
+            vec!["event,username=jack,type=ProxyStart data=\"01_hello\"".to_string()]
+        );
     }
 
     #[tokio::test]

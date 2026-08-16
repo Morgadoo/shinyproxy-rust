@@ -42,7 +42,7 @@ Everything else stays the same: the port, the context path, the cookies, the con
 | `proxy.authentication: saml` | The server refuses to start with an explicit message | Use `openid` (most identity providers offer both), or keep the Java implementation for this deployment |
 | `proxy.authentication: keycloak` | The server refuses to start with an explicit message | Use `openid` against the Keycloak realm (`proxy.openid.*`); this is what upstream ShinyProxy recommends since 3.0 |
 | `proxy.container-log-s3-*` | The setting is accepted but the logs are only written to `proxy.container-log-path` | Ship the log files with any sidecar (for example `aws s3 sync`) |
-| InfluxDB usage statistics (`proxy.usage-stats-url: influxdb://...`) | The server refuses the URL | Use the CSV or the SQL collector, or scrape `/actuator/prometheus` |
+| InfluxDB usage statistics (`proxy.usage-stats-url` containing `/write?db=`) | Supported (same line protocol as Java) | — |
 | `logging.requestdump` | Ignored | Use `logging.level.containerproxy=debug` for the request logging that exists |
 | Spring extension points (custom `IContainerBackend`, `AuthenticationBackend`, ... on the classpath) | Not applicable: there is no classpath | Contribute the backend to this repository, or keep the Java implementation |
 | ECS (`proxy.container-backend: ecs`) | Implemented, but never validated against a real AWS account | Validate in a test cluster before moving production |
