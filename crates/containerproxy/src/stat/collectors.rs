@@ -62,6 +62,17 @@ impl UsageRecord {
     /// The record of an event, or `None` for events that are not collected (as in Java, where
     /// `ProxyStartFailed` and `AuthFailed` are not written).
     pub fn of(event: &Event, timestamp: i64) -> Option<Self> {
+        Self::with_attributes(event, timestamp, &[])
+    }
+
+    /// Like [`Self::of`], evaluating `proxy.usage-stats-attributes` (and per-collector attributes)
+    /// into the attribute columns. Expression failures are logged and become an empty string, so a
+    /// broken expression never drops the event.
+    pub fn with_attributes(
+        event: &Event,
+        timestamp: i64,
+        attributes: &[crate::config::settings::NamedExpression],
+    ) -> Option<Self> {
         let (kind, username, data) = match event {
             Event::UserLoggedIn { user_id } => ("Login", user_id.clone(), None),
             Event::UserLoggedOut { user_id, .. } => ("Logout", user_id.clone(), None),
@@ -82,9 +93,73 @@ impl UsageRecord {
             username,
             kind: kind.to_string(),
             data,
-            attributes: BTreeMap::new(),
+            attributes: evaluate_attribute_expressions(event, attributes),
         })
     }
+}
+
+/// Evaluates every configured attribute expression against the event.
+fn evaluate_attribute_expressions(
+    event: &Event,
+    attributes: &[crate::config::settings::NamedExpression],
+) -> BTreeMap<String, String> {
+    if attributes.is_empty() {
+        return BTreeMap::new();
+    }
+    let context = expression_context_for_event(event);
+    let mut values = BTreeMap::new();
+    for attribute in attributes {
+        let Some(name) = attribute
+            .name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        else {
+            continue;
+        };
+        let value = match attribute
+            .expression
+            .as_deref()
+            .map(str::trim)
+            .filter(|expression| !expression.is_empty())
+        {
+            Some(expression) => match spel::evaluate_to_string(expression, &context) {
+                Ok(value) => value,
+                Err(error) => {
+                    tracing::warn!(
+                        "usage-stats attribute '{name}' could not be evaluated ({error}); \
+                         writing an empty value"
+                    );
+                    String::new()
+                }
+            },
+            None => String::new(),
+        };
+        values.insert(name.to_string(), value);
+    }
+    values
+}
+
+/// Builds the SpEL context of a usage-stats event (`userId`, and `proxy` when the event carries one).
+fn expression_context_for_event(event: &Event) -> spel::Context {
+    use crate::spec::expression::{ExpressionContextBuilder, UserContext};
+
+    let (user_id, proxy) = match event {
+        Event::UserLoggedIn { user_id } | Event::UserLoggedOut { user_id, .. } => {
+            (user_id.clone(), None)
+        }
+        Event::ProxyStarted { proxy, .. } | Event::ProxyStopped { proxy, .. } => (
+            proxy.user_id.clone().unwrap_or_default(),
+            Some(proxy.as_ref().clone()),
+        ),
+        _ => (String::new(), None),
+    };
+
+    let mut builder = ExpressionContextBuilder::new().user(UserContext::new(user_id, Vec::new()));
+    if let Some(proxy) = proxy {
+        builder = builder.proxy(proxy);
+    }
+    builder.build()
 }
 
 /// Where the usage statistics go.
@@ -525,12 +600,26 @@ fn attribute_names(attributes: &[crate::config::settings::NamedExpression]) -> V
 #[derive(Debug)]
 pub struct UsageStatsService {
     collectors: Vec<Arc<dyn StatCollector>>,
+    /// Attribute definitions evaluated into every record (`proxy.usage-stats-attributes` and the
+    /// attributes of every `proxy.usage-stats` entry).
+    attributes: Vec<crate::config::settings::NamedExpression>,
 }
 
 impl UsageStatsService {
-    /// Creates the service with the given collectors.
+    /// Creates the service with the given collectors and no attribute expressions.
     pub fn new(collectors: Vec<Arc<dyn StatCollector>>) -> Self {
-        UsageStatsService { collectors }
+        Self::with_attributes(collectors, Vec::new())
+    }
+
+    /// Creates the service with the collectors and the attribute expressions of the configuration.
+    pub fn with_attributes(
+        collectors: Vec<Arc<dyn StatCollector>>,
+        attributes: Vec<crate::config::settings::NamedExpression>,
+    ) -> Self {
+        UsageStatsService {
+            collectors,
+            attributes,
+        }
     }
 
     /// Whether anything is collected.
@@ -556,12 +645,27 @@ impl UsageStatsService {
         let mut receiver = events.subscribe();
         tokio::spawn(async move {
             while let Ok(event) = receiver.recv().await {
-                if let Some(record) = UsageRecord::of(&event, crate::model::proxy::now_millis()) {
+                if let Some(record) = UsageRecord::with_attributes(
+                    &event,
+                    crate::model::proxy::now_millis(),
+                    &service.attributes,
+                ) {
                     service.write(&record).await;
                 }
             }
         });
     }
+}
+
+/// Every attribute definition of the configuration (global and per-collector), in order.
+pub fn attribute_definitions(
+    settings: &crate::config::Settings,
+) -> Vec<crate::config::settings::NamedExpression> {
+    let mut attributes = settings.proxy.usage_stats_attributes.clone();
+    for entry in &settings.proxy.usage_stats {
+        attributes.extend(entry.attributes.clone());
+    }
+    attributes
 }
 
 #[cfg(test)]
@@ -713,6 +817,67 @@ mod tests {
             1
         )
         .is_none());
+    }
+
+    #[test]
+    fn evaluates_usage_stats_attribute_expressions() {
+        use crate::config::settings::NamedExpression;
+        use crate::model::runtime_value::{RuntimeValue, REALM_ID};
+
+        let mut proxy = Proxy::new("proxy-1", ProxyStatus::Up);
+        proxy.spec_id = Some("01_hello".to_string());
+        proxy.user_id = Some("jack".to_string());
+        proxy.add_runtime_value(RuntimeValue::string(&REALM_ID, "realm-a"), true);
+
+        let attributes = vec![
+            NamedExpression {
+                name: Some("realm".to_string()),
+                expression: Some("#{proxy.getRuntimeValue('SHINYPROXY_REALM_ID')}".to_string()),
+            },
+            NamedExpression {
+                name: Some("user".to_string()),
+                expression: Some("#{userId}".to_string()),
+            },
+            NamedExpression {
+                name: Some("broken".to_string()),
+                expression: Some("#{unknownProperty}".to_string()),
+            },
+        ];
+
+        let record = UsageRecord::with_attributes(
+            &Event::ProxyStarted {
+                proxy: Box::new(proxy),
+                startup_time_ms: None,
+            },
+            1,
+            &attributes,
+        )
+        .expect("record");
+        assert_eq!(
+            record.attributes.get("realm").map(String::as_str),
+            Some("realm-a")
+        );
+        assert_eq!(
+            record.attributes.get("user").map(String::as_str),
+            Some("jack")
+        );
+        assert_eq!(
+            record.attributes.get("broken").map(String::as_str),
+            Some(""),
+            "a broken expression becomes an empty column instead of dropping the event"
+        );
+
+        // login events have no proxy: proxy expressions fail soft
+        let record = UsageRecord::with_attributes(
+            &Event::UserLoggedIn {
+                user_id: "jack".to_string(),
+            },
+            1,
+            &attributes,
+        )
+        .expect("record");
+        assert_eq!(record.attributes.get("user").map(String::as_str), Some("jack"));
+        assert_eq!(record.attributes.get("realm").map(String::as_str), Some(""));
     }
 
     #[tokio::test]

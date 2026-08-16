@@ -83,8 +83,12 @@ async fn main() -> anyhow::Result<()> {
     // the usage statistics collectors (`proxy.usage-stats-url`)
     match containerproxy::stat::collectors::create_collectors(&state.settings).await {
         Ok(collectors) => {
+            let attributes =
+                containerproxy::stat::collectors::attribute_definitions(&state.settings);
             let service = std::sync::Arc::new(
-                containerproxy::stat::collectors::UsageStatsService::new(collectors),
+                containerproxy::stat::collectors::UsageStatsService::with_attributes(
+                    collectors, attributes,
+                ),
             );
             service.subscribe(state.proxies.events());
         }

@@ -9,8 +9,8 @@ live AWS ECS validation is a runbook, not a CI gate, unless credentials are avai
 
 | Phase | Work | Status |
 | --- | --- | --- |
-| 0 | `docs/reviews/` + COMPATIBILITY HA hygiene | 🟨 |
-| 1 | Usage-stats attribute expressions | ⬜ |
+| 0 | `docs/reviews/` + COMPATIBILITY HA hygiene | ✅ |
+| 1 | Usage-stats attribute expressions | ✅ |
 | 2 | InfluxDB usage-stats collector | ⬜ |
 | 3 | S3 container-log storage | ⬜ |
 | 4 | `logging.requestdump` | ⬜ |
