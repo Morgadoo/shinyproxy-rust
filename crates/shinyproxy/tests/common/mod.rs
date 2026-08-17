@@ -45,26 +45,53 @@ pub struct TestInstance {
     management_handle: tokio::task::JoinHandle<()>,
 }
 
-/// A port range that no other test instance uses.
+/// How many host ports one test instance may publish.
+const PORTS_PER_INSTANCE: u16 = 8;
+
+/// A contiguous port range that no other test instance uses.
 ///
-/// The base is derived from the process id (test binaries run in parallel) and a counter (tests within a
-/// binary run in parallel as well).
+/// The previous helper asked the kernel for eight free ports and used the minimum and maximum as a
+/// range. Those ports are almost never adjacent, so the allocator then handed out the numbers in
+/// between — ports that were never reserved and that other test binaries (or the test server itself)
+/// were already using. The second pre-started container of a sharing test then failed to bind, the
+/// scaler logged "Container did not respond in time", and `wait_for_seats` saw one seat and two
+/// delegate proxies.
+///
+/// The range stays below the typical ephemeral window (`32768-60999`) so the `bind(0)` of the test
+/// server cannot steal a port from the block. The process id and a counter pick the slot; the whole
+/// block is bound before it is returned, so two instances never receive overlapping ranges.
 fn unique_port_range() -> (u16, u16) {
-    // the kernel hands out a free port, which becomes the first port of the range; asking it is more
-    // reliable than a fixed mapping, because several test binaries run at the same time
-    let mut ports = Vec::new();
-    for _ in 0..PORTS_PER_INSTANCE {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a free port");
-        ports.push(listener.local_addr().expect("address").port());
+    static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    const RANGE_START: u32 = 20_000;
+    const RANGE_END: u32 = 32_767;
+
+    let pid = std::process::id();
+    let slots = (RANGE_END - RANGE_START + 1) / u32::from(PORTS_PER_INSTANCE);
+    for _ in 0..1_000 {
+        let index = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let slot = pid.wrapping_mul(31).wrapping_add(index) % slots;
+        let start = (RANGE_START + slot * u32::from(PORTS_PER_INSTANCE)) as u16;
+        let end = start + PORTS_PER_INSTANCE - 1;
+        if reserve_contiguous(start, end) {
+            return (start, end);
+        }
     }
-    // the listeners are closed here, so the ports are free again for the apps of this instance
-    let start = *ports.iter().min().expect("one port");
-    let end = *ports.iter().max().expect("one port");
-    (start, end)
+    panic!("could not reserve a free host port range for the test instance");
 }
 
-/// How many host ports one test instance may publish.
-const PORTS_PER_INSTANCE: usize = 8;
+/// Binds every port in `start..=end` at once so the block is really free, then releases them for
+/// the allocator of this instance.
+fn reserve_contiguous(start: u16, end: u16) -> bool {
+    let mut held = Vec::with_capacity(usize::from(end - start + 1));
+    for port in start..=end {
+        match std::net::TcpListener::bind(("127.0.0.1", port)) {
+            Ok(listener) => held.push(listener),
+            Err(_) => return false,
+        }
+    }
+    drop(held);
+    true
+}
 
 /// Sends the log output of the server to the test output, so that `cargo test -- --nocapture` (and the
 /// output of a failing test) shows what the server logged. Enable with `RUST_LOG=info`.
@@ -302,4 +329,25 @@ pub async fn start_and_expect_error(yaml: &str) -> String {
         .await
         .expect_err("the configuration must be refused")
         .to_string()
+}
+
+#[test]
+fn unique_port_ranges_are_contiguous_and_disjoint() {
+    let mut ranges = Vec::new();
+    for _ in 0..16 {
+        ranges.push(unique_port_range());
+    }
+    for (start, end) in &ranges {
+        assert_eq!(*end, start + PORTS_PER_INSTANCE - 1, "{start}-{end}");
+        assert!(*start >= 20_000, "{start}");
+        assert!(*end < 32_768, "{end}");
+    }
+    for (index, (start, end)) in ranges.iter().enumerate() {
+        for (other_start, other_end) in ranges.iter().skip(index + 1) {
+            assert!(
+                *end < *other_start || *other_end < *start,
+                "overlapping {start}-{end} and {other_start}-{other_end}"
+            );
+        }
+    }
 }
