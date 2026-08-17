@@ -115,9 +115,7 @@ impl PortAllocator {
     /// Allocates a free port for the given owner.
     ///
     /// With a shared registry another server may take the port between reading and claiming it, so the
-    /// search is retried (the Java implementation does the same with `WATCH`/`MULTI`). A candidate that
-    /// is already bound on this host is left claimed so the next pass skips it: the Java allocator only
-    /// tracks its own numbers, which is how two local-backend tests used to publish the same host port.
+    /// search is retried (the Java implementation does the same with `WATCH`/`MULTI`).
     pub fn allocate(&self, owner_id: &str) -> Result<u16, NoPortAvailable> {
         for _ in 0..100 {
             let allocated: BTreeSet<u16> = self
@@ -137,7 +135,7 @@ impl PortAllocator {
                     return Err(NoPortAvailable);
                 }
             }
-            if self.registry.add(owner_id, candidate) && port_appears_free(candidate) {
+            if self.registry.add(owner_id, candidate) {
                 return Ok(candidate);
             }
         }
@@ -163,11 +161,6 @@ impl PortAllocator {
     pub fn allocated_count(&self) -> usize {
         self.registry.allocated().values().map(BTreeSet::len).sum()
     }
-}
-
-/// Whether this host can bind `127.0.0.1:port` right now.
-fn port_appears_free(port: u16) -> bool {
-    std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
 }
 
 #[cfg(test)]
@@ -208,22 +201,5 @@ mod tests {
         allocator.add_existing_port("recovered", 20000);
         assert_eq!(allocator.allocate("new").unwrap(), 20001);
         assert_eq!(allocator.owned_ports("recovered"), BTreeSet::from([20000]));
-    }
-
-    #[test]
-    fn skips_ports_that_are_already_bound() {
-        for start in 22_000..22_100 {
-            let Ok(listener) = std::net::TcpListener::bind(("127.0.0.1", start)) else {
-                continue;
-            };
-            if std::net::TcpListener::bind(("127.0.0.1", start + 1)).is_err() {
-                continue;
-            }
-            let allocator = PortAllocator::new(start, Some(start + 1));
-            assert_eq!(allocator.allocate("a").unwrap(), start + 1);
-            drop(listener);
-            return;
-        }
-        panic!("could not find a bound port next to a free one");
     }
 }
