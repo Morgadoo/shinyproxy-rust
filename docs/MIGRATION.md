@@ -62,6 +62,11 @@ Everything else stays the same: the port, the context path, the cookies, the con
 * **`parameters.template`** is rendered with MiniJinja instead of Thymeleaf. A custom template that uses
   Thymeleaf attributes (`th:each`, `${...}`) is refused at startup with a message that names the constructs it
   found; port it to MiniJinja (`{% for %}`, `{{ }}`) or drop it and use the built-in form.
+* **`template-properties` in custom HTML templates.** Java templates call
+  `@thymeleaf.getTemplateProperty(app.id, 'key')` (optional third argument = default). This build uses
+  MiniJinja: use `{{ get_template_property(app.id, 'key') }}` / `{{ getTemplateProperty(app.id, 'key', 'default') }}`,
+  or read the model map directly with `{{ templateProperties[app.id]['key'] }}` /
+  `{{ app.templateProperties.category }}`. The properties themselves are unchanged in `application.yml`.
 * **The `local` backend** (`proxy.container-backend: local`) is an addition of this implementation that runs
   apps as local processes. It exists for the test suite and is not meant for production.
 

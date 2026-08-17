@@ -32,7 +32,7 @@ pub mod settings;
 pub mod tree;
 pub mod warnings;
 
-pub use flex::{FlexBool, FlexI64, FlexString, StringList};
+pub use flex::{FlexBool, FlexI64, FlexString, StringList, StringMap};
 pub use loader::{load, ConfigError, LoadOptions, RawConfig, CONFIG_FILENAME, DEMO_PROFILE};
 pub use schema::{KeyDef, KeyKind, Schema, Support};
 pub use settings::{HikariSettings, ProxySettings, ServerSettings, Settings, SpringSettings};

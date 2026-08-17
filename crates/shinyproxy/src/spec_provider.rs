@@ -27,9 +27,7 @@
 //!
 //! This mirrors `eu.openanalytics.shinyproxy.ShinyProxySpecProvider`.
 
-use std::collections::BTreeMap;
-
-use containerproxy::config::flex::{FlexBool, FlexI64, StringList};
+use containerproxy::config::flex::{FlexBool, FlexI64, StringList, StringMap};
 use containerproxy::config::Settings;
 use containerproxy::model::spec::{
     AccessControl, CacheHeadersMode, ContainerSpec, DockerDeviceRequest, DockerSwarmSecret,
@@ -160,7 +158,7 @@ pub struct ShinyProxySpecExtension {
     pub always_show_switch_instance: Option<bool>,
     pub track_app_url: Option<bool>,
     pub template_group: Option<String>,
-    pub template_properties: BTreeMap<String, String>,
+    pub template_properties: StringMap,
     pub support_mail_to_address: Option<String>,
     pub support_mail_subject: Option<String>,
     pub custom_app_details: Vec<CustomAppDetail>,
@@ -203,7 +201,7 @@ pub struct TemplateGroup {
     /// Identifier referenced by `template-group` of an app.
     pub id: String,
     /// Free form properties available in the templates.
-    pub properties: BTreeMap<String, String>,
+    pub properties: StringMap,
 }
 
 impl RawSpec {
@@ -327,9 +325,43 @@ impl RawSpec {
 }
 
 /// Deserializes an extension from the raw app definition, ignoring unknown fields.
+///
+/// Map fields that templates treat as strings (`template-properties`) are normalised first so that
+/// numeric YAML values (for example `startup-time: 20`) do not fail the whole extension and wipe
+/// unrelated fields via [`Default`].
 fn extension_value<T: serde::de::DeserializeOwned + Default + Serialize>(raw: &Value) -> Value {
-    let extension: T = serde_json::from_value(raw.clone()).unwrap_or_default();
+    let normalised = coerce_string_maps(raw, &["template-properties"]);
+    let extension: T = serde_json::from_value(normalised).unwrap_or_default();
     serde_json::to_value(extension).unwrap_or(Value::Null)
+}
+
+/// Returns a copy of `raw` where the listed object fields have every value coerced to a string.
+fn coerce_string_maps(raw: &Value, fields: &[&str]) -> Value {
+    let Value::Object(map) = raw else {
+        return raw.clone();
+    };
+    let mut clone = map.clone();
+    for field in fields {
+        if let Some(Value::Object(properties)) = clone.get(*field).cloned() {
+            let coerced: serde_json::Map<String, Value> = properties
+                .into_iter()
+                .map(|(key, value)| (key, Value::String(json_value_as_string(value))))
+                .collect();
+            clone.insert((*field).to_string(), Value::Object(coerced));
+        }
+    }
+    Value::Object(clone)
+}
+
+/// Converts a JSON value to the string form used by template property maps.
+fn json_value_as_string(value: Value) -> String {
+    match value {
+        Value::Null => String::new(),
+        Value::Bool(value) => value.to_string(),
+        Value::Number(value) => value.to_string(),
+        Value::String(value) => value,
+        other => other.to_string(),
+    }
 }
 
 /// Collects the fields of the raw definition that start with the given prefix.
@@ -399,7 +431,8 @@ impl ShinyProxySpecProvider {
 
         let mut groups = Vec::with_capacity(template_groups.len());
         for (index, raw) in template_groups.iter().enumerate() {
-            let group: TemplateGroup = serde_json::from_value(raw.clone())
+            let normalised = coerce_string_maps(raw, &["properties"]);
+            let group: TemplateGroup = serde_json::from_value(normalised)
                 .map_err(|source| SpecError::InvalidTemplateGroup { index, source })?;
             groups.push(group);
         }
@@ -694,6 +727,58 @@ mod tests {
         assert!(ShinyProxySpecProvider::external(spec)
             .external_url
             .is_none());
+    }
+
+    #[test]
+    fn coerces_numeric_and_boolean_template_properties() {
+        let provider = provider(
+            "proxy:\n  template-groups:\n    - id: tools\n      properties:\n        display-name: Tools\n        order: 1\n  specs:\n    - id: app\n      container-image: img\n      shiny-force-full-reload: true\n      template-properties:\n        category: energy\n        type: shiny\n        icon: fa-bolt\n        startup-time: 20\n        featured: true\n",
+        );
+
+        let extension = ShinyProxySpecProvider::extension(provider.spec("app").expect("app"));
+        assert_eq!(extension.shiny_force_full_reload, Some(true));
+        assert_eq!(
+            extension
+                .template_properties
+                .get("category")
+                .map(String::as_str),
+            Some("energy")
+        );
+        assert_eq!(
+            extension
+                .template_properties
+                .get("type")
+                .map(String::as_str),
+            Some("shiny")
+        );
+        assert_eq!(
+            extension
+                .template_properties
+                .get("icon")
+                .map(String::as_str),
+            Some("fa-bolt")
+        );
+        assert_eq!(
+            extension
+                .template_properties
+                .get("startup-time")
+                .map(String::as_str),
+            Some("20")
+        );
+        assert_eq!(
+            extension
+                .template_properties
+                .get("featured")
+                .map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            provider.template_groups()[0]
+                .properties
+                .get("order")
+                .map(String::as_str),
+            Some("1")
+        );
     }
 
     #[test]

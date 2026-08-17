@@ -128,6 +128,7 @@ types. Allow-listed static types: `java.lang.System.getenv`, `java.lang.String.v
 | --- | --- | --- |
 | Built-in pages | Ported from Thymeleaf to MiniJinja; the rendered HTML matches (including Thymeleaf's escaping, which keeps `/` readable in URLs) | ✅ |
 | `proxy.template-path` | Overrides of the built-in pages are read from the filesystem, with the same names as the Thymeleaf templates | ✅ |
+| `proxy.specs[].template-properties` | Free-form app metadata for custom templates. The page model exposes `templateProperties[appId][key]` and each app object includes `templateProperties`. Custom MiniJinja templates look them up with `get_template_property(app.id, 'key')` / `getTemplateProperty(...)` (optional third argument = default), or directly as `{{ templateProperties[app.id]['key'] }}`. Numeric and boolean YAML values are coerced to strings. Java Thymeleaf `@thymeleaf.getTemplateProperty(...)` does not work (engine is MiniJinja) | ✅ |
 | `parameters.template` (configuration provided form) | Rendered with MiniJinja, with the same model as the built-in form (`parameterDefinitions`, `parameterValues`, `parameterDefaults`, `cleanedAppParameterDescriptions`, ...). Thymeleaf constructs (`th:*`, `${...}`, `*{...}`) are **refused at startup** with the list of constructs found, instead of silently emitting broken HTML | 🟨 deliberate deviation |
 
 ## App parameters

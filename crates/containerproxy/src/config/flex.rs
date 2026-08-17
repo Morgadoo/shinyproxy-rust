@@ -25,9 +25,11 @@
 //! and `PROXY_HEARTBEAT_RATE=10000` all yield the same number, and `hide-navbar: "true"` is a boolean.
 //! These wrapper types reproduce that leniency for serde.
 
+use std::collections::BTreeMap;
 use std::fmt;
+use std::ops::{Deref, DerefMut};
 
-use serde::de::{self, Deserializer, Visitor};
+use serde::de::{self, Deserializer, MapAccess, Visitor};
 use serde::{Deserialize, Serialize};
 
 /// Boolean that also accepts the strings `true`/`false` (any case) and numbers (`0` is false).
@@ -209,6 +211,95 @@ impl From<StringList> for Vec<String> {
     }
 }
 
+/// Free-form string map that accepts numbers and booleans as values (Spring-style coercion).
+///
+/// Used for `template-properties` and `template-groups[].properties`, where YAML often writes
+/// `startup-time: 20` even though templates always receive strings.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct StringMap(pub BTreeMap<String, String>);
+
+impl StringMap {
+    /// An empty map.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The contained entries.
+    pub fn inner(&self) -> &BTreeMap<String, String> {
+        &self.0
+    }
+}
+
+impl Deref for StringMap {
+    type Target = BTreeMap<String, String>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for StringMap {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl From<StringMap> for BTreeMap<String, String> {
+    fn from(value: StringMap) -> Self {
+        value.0
+    }
+}
+
+impl From<BTreeMap<String, String>> for StringMap {
+    fn from(value: BTreeMap<String, String>) -> Self {
+        StringMap(value)
+    }
+}
+
+impl<'de> Deserialize<'de> for StringMap {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct StringMapVisitor;
+
+        impl<'de> Visitor<'de> for StringMapVisitor {
+            type Value = StringMap;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a map of string keys to string, number or boolean values")
+            }
+
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+                let mut entries = BTreeMap::new();
+                while let Some((key, value)) = map.next_entry::<String, serde_json::Value>()? {
+                    entries.insert(key, json_value_as_string(value));
+                }
+                Ok(StringMap(entries))
+            }
+
+            fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+                Ok(StringMap::default())
+            }
+
+            fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
+                Ok(StringMap::default())
+            }
+        }
+
+        deserializer.deserialize_any(StringMapVisitor)
+    }
+}
+
+/// Converts a JSON value to the string templates expect (numbers/bools become their text form).
+fn json_value_as_string(value: serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Null => String::new(),
+        serde_json::Value::Bool(value) => value.to_string(),
+        serde_json::Value::Number(value) => value.to_string(),
+        serde_json::Value::String(value) => value,
+        other => other.to_string(),
+    }
+}
+
 impl<'de> Deserialize<'de> for StringList {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         struct StringListVisitor;
@@ -325,5 +416,31 @@ mod tests {
             vec!["a".to_string(), "b".to_string()]
         );
         assert!(parse("number: 1").values.is_empty());
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct MapHolder {
+        #[serde(default)]
+        properties: StringMap,
+    }
+
+    #[test]
+    fn parses_string_maps_with_coerced_values() {
+        let holder: MapHolder = serde_yaml_ng::from_str(
+            "properties:\n  category: energy\n  startup-time: 20\n  enabled: true\n",
+        )
+        .expect("parses");
+        assert_eq!(
+            holder.properties.get("category").map(String::as_str),
+            Some("energy")
+        );
+        assert_eq!(
+            holder.properties.get("startup-time").map(String::as_str),
+            Some("20")
+        );
+        assert_eq!(
+            holder.properties.get("enabled").map(String::as_str),
+            Some("true")
+        );
     }
 }
