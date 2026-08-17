@@ -39,7 +39,16 @@ cargo build --release
 Navigate to <http://localhost:8080>; the demo configuration logs in with the username `jack` and the
 password `password`.
 
-With Docker:
+With Docker, pull the published image (linux/amd64 and linux/arm64):
+
+```sh
+docker pull ghcr.io/morgadoo/shinyproxy-rust:v0.1.1
+docker run --rm -p 8080:8080 -v /var/run/docker.sock:/var/run/docker.sock \
+    -v "$PWD/examples/application-demo.yml:/opt/shinyproxy/application.yml:ro" \
+    ghcr.io/morgadoo/shinyproxy-rust:v0.1.1
+```
+
+Or build the image locally:
 
 ```sh
 docker build -t shinyproxy-rust .
