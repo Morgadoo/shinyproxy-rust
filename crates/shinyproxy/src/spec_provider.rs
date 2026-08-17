@@ -27,8 +27,6 @@
 //!
 //! This mirrors `eu.openanalytics.shinyproxy.ShinyProxySpecProvider`.
 
-use std::collections::BTreeMap;
-
 use containerproxy::config::flex::{FlexBool, FlexI64, StringList, StringMap};
 use containerproxy::config::Settings;
 use containerproxy::model::spec::{
@@ -729,6 +727,58 @@ mod tests {
         assert!(ShinyProxySpecProvider::external(spec)
             .external_url
             .is_none());
+    }
+
+    #[test]
+    fn coerces_numeric_and_boolean_template_properties() {
+        let provider = provider(
+            "proxy:\n  template-groups:\n    - id: tools\n      properties:\n        display-name: Tools\n        order: 1\n  specs:\n    - id: app\n      container-image: img\n      shiny-force-full-reload: true\n      template-properties:\n        category: energy\n        type: shiny\n        icon: fa-bolt\n        startup-time: 20\n        featured: true\n",
+        );
+
+        let extension = ShinyProxySpecProvider::extension(provider.spec("app").expect("app"));
+        assert_eq!(extension.shiny_force_full_reload, Some(true));
+        assert_eq!(
+            extension
+                .template_properties
+                .get("category")
+                .map(String::as_str),
+            Some("energy")
+        );
+        assert_eq!(
+            extension
+                .template_properties
+                .get("type")
+                .map(String::as_str),
+            Some("shiny")
+        );
+        assert_eq!(
+            extension
+                .template_properties
+                .get("icon")
+                .map(String::as_str),
+            Some("fa-bolt")
+        );
+        assert_eq!(
+            extension
+                .template_properties
+                .get("startup-time")
+                .map(String::as_str),
+            Some("20")
+        );
+        assert_eq!(
+            extension
+                .template_properties
+                .get("featured")
+                .map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            provider.template_groups()[0]
+                .properties
+                .get("order")
+                .map(String::as_str),
+            Some("1")
+        );
     }
 
     #[test]

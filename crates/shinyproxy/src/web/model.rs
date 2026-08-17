@@ -179,6 +179,7 @@ pub fn prepare_model(
     let mut app_urls = Map::new();
     let mut clean_descriptions = Map::new();
     let mut switch_instead_of_app = Map::new();
+    let mut template_properties = Map::new();
     for spec in &accessible {
         if let Some(logo) = state.app_logo(spec) {
             app_logos.insert(
@@ -203,6 +204,12 @@ pub fn prepare_model(
                     .unwrap_or(false)
             )),
         );
+        template_properties.insert(
+            spec.id.clone(),
+            json!(ShinyProxySpecProvider::extension(spec)
+                .template_properties
+                .inner()),
+        );
     }
     model.insert("appLogos".into(), Value::Object(app_logos));
     model.insert("appUrl".into(), Value::Object(app_urls));
@@ -210,6 +217,10 @@ pub fn prepare_model(
     model.insert(
         "openSwitchInstanceInsteadOfApp".into(),
         Value::Object(switch_instead_of_app),
+    );
+    model.insert(
+        "templateProperties".into(),
+        Value::Object(template_properties),
     );
 
     // grouping
@@ -222,10 +233,12 @@ pub fn prepare_model(
 }
 
 fn app_value(spec: &ProxySpec) -> Value {
+    let template_properties = ShinyProxySpecProvider::extension(spec).template_properties;
     json!({
         "id": spec.id,
         "displayName": spec.display_name,
         "description": spec.description,
+        "templateProperties": template_properties.inner(),
     })
 }
 
@@ -315,6 +328,61 @@ mod tests {
         );
         assert_eq!(model["ungroupedApps"].as_array().map(Vec::len), Some(1));
         assert_eq!(model["templateGroups"].as_array().map(Vec::len), Some(0));
+        assert_eq!(
+            model["templateProperties"]["01_hello"],
+            json!({}),
+            "apps without template-properties expose an empty map"
+        );
+        assert_eq!(
+            model["apps"][0]["templateProperties"],
+            json!({}),
+            "app objects include templateProperties"
+        );
+    }
+
+    #[tokio::test]
+    async fn exposes_template_properties_on_the_index_model() {
+        let state = build_state(
+            "proxy:\n  authentication: none\n  specs:\n    - id: my-app\n      display-name: My Application\n      description: Application description\n      container-image: img\n      template-properties:\n        category: energy\n        type: shiny\n        icon: fa-bolt\n        startup-time: 20\n",
+        )
+        .await;
+        let model = prepare_model(&state, Page::Index, None, false);
+
+        assert_eq!(
+            model["templateProperties"]["my-app"]["category"],
+            json!("energy")
+        );
+        assert_eq!(
+            model["templateProperties"]["my-app"]["type"],
+            json!("shiny")
+        );
+        assert_eq!(
+            model["templateProperties"]["my-app"]["icon"],
+            json!("fa-bolt")
+        );
+        assert_eq!(
+            model["templateProperties"]["my-app"]["startup-time"],
+            json!("20")
+        );
+        assert_eq!(
+            model["apps"][0]["templateProperties"]["category"],
+            json!("energy")
+        );
+        assert_eq!(
+            model["ungroupedApps"][0]["templateProperties"]["icon"],
+            json!("fa-bolt")
+        );
+
+        // custom MiniJinja templates can read the properties the same way Java templates use
+        // `@thymeleaf.getTemplateProperty`, including the optional default argument
+        let html = state
+            .templates
+            .render_string(
+                "{{ get_template_property('my-app', 'category') }}|{{ getTemplateProperty('my-app', 'icon') }}|{{ templateProperties['my-app']['type'] }}|{{ apps[0].templateProperties['startup-time'] }}|{{ get_template_property('my-app', 'missing', 'fallback') }}",
+                minijinja::Value::from_serialize(serde_json::Value::Object(model)),
+            )
+            .expect("renders");
+        assert_eq!(html, "energy|fa-bolt|shiny|20|fallback");
     }
 
     #[tokio::test]

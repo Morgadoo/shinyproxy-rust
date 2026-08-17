@@ -21,6 +21,9 @@ proxy:
       template-group: reporting
       template-properties:
         category: finance
+        type: shiny
+        icon: fa-bolt
+        startup-time: 20
       always-show-switch-instance: true
       hide-navbar-on-main-page-link: true
       custom-app-details:

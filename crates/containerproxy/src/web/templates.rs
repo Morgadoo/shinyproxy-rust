@@ -28,7 +28,8 @@
 
 use std::path::PathBuf;
 
-use minijinja::{Environment, Value as TemplateValue};
+use minijinja::value::Value as TemplateValue;
+use minijinja::{Environment, Error as MiniJinjaError, State};
 
 use super::assets::Templates;
 use crate::util::clean_html;
@@ -47,6 +48,37 @@ fn escape_html(input: &str) -> String {
         }
     }
     output
+}
+
+/// Looks up `proxy.specs[].template-properties`, matching Java `@thymeleaf.getTemplateProperty`.
+///
+/// Reads the `templateProperties` map from the page model. With two arguments the missing case is
+/// undefined (renders empty); with three arguments the third is used as the default.
+fn get_template_property(
+    state: &State,
+    app_id: String,
+    key: String,
+    default: Option<String>,
+) -> Result<TemplateValue, MiniJinjaError> {
+    let missing = || {
+        Ok(default
+            .clone()
+            .map(TemplateValue::from)
+            .unwrap_or(TemplateValue::UNDEFINED))
+    };
+
+    let Some(all) = state.lookup("templateProperties") else {
+        return missing();
+    };
+    let props = all.get_item(&TemplateValue::from(app_id))?;
+    if props.is_undefined() || props.is_none() {
+        return missing();
+    }
+    let value = props.get_item(&TemplateValue::from(key))?;
+    if value.is_undefined() || value.is_none() {
+        return missing();
+    }
+    Ok(value)
 }
 
 /// Renders the ShinyProxy pages.
@@ -104,6 +136,10 @@ impl TemplateEngine {
 
         // sanitises HTML that comes from the configuration, like the Java `CleanHtml` helper
         environment.add_filter("clean_html", |value: String| clean_html(&value));
+
+        // Java `@thymeleaf.getTemplateProperty(appId, key[, default])` for custom templates
+        environment.add_function("get_template_property", get_template_property);
+        environment.add_function("getTemplateProperty", get_template_property);
 
         // Thymeleaf does not escape `/` in attribute values; keep URLs readable and identical to the
         // Java output by using an escaper that only escapes the characters that matter.
@@ -251,6 +287,44 @@ mod tests {
             )
             .expect("renders");
         assert_eq!(html, "<b>bold</b>");
+    }
+
+    #[test]
+    fn looks_up_template_properties_like_java() {
+        let engine = TemplateEngine::new(None).expect("engine");
+        let model = serde_json::json!({
+            "templateProperties": {
+                "my-app": {
+                    "category": "energy",
+                    "icon": "fa-bolt"
+                }
+            }
+        });
+        let value = minijinja::Value::from_serialize(&model);
+
+        let html = engine
+            .render_string(
+                "{{ get_template_property('my-app', 'category') }}|{{ getTemplateProperty('my-app', 'icon') }}|{{ get_template_property('my-app', 'missing', 'default-category') }}|{{ get_template_property('other', 'category') }}",
+                value,
+            )
+            .expect("renders");
+        assert_eq!(html, "energy|fa-bolt|default-category|");
+    }
+
+    #[test]
+    fn template_properties_are_also_readable_from_the_model_map() {
+        let engine = TemplateEngine::new(None).expect("engine");
+        let html = engine
+            .render_string(
+                "{{ templateProperties['my-app']['type'] }}",
+                context! {
+                    templateProperties => minijinja::Value::from_serialize(serde_json::json!({
+                        "my-app": { "type": "shiny" }
+                    }))
+                },
+            )
+            .expect("renders");
+        assert_eq!(html, "shiny");
     }
 
     #[test]

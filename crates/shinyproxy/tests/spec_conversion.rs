@@ -173,6 +173,27 @@ fn template_group_fixture_exposes_groups_and_external_apps() {
     let report = provider.spec("report").expect("report");
     let extension = ShinyProxySpecProvider::extension(report);
     assert_eq!(extension.template_group.as_deref(), Some("reporting"));
+    assert_eq!(
+        extension
+            .template_properties
+            .get("category")
+            .map(String::as_str),
+        Some("finance")
+    );
+    assert_eq!(
+        extension
+            .template_properties
+            .get("icon")
+            .map(String::as_str),
+        Some("fa-bolt")
+    );
+    assert_eq!(
+        extension
+            .template_properties
+            .get("startup-time")
+            .map(String::as_str),
+        Some("20")
+    );
     assert_eq!(extension.custom_app_details.len(), 1);
     assert!(ShinyProxySpecProvider::always_show_switch_instance(
         report, false
