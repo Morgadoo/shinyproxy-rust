@@ -104,10 +104,15 @@ jobs:
     runs-on: ubuntu-latest
     if: always() && github.event_name == 'push' && needs.binaries.result == 'success'
     steps:
+      # Only the binary tarballs. docker/build-push-action also uploads a
+      # `*.dockerbuild` cache artifact; download-artifact cannot extract it and
+      # fails the release if it is included (see run 31983577375).
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+          pattern: shinyproxy-*
+          if-no-files-found: error
 
       - name: Attach the artifacts to the release
         uses: softprops/action-gh-release@v2
