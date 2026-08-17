@@ -68,8 +68,11 @@ proxy:
 }
 
 /// Waits until the scaler created the seats of the app definition.
+///
+/// The budget is longer than one `container-wait-timeout` (20s here) plus one reconcile interval
+/// (10s), so a delegate proxy that failed to start can be replaced before the test gives up.
 async fn wait_for_seats(instance: &TestInstance, expected: i64) {
-    for _ in 0..200 {
+    for _ in 0..600 {
         let scaler = &instance.state.sharing_scalers[0];
         if scaler.seats().unclaimed_count() >= expected {
             return;

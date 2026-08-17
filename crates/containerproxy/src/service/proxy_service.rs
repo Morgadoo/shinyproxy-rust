@@ -555,7 +555,7 @@ impl ProxyService {
             tracing::info!("Proxy failed: no targets available [proxyId: {}]", proxy.id);
             return false;
         }
-        probe_target(proxy, self.container_wait_timeout()).await
+        probe_target(proxy, HEALTH_PROBE_TIMEOUT).await
     }
 
     /// Resolves the expressions of the app definition and adds the runtime values.
@@ -742,13 +742,24 @@ pub fn container_labels(
     labels
 }
 
+/// How long one HTTP probe of an app may take. `wait_until_reachable` retries until the overall
+/// `container-wait-timeout`; a single probe must not consume that whole budget.
+const STARTUP_PROBE_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// How long a health check may wait for one answer (`isProxyHealthy` is a single probe).
+const HEALTH_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// Waits until the app answers on its default target.
 ///
 /// Shared with the scaler of the pre-started containers, which tests its containers the same way.
 pub async fn wait_until_reachable(proxy: &Proxy, timeout: Duration) -> bool {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
-        if probe_target(proxy, timeout).await {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return false;
+        }
+        if probe_target(proxy, remaining.min(STARTUP_PROBE_TIMEOUT)).await {
             return true;
         }
         if tokio::time::Instant::now() >= deadline {
@@ -765,7 +776,7 @@ async fn probe_target(proxy: &Proxy, timeout: Duration) -> bool {
     };
     let url = format!("{}/", target.trim_end_matches('/'));
     let client = match reqwest::Client::builder()
-        .timeout(timeout.max(Duration::from_millis(500)))
+        .timeout(timeout.max(Duration::from_millis(1)))
         .redirect(reqwest::redirect::Policy::none())
         .build()
     {
