@@ -182,6 +182,12 @@ pub trait AuthBackend: Send + Sync + std::fmt::Debug {
         None
     }
 
+    /// Whether every request is authenticated by its headers (`custom-header`), so that a request
+    /// without them is not authenticated, whatever its session says.
+    fn authenticates_with_headers(&self) -> bool {
+        false
+    }
+
     /// Where an unauthenticated request is sent (the login page, or `/auth-error` for header based
     /// authentication, as in Java).
     fn login_redirect(&self) -> &str {

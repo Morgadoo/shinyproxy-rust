@@ -88,6 +88,11 @@ pub async fn app_page(
         .cloned()
         .unwrap_or_else(|| DEFAULT_INSTANCE.to_string());
     let sub_path = path.get("sub").cloned().unwrap_or_default();
+    // the instance ends up in the page and in the URLs its script builds, so it must be a valid name
+    // (`AppRequestInfo.fromURI` refuses the page otherwise)
+    if instance.len() > 64 || !is_valid_instance_name(&instance) {
+        return api_fail("Invalid app instance name");
+    }
 
     let spec = state.specs.spec(&app_name).cloned();
     let proxy = find_user_proxy(&state, user.as_ref(), &app_name, &instance);
@@ -575,11 +580,25 @@ pub async fn app_proxy(
         );
         let (mut parts, body) = response.into_parts();
         parts.headers.remove(header::CONTENT_LENGTH);
-        let mut injector = ScriptInjector::new(&script);
-        let stream = body.into_data_stream().map(move |chunk| match chunk {
-            Ok(chunk) => Ok(injector.push(&chunk)),
-            Err(error) => Err(error),
-        });
+        // the injector holds back the last bytes of every chunk (a marker may be split across chunks), so
+        // the end of the body must flush it, otherwise the tail of the page is lost
+        let stream = futures::stream::unfold(
+            (body.into_data_stream(), Some(ScriptInjector::new(&script))),
+            |(mut body, mut injector)| async move {
+                let active = injector.as_mut()?;
+                match body.next().await {
+                    Some(Ok(chunk)) => {
+                        let output = active.push(&chunk);
+                        Some((Ok(output), (body, injector)))
+                    }
+                    Some(Err(error)) => Some((Err(error), (body, None))),
+                    None => {
+                        let output = active.finish();
+                        Some((Ok(output), (body, None)))
+                    }
+                }
+            },
+        );
         return Response::from_parts(parts, Body::from_stream(stream));
     }
 

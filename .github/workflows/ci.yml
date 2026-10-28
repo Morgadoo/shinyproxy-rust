@@ -5,6 +5,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+# the jobs only read the repository; a token that can write is not needed (and not handed to the build)
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings

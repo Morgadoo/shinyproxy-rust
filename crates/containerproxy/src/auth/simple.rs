@@ -43,12 +43,15 @@ struct ConfiguredUser {
 pub struct SimpleAuthenticationBackend {
     users: Vec<ConfiguredUser>,
     case_sensitive: bool,
+    /// A valid bcrypt hash with the cost of the configured hashes, checked for unknown users so that they
+    /// take as long as known ones (which reveals which user names exist otherwise).
+    dummy_hash: Option<String>,
 }
 
 impl SimpleAuthenticationBackend {
     /// Creates the backend from the configured users.
     pub fn new(users: &[UserSettings], case_sensitive: bool) -> Self {
-        let users = users
+        let users: Vec<ConfiguredUser> = users
             .iter()
             .filter_map(|user| {
                 let name = user.name.clone()?;
@@ -59,9 +62,14 @@ impl SimpleAuthenticationBackend {
                 })
             })
             .collect();
+        let dummy_hash = users
+            .iter()
+            .find_map(|user| bcrypt_cost(&user.password))
+            .and_then(|cost| bcrypt::hash("not a password", cost).ok());
         SimpleAuthenticationBackend {
             users,
             case_sensitive,
+            dummy_hash,
         }
     }
 
@@ -92,19 +100,53 @@ impl AuthBackend for SimpleAuthenticationBackend {
     }
 
     fn authenticate(&self, form: &LoginForm) -> Result<AuthenticatedUser, AuthError> {
-        let Some(user) = self.find_user(&form.username) else {
-            // Compare against a dummy value so that unknown users take the same time as known ones.
-            let _ = verify_password(&form.password, "$2b$12$C6UzMDM.H6dfI/f/IKcEe.");
-            return Err(AuthError::InvalidCredentials);
-        };
-        if !verify_password(&form.password, &user.password) {
-            return Err(AuthError::InvalidCredentials);
+        let (user, configured) = self.candidate(form);
+        Self::checked(user, verify_password(&form.password, &configured))
+    }
+
+    /// bcrypt takes a good part of a second on purpose; it runs on a blocking thread, so that a few
+    /// concurrent logins do not stall the proxied apps and WebSockets served by the same worker threads.
+    async fn authenticate_async(&self, form: &LoginForm) -> Result<AuthenticatedUser, AuthError> {
+        let (user, configured) = self.candidate(form);
+        let candidate = form.password.clone();
+        let matches = tokio::task::spawn_blocking(move || verify_password(&candidate, &configured))
+            .await
+            .unwrap_or(false);
+        Self::checked(user, matches)
+    }
+}
+
+impl SimpleAuthenticationBackend {
+    /// The user of a login attempt and the password to check; an unknown user is checked against the
+    /// dummy hash, so that it takes the same time as a known one.
+    fn candidate(&self, form: &LoginForm) -> (Option<ConfiguredUser>, String) {
+        match self.find_user(&form.username) {
+            Some(user) => (Some(user.clone()), user.password.clone()),
+            None => (None, self.dummy_hash.clone().unwrap_or_default()),
         }
-        Ok(AuthenticatedUser {
-            id: user.name.clone(),
-            groups: user.groups.clone(),
-            ..Default::default()
-        })
+    }
+
+    fn checked(
+        user: Option<ConfiguredUser>,
+        matches: bool,
+    ) -> Result<AuthenticatedUser, AuthError> {
+        match user {
+            Some(user) if matches => Ok(AuthenticatedUser {
+                id: user.name,
+                groups: user.groups,
+                ..Default::default()
+            }),
+            _ => Err(AuthError::InvalidCredentials),
+        }
+    }
+}
+
+/// The cost of a bcrypt hash (`$2b$12$...` is 12).
+fn bcrypt_cost(hash: &str) -> Option<u32> {
+    let mut parts = hash.split('$');
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some(""), Some("2a" | "2b" | "2y"), Some(cost)) => cost.parse().ok(),
+        _ => None,
     }
 }
 
@@ -147,6 +189,32 @@ mod tests {
             username: username.to_string(),
             password: password.to_string(),
         }
+    }
+
+    #[tokio::test]
+    async fn unknown_users_are_checked_against_a_real_hash() {
+        let hash = bcrypt::hash("password", 4).expect("hash");
+        let backend = backend(
+            &format!("proxy:\n  users:\n    - name: jack\n      password: '{hash}'\n"),
+            true,
+        );
+        // the dummy is a valid hash of the same cost, so checking it takes as long as a real one
+        let dummy = backend.dummy_hash.as_deref().expect("dummy hash");
+        assert_eq!(bcrypt_cost(dummy), Some(4));
+        assert!(bcrypt::verify("password", dummy).is_ok());
+
+        assert!(backend
+            .authenticate_async(&login("jack", "password"))
+            .await
+            .is_ok());
+        for (username, password) in [("jack", "wrong"), ("nobody", "password"), ("nobody", "")] {
+            assert!(matches!(
+                backend.authenticate_async(&login(username, password)).await,
+                Err(AuthError::InvalidCredentials)
+            ));
+        }
+        assert_eq!(bcrypt_cost("$2a$10$abc"), Some(10));
+        assert_eq!(bcrypt_cost("{noop}secret"), None);
     }
 
     #[test]

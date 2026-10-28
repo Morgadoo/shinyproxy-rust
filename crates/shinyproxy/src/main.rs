@@ -104,18 +104,26 @@ async fn main() -> anyhow::Result<()> {
 
     // the management server (actuator) listens on its own port, as Spring Boot does
     let management_port = state.settings.management.port();
-    let management_address = format!("{bind_address}:{management_port}");
+    // `management.server.address` keeps the actuator (whose metrics carry user ids) off the public
+    // interfaces, as with Spring Boot
+    let management_bind_address = state
+        .settings
+        .management
+        .address()
+        .unwrap_or(&bind_address)
+        .to_string();
+    let management_address = format!("{management_bind_address}:{management_port}");
     match tokio::net::TcpListener::bind(&management_address).await {
         Ok(listener) => {
             tracing::info!(
                 "Management endpoints available on http://{management_address}/actuator"
             );
             let management = shinyproxy::web::management::router(state.clone());
-            tokio::spawn(async move {
-                if let Err(error) = axum::serve(listener, management).await {
-                    tracing::warn!("management server stopped: {error}");
-                }
-            });
+            tokio::spawn(shinyproxy::web::server::serve(
+                listener,
+                management,
+                std::future::pending(),
+            ));
         }
         Err(error) => {
             tracing::warn!("cannot start the management server on {management_address}: {error}")
@@ -131,9 +139,7 @@ async fn main() -> anyhow::Result<()> {
         listener.local_addr()?,
         state.context_path()
     );
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    shinyproxy::web::server::serve(listener, app, shutdown_signal()).await;
     tracing::info!("ShinyProxy stopped");
     Ok(())
 }

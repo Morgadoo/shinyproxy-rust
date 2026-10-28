@@ -156,11 +156,12 @@ impl TestInstance {
             .await
             .expect("bind");
         let address = listener.local_addr().expect("address");
-        let handle = tokio::spawn(async move {
-            if let Err(error) = axum::serve(listener, app).await {
-                eprintln!("test server stopped: {error}");
-            }
-        });
+        // the production accept loop, so the tests cover its timeouts and upgrades
+        let handle = tokio::spawn(shinyproxy::web::server::serve(
+            listener,
+            app,
+            std::future::pending(),
+        ));
 
         // the management endpoints are served on their own port, as in production
         let management_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -168,11 +169,11 @@ impl TestInstance {
             .expect("bind");
         let management_address = management_listener.local_addr().expect("address");
         let management_router = shinyproxy::web::management::router(state.clone());
-        let management_handle = tokio::spawn(async move {
-            if let Err(error) = axum::serve(management_listener, management_router).await {
-                eprintln!("test management server stopped: {error}");
-            }
-        });
+        let management_handle = tokio::spawn(shinyproxy::web::server::serve(
+            management_listener,
+            management_router,
+            std::future::pending(),
+        ));
 
         TestInstance {
             base_url: format!("http://{address}"),

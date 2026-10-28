@@ -106,6 +106,7 @@ pub async fn forward(
     if let Some(scheme) = parts.uri.scheme_str() {
         insert_header(&mut headers, "x-forwarded-proto", scheme);
     }
+    remove_identity_headers(&mut headers, &options.extra_headers);
     for (name, value) in options.extra_headers.iter() {
         insert_header(&mut headers, name, value);
     }
@@ -184,6 +185,30 @@ pub fn filter_headers(headers: &HeaderMap) -> HeaderMap {
         result.append(name.clone(), value.clone());
     }
     result
+}
+
+/// Headers that only the server sets; a copy sent by the client never reaches the app.
+const IDENTITY_HEADERS: &[&str] = &["x-sp-userid", "x-sp-usergroups"];
+
+/// Removes the client's copies of the headers the server adds (`X-SP-*` and the `http-headers` of the
+/// app), so that an app never sees a forged value: not when the configured value turns out to be invalid
+/// (and is skipped), not when `add-default-http-headers` is off, and not in the underscore spelling
+/// (`X_SP_UserId`) that CGI style frameworks treat as the same header.
+fn remove_identity_headers(headers: &mut HeaderMap, extra_headers: &BTreeMap<String, String>) {
+    let normalize = |name: &str| name.to_ascii_lowercase().replace('_', "-");
+    let protected: Vec<String> = extra_headers
+        .keys()
+        .map(|name| normalize(name))
+        .chain(IDENTITY_HEADERS.iter().map(|name| name.to_string()))
+        .collect();
+    let forged: Vec<HeaderName> = headers
+        .keys()
+        .filter(|name| protected.contains(&normalize(name.as_str())))
+        .cloned()
+        .collect();
+    for name in forged {
+        headers.remove(name);
+    }
 }
 
 /// Inserts a header, ignoring invalid names/values.
@@ -279,6 +304,26 @@ mod tests {
         insert_header(&mut headers, "x-bad-value", "line\nbreak");
         assert_eq!(headers.get("x-sp-userid").unwrap(), "jack");
         assert_eq!(headers.len(), 1);
+    }
+
+    #[test]
+    fn removes_identity_headers_sent_by_the_client() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-sp-userid", HeaderValue::from_static("admin"));
+        headers.insert("x_sp_usergroups", HeaderValue::from_static("admins"));
+        headers.insert("x-custom-token", HeaderValue::from_static("forged"));
+        headers.insert("x-ok", HeaderValue::from_static("value"));
+        let extra = BTreeMap::from([("X-Custom-Token".to_string(), "line\nbreak".to_string())]);
+
+        remove_identity_headers(&mut headers, &extra);
+        // the configured value is invalid and skipped: the client's copy must not survive either
+        for (name, value) in extra.iter() {
+            insert_header(&mut headers, name, value);
+        }
+        assert!(!headers.contains_key("x-sp-userid"));
+        assert!(!headers.contains_key("x_sp_usergroups"));
+        assert!(!headers.contains_key("x-custom-token"));
+        assert_eq!(headers.get("x-ok").unwrap(), "value");
     }
 
     #[test]

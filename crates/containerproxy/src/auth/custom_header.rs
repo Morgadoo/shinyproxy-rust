@@ -91,6 +91,10 @@ impl AuthBackend for CustomHeaderAuthenticationBackend {
         "/logout-success".to_string()
     }
 
+    fn authenticates_with_headers(&self) -> bool {
+        true
+    }
+
     fn user_from_headers(&self, headers: &HeaderMap) -> Option<AuthenticatedUser> {
         let username = header_value(headers, &self.username_header)?;
         if username.trim().is_empty() {

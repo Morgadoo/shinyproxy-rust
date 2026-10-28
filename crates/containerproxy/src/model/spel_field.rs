@@ -54,6 +54,44 @@ pub struct ResolveError {
     pub message: String,
 }
 
+/// Evaluates every string of a JSON document that contains an expression, keeping the structure: the
+/// result of an expression always stays inside the string it was written in.
+pub fn resolve_strings(
+    value: &serde_json::Value,
+    resolver: &dyn SpecResolver,
+) -> Result<serde_json::Value, ResolveError> {
+    use serde_json::Value;
+    Ok(match value {
+        Value::String(text) if text.contains("#{") => Value::String(resolver.string(text)?),
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| resolve_strings(item, resolver))
+                .collect::<Result<_, _>>()?,
+        ),
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(key, item)| Ok((key.clone(), resolve_strings(item, resolver)?)))
+                .collect::<Result<_, ResolveError>>()?,
+        ),
+        other => other.clone(),
+    })
+}
+
+/// Counts the expressions (`#{`) in the strings and keys of a JSON document.
+pub fn count_expressions(value: &serde_json::Value) -> usize {
+    use serde_json::Value;
+    match value {
+        Value::String(text) => text.matches("#{").count(),
+        Value::Array(items) => items.iter().map(count_expressions).sum(),
+        Value::Object(map) => map
+            .iter()
+            .map(|(key, item)| key.matches("#{").count() + count_expressions(item))
+            .sum(),
+        _ => 0,
+    }
+}
+
 impl ResolveError {
     /// Creates an error for the given expression.
     pub fn new(expression: impl Into<String>, message: impl Into<String>) -> Self {

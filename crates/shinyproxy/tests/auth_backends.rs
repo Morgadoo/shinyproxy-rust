@@ -103,19 +103,40 @@ proxy:
     assert!(body.contains("Admin Application"), "{body}");
     assert!(body.contains("href=\"/admin\""), "{body}");
 
-    // the header decides the user on every request: another header means another user
+    // the header decides the user on every request, as `CustomHeaderAuthenticationFilter` does: a header
+    // naming another user than the one of the session is refused, and the session cookie alone (without
+    // the header, i.e. not through the reverse proxy) does not authenticate
+    for headers in [
+        vec![("X-SP-UserId", "jeff"), ("X-SP-UserGroups", "scientists")],
+        vec![],
+    ] {
+        let mut request = admin.get(instance.url("/")).header("accept", "text/html");
+        for (name, value) in &headers {
+            request = request.header(*name, *value);
+        }
+        let response = request.send().await.expect("request");
+        assert_eq!(response.status(), 302, "{headers:?}");
+        assert_eq!(
+            response
+                .headers()
+                .get("location")
+                .and_then(|value| value.to_str().ok()),
+            Some("/auth-error"),
+            "{headers:?}"
+        );
+    }
+    // the session itself is kept: the right header works again
     let body = admin
         .get(instance.url("/"))
-        .header("X-SP-UserId", "jeff")
-        .header("X-SP-UserGroups", "scientists")
+        .header("X-SP-UserId", "root")
+        .header("X-SP-UserGroups", "admins")
         .send()
         .await
         .expect("request")
         .text()
         .await
         .expect("body");
-    assert!(body.contains("jeff"), "{body}");
-    assert!(!body.contains("Admin Application"), "{body}");
+    assert!(body.contains("Admin Application"), "{body}");
 
     // the API works with the headers as well
     let response: serde_json::Value = client

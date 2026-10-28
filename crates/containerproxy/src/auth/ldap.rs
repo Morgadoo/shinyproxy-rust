@@ -376,6 +376,12 @@ impl AuthBackend for LdapAuthenticationBackend {
     }
 
     async fn authenticate_async(&self, form: &LoginForm) -> Result<AuthenticatedUser, AuthError> {
+        // a bind with a DN and an empty password is an *unauthenticated* bind (RFC 4513 5.1.2), which many
+        // directories (Active Directory among them) answer with success: without this check anyone could
+        // log in as any user by leaving the password empty. Spring's `BindAuthenticator` refuses it too.
+        if form.username.trim().is_empty() || form.password.is_empty() {
+            return Err(AuthError::InvalidCredentials);
+        }
         let mut last_error = AuthError::InvalidCredentials;
         for provider in &self.providers {
             match Self::authenticate_with(provider, form).await {
@@ -410,6 +416,29 @@ proxy:
     manager-dn: cn=admin,dc=example,dc=com
     manager-password: secret
 "##;
+
+    #[tokio::test]
+    async fn refuses_an_empty_password_without_binding() {
+        // the server does not exist: reaching it would fail with a backend error, not invalid credentials
+        let backend = LdapAuthenticationBackend::new(&settings(
+            "proxy:\n  authentication: ldap\n  ldap:\n    url: ldap://127.0.0.1:1/dc=example,dc=com\n    \
+             user-dn-pattern: uid={0},ou=people\n",
+        ))
+        .expect("backend");
+        for (username, password) in [("admin", ""), ("", "secret"), ("  ", "secret")] {
+            let form = LoginForm {
+                username: username.to_string(),
+                password: password.to_string(),
+            };
+            assert!(
+                matches!(
+                    backend.authenticate_async(&form).await,
+                    Err(AuthError::InvalidCredentials)
+                ),
+                "{username:?}/{password:?}"
+            );
+        }
+    }
 
     #[test]
     fn reads_a_single_provider() {

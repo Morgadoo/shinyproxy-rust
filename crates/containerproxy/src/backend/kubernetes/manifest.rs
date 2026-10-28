@@ -32,6 +32,7 @@ use serde_json::{json, Value};
 use super::config::KubernetesConfig;
 use crate::backend::StartContext;
 use crate::model::runtime_value::RuntimeValues;
+use crate::model::spel_field::{count_expressions, resolve_strings, ResolveError, SpecResolver};
 
 /// Name of the headless service that gives the pods a stable DNS name.
 pub const HEADLESS_SERVICE_NAME: &str = "sp-headless-service";
@@ -124,10 +125,29 @@ pub fn memory_quantity(value: Option<&str>) -> Result<Option<String>, String> {
 }
 
 /// The environment of a container, with `secretKeyRef:name:key` values turned into a reference.
+///
+/// Only a reference the configuration wrote is turned into one: a `container-env` value that is the
+/// reference itself (not the result of an expression) or a line of the `container-env-file`. The runtime
+/// values (`SHINYPROXY_USERNAME`, `SHINYPROXY_USERGROUPS`, ...), the access token and the results of
+/// expressions carry values of the user; a user called `secretKeyRef:shinyproxy:redis-password` would
+/// otherwise read any secret of the namespace in their app. (Java turns every value into a reference.)
 fn environment(context: &StartContext<'_>) -> Vec<Value> {
+    let runtime_environment = context.proxy.runtime_values.environment();
+    let configured = context.container_spec.env.original();
+    let is_configured_reference = |name: &str| {
+        if name == crate::auth::openid::ACCESS_TOKEN_ENV_VAR {
+            return false;
+        }
+        match configured.and_then(|configured| configured.get(name)) {
+            Some(original) => original.to_lowercase().starts_with(SECRET_KEY_REF),
+            // not in `container-env`: the env file is configuration, a runtime value is not
+            None => !runtime_environment.contains_key(name),
+        }
+    };
+
     let mut variables = Vec::new();
     for (name, value) in &context.environment {
-        if value.to_lowercase().starts_with(SECRET_KEY_REF) {
+        if value.to_lowercase().starts_with(SECRET_KEY_REF) && is_configured_reference(name) {
             let parts: Vec<&str> = value.split(':').collect();
             if parts.len() != 3 {
                 tracing::warn!(
@@ -389,6 +409,37 @@ pub fn apply_patch(document: &Value, patch_yaml: Option<&str>) -> Result<Value, 
     Ok(patched)
 }
 
+/// Evaluates the expressions of a patch or manifest written in YAML.
+///
+/// Java evaluates the YAML *text*, so the value of a user (the id, a group, a claim) is pasted into the
+/// document before it is parsed and can add YAML to it (a newline and `privileged: true`). Here the
+/// document is parsed first and only its strings are evaluated, so the result of an expression always
+/// stays one string. The result is written as JSON, which is YAML too.
+///
+/// The one form Java accepts that cannot be handled this way is an expression YAML reads as a comment
+/// (`subPath: #{proxy.userId}` without quotes); dropping it would silently mount the whole volume, so
+/// such a document is evaluated as text, as Java does, with a warning to quote the expression.
+pub fn resolve_document(text: &str, resolver: &dyn SpecResolver) -> Result<String, ResolveError> {
+    let expressions = text.matches("#{").count();
+    if expressions == 0 {
+        return Ok(text.to_string());
+    }
+    match serde_yaml_ng::from_str::<Value>(text) {
+        Ok(document) if count_expressions(&document) == expressions => {
+            let resolved = resolve_strings(&document, resolver)?;
+            Ok(serde_json::to_string(&resolved).expect("a JSON value serializes"))
+        }
+        _ => {
+            tracing::warn!(
+                "An expression in a Kubernetes patch or manifest is not inside a YAML string (for example \
+                 `subPath: #{{proxy.userId}}`, which YAML reads as a comment); it is evaluated in the text, \
+                 which lets the values it inserts change the YAML. Quote the expression to fix this."
+            );
+            resolver.string(text)
+        }
+    }
+}
+
 /// Prepares an additional manifest: fills in the namespace and adds the labels of ShinyProxy.
 pub fn prepare_additional_manifest(
     manifest_yaml: &str,
@@ -618,6 +669,63 @@ mod tests {
             json!({"name": "my-secret", "key": "password"})
         );
         assert!(password.get("value").is_none());
+    }
+
+    #[test]
+    fn only_configured_secret_references_become_references() {
+        let mut proxy = proxy();
+        // a user whose name is a secret reference
+        proxy.add_runtime_value(
+            RuntimeValue::string(&USER_ID, "secretKeyRef:shinyproxy:redis-password"),
+            true,
+        );
+        let mut container_spec = container_spec();
+        container_spec.env = SpelStringMap::resolved(
+            BTreeMap::from([
+                ("API_KEY".to_string(), "secretKeyRef:api:key".to_string()),
+                ("DISPLAY_NAME".to_string(), "#{oidcUser.name}".to_string()),
+            ]),
+            BTreeMap::from([
+                ("API_KEY".to_string(), "secretKeyRef:api:key".to_string()),
+                (
+                    "DISPLAY_NAME".to_string(),
+                    "secretKeyRef:other:token".to_string(),
+                ),
+            ]),
+        );
+        let mut spec = ProxySpec::new("01_hello");
+        spec.container_specs = vec![container_spec.clone()];
+        let container = Container::new(0);
+        let mut context = context(&proxy, &spec, &container_spec, &container);
+        context.environment = crate::service::proxy_service::container_environment(
+            &proxy,
+            &container_spec,
+            Some("secretKeyRef:oidc:token"),
+        );
+
+        let variables = environment(&context);
+        let variable = |name: &str| {
+            variables
+                .iter()
+                .find(|variable| variable["name"] == name)
+                .unwrap_or_else(|| panic!("{name}"))
+                .clone()
+        };
+        assert_eq!(
+            variable("API_KEY")["valueFrom"]["secretKeyRef"],
+            json!({"name": "api", "key": "key"})
+        );
+        for name in [
+            "SHINYPROXY_USERNAME",
+            "DISPLAY_NAME",
+            crate::auth::openid::ACCESS_TOKEN_ENV_VAR,
+        ] {
+            assert!(variable(name).get("valueFrom").is_none(), "{name}");
+            assert!(variable(name)["value"]
+                .as_str()
+                .unwrap()
+                .starts_with("secretKeyRef:"));
+        }
     }
 
     #[test]

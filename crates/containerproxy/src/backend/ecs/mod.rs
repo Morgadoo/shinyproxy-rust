@@ -53,6 +53,7 @@ use crate::model::runtime_value::{
     BACKEND_CONTAINER_NAME, CONTAINER_IMAGE,
 };
 use crate::model::spec::ProxySpec;
+use crate::model::spel_field::{resolve_strings, ResolveError, SpecResolver};
 
 /// Name of the backend.
 pub const NAME: &str = "ecs";
@@ -103,6 +104,63 @@ impl EcsSpecExtension {
     pub fn of(spec: &ProxySpec) -> Self {
         spec.spec_extensions.get("ecs")
     }
+}
+
+/// Fields of the ECS extension (and of its EFS volumes) that are booleans.
+const BOOLEAN_FIELDS: &[&str] = &[
+    "readonly-root-filesystem",
+    "enable-execute-command",
+    "transit-encryption",
+    "enable-iam",
+];
+/// Fields of the ECS extension (and of its EFS volumes) that are numbers.
+const INTEGER_FIELDS: &[&str] = &["ephemeral-storage-size", "transit-encryption-port"];
+
+/// Evaluates the expressions of the ECS fields of an app (`EcsSpecExtension.firstResolve`): the roles, the
+/// volumes (e.g. an EFS `root-directory: /home/#{proxy.userId}`), the secrets and the options.
+pub fn resolve_extension(
+    extension: &serde_json::Value,
+    resolver: &dyn SpecResolver,
+) -> Result<serde_json::Value, ResolveError> {
+    let mut resolved = resolve_strings(extension, resolver)?;
+    retype(&mut resolved)?;
+    Ok(resolved)
+}
+
+/// An expression yields a string; the boolean and number fields are converted back. The strings are
+/// parsed, never evaluated again: they may contain values of the user.
+fn retype(value: &mut serde_json::Value) -> Result<(), ResolveError> {
+    use serde_json::Value;
+    match value {
+        Value::Object(fields) => {
+            for (name, field) in fields.iter_mut() {
+                if let Value::String(text) = field {
+                    let trimmed = text.trim();
+                    if BOOLEAN_FIELDS.contains(&name.as_str()) {
+                        *field = match trimmed {
+                            _ if trimmed.eq_ignore_ascii_case("true") => Value::Bool(true),
+                            _ if trimmed.eq_ignore_ascii_case("false") => Value::Bool(false),
+                            _ => return Err(ResolveError::new(text.clone(), "not a boolean")),
+                        };
+                    } else if INTEGER_FIELDS.contains(&name.as_str()) {
+                        let number: i64 = trimmed
+                            .parse()
+                            .map_err(|_| ResolveError::new(text.clone(), "not a number"))?;
+                        *field = Value::from(number);
+                    }
+                } else {
+                    retype(field)?;
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                retype(item)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 /// An EFS volume of a task (`EcsEfsVolume`).
@@ -586,6 +644,52 @@ mod tests {
         let extension = EcsSpecExtension::of(&ProxySpec::new("other"));
         assert!(extension.task_role.is_none());
         assert!(extension.efs_volumes.is_empty());
+    }
+
+    #[test]
+    fn evaluates_the_expressions_of_the_ecs_fields() {
+        struct UserIdResolver;
+        impl SpecResolver for UserIdResolver {
+            fn string(&self, raw: &str) -> Result<String, ResolveError> {
+                Ok(raw
+                    .replace("#{proxy.userId}", "jack")
+                    .replace("#{true}", "true"))
+            }
+            fn integer(&self, raw: &str) -> Result<i64, ResolveError> {
+                raw.parse()
+                    .map_err(|_| ResolveError::new(raw, "not a number"))
+            }
+            fn boolean(&self, raw: &str) -> Result<bool, ResolveError> {
+                Ok(raw == "true")
+            }
+        }
+
+        let mut spec = ProxySpec::new("01_hello");
+        spec.spec_extensions.insert(
+            "ecs",
+            serde_json::json!({
+                "task-role": "arn:aws:iam::123:role/#{proxy.userId}",
+                "enable-execute-command": "#{true}",
+                "ephemeral-storage-size": "30",
+                "efs-volumes": [{"name": "home", "file-system-id": "fs-1", "root-directory": "/home/#{proxy.userId}", "enable-iam": "#{true}"}],
+                "bind-volumes": ["data-#{proxy.userId}"],
+            }),
+        );
+
+        let resolved = spec.first_resolve(&UserIdResolver).unwrap();
+        let extension = EcsSpecExtension::of(&resolved);
+        assert_eq!(
+            extension.task_role.as_deref(),
+            Some("arn:aws:iam::123:role/jack")
+        );
+        assert_eq!(extension.enable_execute_command, Some(true));
+        assert_eq!(extension.ephemeral_storage_size, Some(30));
+        assert_eq!(
+            extension.efs_volumes[0].root_directory.as_deref(),
+            Some("/home/jack")
+        );
+        assert_eq!(extension.efs_volumes[0].enable_iam, Some(true));
+        assert_eq!(extension.bind_volumes, vec!["data-jack"]);
     }
 
     #[test]

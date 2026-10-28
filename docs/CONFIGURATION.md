@@ -34,6 +34,7 @@ Property names are matched leniently: `port-range-start`, `portRangeStart` and `
 | `management.endpoints.web.exposure.include` | value | unsupported: health, prometheus and recyclable are always exposed |
 | `management.health.ldap.enabled` | value | unsupported: the health endpoint does not check the directory |
 | `management.health.redis.enabled` | value | unsupported: the health endpoint does not check Redis |
+| `management.server.address` | value | supported |
 | `management.server.port` | value | supported |
 | `proxy.admin-groups` | list of values | supported |
 | `proxy.admin-users` | list of values | supported |
@@ -345,9 +346,9 @@ Property names are matched leniently: `port-range-start`, `portRangeStart` and `
 | `spring.data.redis.host` | value | supported |
 | `spring.data.redis.password` | value | supported |
 | `spring.data.redis.port` | value | supported |
-| `spring.data.redis.sentinel.master` | value | supported |
-| `spring.data.redis.sentinel.nodes` | list of values | supported |
-| `spring.data.redis.sentinel.password` | value | supported |
+| `spring.data.redis.sentinel.master` | value | unsupported: Redis Sentinel is not implemented; the server refuses to start |
+| `spring.data.redis.sentinel.nodes` | list of values | unsupported: Redis Sentinel is not implemented; the server refuses to start |
+| `spring.data.redis.sentinel.password` | value | unsupported: Redis Sentinel is not implemented; the server refuses to start |
 | `spring.data.redis.username` | value | supported |
 | `spring.mail.host` | value | supported |
 | `spring.mail.password` | value | supported |

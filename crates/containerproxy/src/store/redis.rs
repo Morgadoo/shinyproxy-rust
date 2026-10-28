@@ -68,15 +68,17 @@ impl RedisStores {
         realm_id: Option<&str>,
         registry: std::sync::Arc<RuntimeValueRegistry>,
     ) -> Result<Self, String> {
+        // the URL carries the password, so only the redacted form is ever shown
+        let shown = Self::redacted(url);
         let client = redis::Client::open(url)
-            .map_err(|error| format!("cannot use the Redis URL '{url}': {error}"))?;
+            .map_err(|error| format!("cannot use the Redis URL '{shown}': {error}"))?;
         // fail at startup when Redis is not reachable, as the Java implementation does
         let mut connection = client
             .get_connection()
-            .map_err(|error| format!("cannot connect to Redis ({url}): {error}"))?;
+            .map_err(|error| format!("cannot connect to Redis ({shown}): {error}"))?;
         redis::cmd("PING")
             .query::<String>(&mut connection)
-            .map_err(|error| format!("cannot talk to Redis ({url}): {error}"))?;
+            .map_err(|error| format!("cannot talk to Redis ({shown}): {error}"))?;
 
         Ok(RedisStores {
             client,
@@ -85,8 +87,28 @@ impl RedisStores {
         })
     }
 
+    /// A Redis URL without its credentials, for logs and error messages.
+    pub fn redacted(url: &str) -> String {
+        match url.split_once("://") {
+            Some((scheme, rest)) => match rest.split_once('@') {
+                Some((_, address)) => format!("{scheme}://***@{address}"),
+                None => url.to_string(),
+            },
+            None => url.to_string(),
+        }
+    }
+
     /// The URL of a `spring.data.redis.*` configuration.
+    ///
+    /// The credentials are percent-encoded, so that a password with `@`, `/`, `#` or `?` neither breaks the
+    /// URL nor ends up in the host part of an error message.
     pub fn url_of(settings: &crate::config::Settings) -> String {
+        const USERINFO: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
+            .remove(b'-')
+            .remove(b'.')
+            .remove(b'_')
+            .remove(b'~');
+        let encode = |text: &str| percent_encoding::utf8_percent_encode(text, USERINFO).to_string();
         let redis = &settings.spring.data.redis;
         let host = redis
             .host
@@ -94,8 +116,8 @@ impl RedisStores {
             .unwrap_or_else(|| "localhost".to_string());
         let port = redis.port.map(|value| value.0).unwrap_or(6379);
         let database = redis.database.map(|value| value.0).unwrap_or(0);
-        let password = redis.password.clone().unwrap_or_default();
-        let username = redis.username.clone().unwrap_or_default();
+        let password = encode(redis.password.as_deref().unwrap_or_default());
+        let username = encode(redis.username.as_deref().unwrap_or_default());
 
         let credentials = match (username.is_empty(), password.is_empty()) {
             (true, true) => String::new(),
@@ -491,11 +513,14 @@ impl tower_sessions::SessionStore for RedisSessionStore {
         let document = serde_json::to_string(record)
             .map_err(|error| tower_sessions::session_store::Error::Encode(error.to_string()))?;
         let mut connection = self.connection().await?;
-        let _: () = redis::cmd("SET")
+        // `XX`: only a session that still exists is updated. A request that loaded the session before
+        // the user logged out must not bring it back when it finishes (new sessions use `create`).
+        let _: Option<String> = redis::cmd("SET")
             .arg(self.key(&record.id))
             .arg(document)
             .arg("EXAT")
             .arg(record.expiry_date.unix_timestamp())
+            .arg("XX")
             .query_async(&mut connection)
             .await
             .map_err(|error| tower_sessions::session_store::Error::Backend(error.to_string()))?;
@@ -1202,6 +1227,28 @@ mod tests {
         assert_eq!(
             RedisStores::url_of(&settings),
             "redis://sp:secret@redis:6379/0"
+        );
+
+        // special characters are encoded, and the credentials never reach a log line
+        let settings: Settings = serde_yaml_ng::from_str(
+            "spring:\n  data:\n    redis:\n      host: redis\n      password: 'p@ss/w#rd?'\n",
+        )
+        .expect("settings");
+        let url = RedisStores::url_of(&settings);
+        assert_eq!(url, "redis://:p%40ss%2Fw%23rd%3F@redis:6379/0");
+        assert_eq!(
+            redis::Client::open(url.as_str())
+                .unwrap()
+                .get_connection_info()
+                .redis
+                .password
+                .as_deref(),
+            Some("p@ss/w#rd?")
+        );
+        assert_eq!(RedisStores::redacted(&url), "redis://***@redis:6379/0");
+        assert_eq!(
+            RedisStores::redacted("redis://localhost:6379/0"),
+            "redis://localhost:6379/0"
         );
     }
 

@@ -109,7 +109,7 @@ fn docker_configuration() {
         settings.proxy.admin_groups.values(),
         ["scientists", "admins"]
     );
-    assert_eq!(settings.proxy.container_wait_timeout_ms(), 20000);
+    assert_eq!(settings.proxy.container_wait_time_ms(), 20000);
 
     // spec details are interpreted by the ShinyProxy spec provider (phase P2); at this point they are
     // available as raw values.

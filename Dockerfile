@@ -38,7 +38,7 @@ ARG GIT_COMMIT=unknown
 ENV SHINYPROXY_GIT_COMMIT=$GIT_COMMIT
 # the layer above left stale fingerprints for the workspace crates
 RUN touch crates/*/src/lib.rs crates/shinyproxy/src/main.rs \
-    && cargo build --release --bin shinyproxy \
+    && cargo build --release --locked --bin shinyproxy \
     && strip target/release/shinyproxy || true
 
 FROM debian:bookworm-slim AS runtime

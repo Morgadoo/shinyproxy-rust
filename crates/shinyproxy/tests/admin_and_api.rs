@@ -478,7 +478,7 @@ async fn app_direct_starts_the_app_and_proxies_to_it() {
 async fn openapi_is_disabled_by_default_and_can_be_enabled() {
     // disabled by default, exactly like springdoc in the Java implementation
     let instance = TestInstance::start(CONFIG).await;
-    let client = instance.client();
+    let client = instance.login("jack", "password").await;
     for path in ["/v3/api-docs", "/swagger-ui/index.html"] {
         let response = client
             .get(instance.url(path))
@@ -508,9 +508,19 @@ springdoc:
 "##,
     )
     .await;
-    let client = instance.client();
+    // the description needs a login, as in Java: springdoc's endpoints are not in the permit list of
+    // `WebSecurityConfig`, so `anyRequest().fullyAuthenticated()` applies to them
+    for path in ["/v3/api-docs", "/swagger-ui/index.html"] {
+        let response = instance
+            .client()
+            .get(instance.url(path))
+            .send()
+            .await
+            .expect("request");
+        assert_eq!(response.status(), 302, "{path}");
+    }
+    let client = instance.login("jack", "password").await;
 
-    // the description is public, as springdoc's endpoints are
     let document: serde_json::Value = client
         .get(instance.url("/v3/api-docs"))
         .send()

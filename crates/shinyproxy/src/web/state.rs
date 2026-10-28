@@ -195,6 +195,17 @@ impl AppState {
         // `proxy.store-mode: Redis` shares the state with the other servers of the realm, and
         // `spring.session.store-type: redis` shares the sessions; both need a connection
         let redis_sessions_wanted = settings.spring.session.is_redis();
+        // Sentinel is not implemented: connecting to `spring.data.redis.host` (localhost by default)
+        // instead would send the password to the wrong server, so the server refuses to start
+        if settings.spring.data.redis.sentinel.master.is_some()
+            && (redis_sessions_wanted || settings.proxy.store_mode().eq_ignore_ascii_case("redis"))
+        {
+            return Err(StateError::Store(
+                "Redis Sentinel (spring.data.redis.sentinel.*) is not supported by this \
+                 implementation; configure spring.data.redis.host/port of the Redis master instead"
+                    .to_string(),
+            ));
+        }
         let mut port_registry: Option<Box<dyn containerproxy::backend::ports::PortRegistry>> = None;
         let mut redis_stores: Option<RedisStores> = None;
         let (store, heartbeats): (Arc<dyn ProxyStore>, Arc<dyn HeartbeatStore>) =
@@ -206,7 +217,7 @@ impl AppState {
                     runtime_values.clone(),
                 )
                 .map_err(StateError::Store)?;
-                tracing::info!("Using the Redis store ({url})");
+                tracing::info!("Using the Redis store ({})", RedisStores::redacted(&url));
                 // the host ports are allocated through Redis as well, so that two servers never publish
                 // the same port
                 port_registry = Some(Box::new(containerproxy::store::RedisPortRegistry::new(
@@ -227,7 +238,10 @@ impl AppState {
                         runtime_values.clone(),
                     )
                     .map_err(StateError::Store)?;
-                    tracing::info!("Using Redis for the sessions ({url})");
+                    tracing::info!(
+                        "Using Redis for the sessions ({})",
+                        RedisStores::redacted(&url)
+                    );
                     redis_stores = Some(stores);
                 }
                 (

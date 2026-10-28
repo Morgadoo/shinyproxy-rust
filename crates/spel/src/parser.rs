@@ -32,6 +32,7 @@ pub fn parse(expression: &str) -> Result<Node, SpelError> {
         expression,
         tokens,
         position: 0,
+        depth: 0,
     };
     let node = parser.parse_expression(0)?;
     if parser.position < parser.tokens.len() {
@@ -45,10 +46,17 @@ pub fn parse(expression: &str) -> Result<Node, SpelError> {
     Ok(node)
 }
 
+/// How deeply expressions may nest (parentheses, unary operators, arguments, collections). Every level
+/// is a few recursive calls of the parser, so without a limit a long `-----...1` overflows the stack and
+/// aborts the process. The evaluator has the same limit (`MAX_DEPTH`), so nothing it accepts is refused.
+const MAX_NESTING: usize = 64;
+
 struct Parser<'a> {
     expression: &'a str,
     tokens: Vec<SpannedToken>,
     position: usize,
+    /// Current nesting, see [`MAX_NESTING`].
+    depth: usize,
 }
 
 impl<'a> Parser<'a> {
@@ -175,7 +183,22 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Every recursion of the parser passes through here, so this is where the nesting is limited.
     fn parse_unary(&mut self) -> Result<Node, SpelError> {
+        if self.depth >= MAX_NESTING {
+            return Err(SpelError::syntax(
+                self.expression,
+                self.peek_position(),
+                format!("the expression is nested more than {MAX_NESTING} levels deep"),
+            ));
+        }
+        self.depth += 1;
+        let node = self.parse_unary_operand();
+        self.depth -= 1;
+        node
+    }
+
+    fn parse_unary_operand(&mut self) -> Result<Node, SpelError> {
         if self.eat_symbol("!") {
             let operand = self.parse_unary()?;
             return Ok(Node::Unary {
@@ -446,6 +469,16 @@ fn describe(token: Option<&Token>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refuses_deeply_nested_expressions_instead_of_overflowing_the_stack() {
+        let unary = format!("{}1", "-".repeat(200_000));
+        assert!(parse(&unary).unwrap_err().to_string().contains("nested"));
+        let parentheses = format!("{}1{}", "(".repeat(100_000), ")".repeat(100_000));
+        assert!(parse(&parentheses).is_err());
+        // reasonable nesting is fine
+        assert!(parse(&format!("{}1{}", "(".repeat(50), ")".repeat(50))).is_ok());
+    }
 
     #[test]
     fn parses_property_navigation() {

@@ -28,6 +28,9 @@
 //!   lifetimes;
 //! * `final_resolve` runs when the runtime values of the proxy are known: environment variables,
 //!   labels, resource names and HTTP headers (which may refer to those runtime values).
+//!
+//! The backend extensions are resolved in the same phases as in Java: the ECS fields in the first phase,
+//! the Kubernetes patches and manifests in the final one.
 
 use std::collections::BTreeMap;
 
@@ -289,7 +292,12 @@ impl SpecExtensions {
     /// Deserializes an extension into its type, returning the default when it is absent.
     pub fn get<T: serde::de::DeserializeOwned + Default>(&self, name: &str) -> T {
         match self.extensions.get(name) {
-            Some(value) => serde_json::from_value(value.clone()).unwrap_or_default(),
+            Some(value) => serde_json::from_value(value.clone()).unwrap_or_else(|error| {
+                // the defaults drop *every* field of the extension (e.g. all the pod patches), which
+                // must not go unnoticed
+                tracing::error!("Ignoring the {name} fields of an app, they are invalid: {error}");
+                T::default()
+            }),
             None => T::default(),
         }
     }
@@ -297,6 +305,22 @@ impl SpecExtensions {
     /// Names of the stored extensions.
     pub fn names(&self) -> impl Iterator<Item = &String> {
         self.extensions.keys()
+    }
+
+    /// A copy in which the extension `name` (when present) is replaced by the result of `resolve`, used by
+    /// the resolution phases to evaluate the expressions of the extensions they own.
+    pub fn resolve_extension(
+        &self,
+        name: &str,
+        resolve: impl Fn(&Value) -> Result<Value, ResolveError>,
+    ) -> Result<Self, ResolveError> {
+        let mut resolved = self.clone();
+        if let Some(value) = self.extensions.get(name) {
+            resolved
+                .extensions
+                .insert(name.to_string(), resolve(value)?);
+        }
+        Ok(resolved)
     }
 }
 
@@ -460,6 +484,12 @@ impl ProxySpec {
             heartbeat_timeout: self.heartbeat_timeout.resolve(resolver)?,
             max_lifetime: self.max_lifetime.resolve(resolver)?,
             container_specs,
+            // `EcsSpecExtension.firstResolve`
+            spec_extensions: self
+                .spec_extensions
+                .resolve_extension(crate::backend::ecs::NAME, |extension| {
+                    crate::backend::ecs::resolve_extension(extension, resolver)
+                })?,
             ..self.clone()
         })
     }
@@ -473,6 +503,12 @@ impl ProxySpec {
         Ok(ProxySpec {
             http_headers: self.http_headers.resolve(resolver)?,
             container_specs,
+            // `KubernetesSpecExtension.finalResolve`: the patches and manifests may use runtime values
+            spec_extensions: self
+                .spec_extensions
+                .resolve_extension(crate::backend::kubernetes::NAME, |extension| {
+                    crate::backend::kubernetes::resolve_extension(extension, resolver)
+                })?,
             ..self.clone()
         })
     }

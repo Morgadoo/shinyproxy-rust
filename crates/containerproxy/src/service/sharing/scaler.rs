@@ -703,7 +703,7 @@ impl ProxySharingScaler {
     /// Waits until the container of a delegate proxy answers.
     async fn wait_until_reachable(&self, proxy: &Proxy) -> bool {
         let timeout =
-            Duration::from_millis(self.settings.proxy.container_wait_timeout_ms().max(1) as u64);
+            Duration::from_millis(self.settings.proxy.container_wait_time_ms().max(1) as u64);
         crate::service::proxy_service::wait_until_reachable(proxy, timeout).await
     }
 }

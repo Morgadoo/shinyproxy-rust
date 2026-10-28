@@ -22,6 +22,7 @@
 //! The web layer: assets, templates, sessions, security and the shared UI pages.
 
 pub mod assets;
+pub mod firewall;
 pub mod security;
 pub mod session;
 pub mod templates;

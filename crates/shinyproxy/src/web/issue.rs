@@ -214,6 +214,7 @@ pub fn build_report(
 async fn send_report(state: &AppState, report: &IssueReport) -> Result<(), String> {
     use lettre::message::header::ContentType;
     use lettre::transport::smtp::authentication::Credentials;
+    use lettre::transport::smtp::client::Tls;
     use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 
     let mail = &state.settings.spring.mail;
@@ -239,8 +240,18 @@ async fn send_report(state: &AppState, report: &IssueReport) -> Result<(), Strin
         .body(report.body.clone())
         .map_err(|error| error.to_string())?;
 
-    let mut builder = AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(host).port(port);
+    let tls = mail_tls(&mail.properties, &host)?;
+    let encrypted = !matches!(tls, Tls::None);
+    let mut builder = AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&host)
+        .port(port)
+        .tls(tls);
     if let (Some(username), Some(password)) = (mail.username.clone(), mail.password.clone()) {
+        if !encrypted {
+            tracing::warn!(
+                "Sending the SMTP password to {host} without TLS; set \
+                 spring.mail.properties.mail.smtp.starttls.required (or mail.smtp.ssl.enable) to protect it"
+            );
+        }
         builder = builder.credentials(Credentials::new(username, password));
     }
     let transport = builder.build();
@@ -249,6 +260,61 @@ async fn send_report(state: &AppState, report: &IssueReport) -> Result<(), Strin
         .await
         .map(|_| ())
         .map_err(|error| error.to_string())
+}
+
+/// The TLS mode of the JavaMail properties of `spring.mail.properties` (which Spring hands to JavaMail):
+/// `mail.smtp.ssl.enable` is TLS from the start (port 465), `mail.smtp.starttls.required` makes STARTTLS
+/// mandatory and `mail.smtp.starttls.enable` uses it when the server offers it. Without them the mail is
+/// sent in plain text, as JavaMail does.
+fn mail_tls(
+    properties: &std::collections::BTreeMap<String, serde_json::Value>,
+    host: &str,
+) -> Result<lettre::transport::smtp::client::Tls, String> {
+    use lettre::transport::smtp::client::{Tls, TlsParameters};
+
+    let mut flat = std::collections::BTreeMap::new();
+    flatten_properties("", &serde_json::json!(properties), &mut flat);
+    let enabled = |key: &str| {
+        flat.get(key)
+            .is_some_and(|value| value.trim().eq_ignore_ascii_case("true"))
+    };
+    let parameters = || TlsParameters::new(host.to_string()).map_err(|error| error.to_string());
+
+    Ok(if enabled("mail.smtp.ssl.enable") {
+        Tls::Wrapper(parameters()?)
+    } else if enabled("mail.smtp.starttls.required") {
+        Tls::Required(parameters()?)
+    } else if enabled("mail.smtp.starttls.enable") {
+        Tls::Opportunistic(parameters()?)
+    } else {
+        Tls::None
+    })
+}
+
+/// Flattens nested properties (`mail: {smtp: {auth: true}}`) into dotted keys (`mail.smtp.auth`).
+fn flatten_properties(
+    prefix: &str,
+    value: &serde_json::Value,
+    flat: &mut std::collections::BTreeMap<String, String>,
+) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, value) in map {
+                let key = if prefix.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{prefix}.{key}")
+                };
+                flatten_properties(&key, value, flat);
+            }
+        }
+        serde_json::Value::String(text) => {
+            flat.insert(prefix.to_string(), text.clone());
+        }
+        other => {
+            flat.insert(prefix.to_string(), other.to_string());
+        }
+    }
 }
 
 fn success() -> Response {
@@ -278,6 +344,47 @@ fn forbidden() -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_the_tls_mode_of_the_javamail_properties() {
+        use lettre::transport::smtp::client::Tls;
+        let properties = |yaml: &str| -> std::collections::BTreeMap<String, serde_json::Value> {
+            serde_yaml_ng::from_str(yaml).expect("properties")
+        };
+
+        assert!(matches!(
+            mail_tls(&properties("{}"), "smtp.example.com").unwrap(),
+            Tls::None
+        ));
+        // nested, as YAML writes it
+        assert!(matches!(
+            mail_tls(
+                &properties(
+                    "mail:\n  smtp:\n    starttls:\n      enable: true\n      required: true\n"
+                ),
+                "smtp.example.com"
+            )
+            .unwrap(),
+            Tls::Required(_)
+        ));
+        // flat, as an environment variable or `--spring.mail.properties.mail.smtp...` gives it
+        assert!(matches!(
+            mail_tls(
+                &properties("mail.smtp.starttls.enable: 'true'\n"),
+                "smtp.example.com"
+            )
+            .unwrap(),
+            Tls::Opportunistic(_)
+        ));
+        assert!(matches!(
+            mail_tls(
+                &properties("mail.smtp.ssl.enable: true\n"),
+                "smtp.example.com"
+            )
+            .unwrap(),
+            Tls::Wrapper(_)
+        ));
+    }
     use containerproxy::config::LoadOptions;
     use containerproxy::model::proxy::{Proxy, ProxyStatus};
     use containerproxy::model::runtime_value::RuntimeValue;

@@ -155,9 +155,144 @@ pub fn same_site(value: &str) -> tower_sessions::cookie::SameSite {
     }
 }
 
+/// In-memory sessions that are removed once they expired.
+///
+/// `tower_sessions::MemoryStore` only *hides* an expired session; it never removes it. A session is
+/// stored for every request without a cookie (with the requested URL for a page), so a scanner or a
+/// script would make the memory grow until the server is killed. This store removes the expired sessions
+/// at most every [`MemorySessionStore::PURGE_INTERVAL`], when sessions are created.
+#[derive(Debug, Clone, Default)]
+pub struct MemorySessionStore {
+    sessions: std::sync::Arc<
+        std::sync::Mutex<
+            std::collections::HashMap<tower_sessions::session::Id, tower_sessions::session::Record>,
+        >,
+    >,
+    last_purge: std::sync::Arc<std::sync::Mutex<Option<std::time::Instant>>>,
+}
+
+impl MemorySessionStore {
+    /// How often the expired sessions are removed.
+    pub const PURGE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+
+    /// Number of stored sessions, including expired ones that were not removed yet.
+    pub fn len(&self) -> usize {
+        self.sessions.lock().expect("session store lock").len()
+    }
+
+    /// Whether no session is stored.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Removes the expired sessions.
+    pub fn purge(&self) {
+        let now = time::OffsetDateTime::now_utc();
+        self.sessions
+            .lock()
+            .expect("session store lock")
+            .retain(|_, record| record.expiry_date > now);
+    }
+
+    fn purge_when_due(&self) {
+        let mut last_purge = self.last_purge.lock().expect("session store lock");
+        if last_purge.is_some_and(|last| last.elapsed() < Self::PURGE_INTERVAL) {
+            return;
+        }
+        *last_purge = Some(std::time::Instant::now());
+        drop(last_purge);
+        self.purge();
+    }
+}
+
+#[async_trait::async_trait]
+impl tower_sessions::SessionStore for MemorySessionStore {
+    async fn create(
+        &self,
+        record: &mut tower_sessions::session::Record,
+    ) -> tower_sessions::session_store::Result<()> {
+        self.purge_when_due();
+        let mut sessions = self.sessions.lock().expect("session store lock");
+        while sessions.contains_key(&record.id) {
+            record.id = tower_sessions::session::Id::default();
+        }
+        sessions.insert(record.id, record.clone());
+        Ok(())
+    }
+
+    async fn save(
+        &self,
+        record: &tower_sessions::session::Record,
+    ) -> tower_sessions::session_store::Result<()> {
+        // only a session that still exists is updated: a request that loaded the session before the user
+        // logged out must not bring it back when it finishes (new sessions use `create`)
+        if let Some(stored) = self
+            .sessions
+            .lock()
+            .expect("session store lock")
+            .get_mut(&record.id)
+        {
+            *stored = record.clone();
+        }
+        Ok(())
+    }
+
+    async fn load(
+        &self,
+        id: &tower_sessions::session::Id,
+    ) -> tower_sessions::session_store::Result<Option<tower_sessions::session::Record>> {
+        let now = time::OffsetDateTime::now_utc();
+        Ok(self
+            .sessions
+            .lock()
+            .expect("session store lock")
+            .get(id)
+            .filter(|record| record.expiry_date > now)
+            .cloned())
+    }
+
+    async fn delete(
+        &self,
+        id: &tower_sessions::session::Id,
+    ) -> tower_sessions::session_store::Result<()> {
+        self.sessions.lock().expect("session store lock").remove(id);
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn the_memory_store_removes_expired_sessions() {
+        use tower_sessions::session::{Id, Record};
+        use tower_sessions::SessionStore;
+
+        let store = MemorySessionStore::default();
+        let record = |minutes: i64| Record {
+            id: Id::default(),
+            data: Default::default(),
+            expiry_date: time::OffsetDateTime::now_utc() + time::Duration::minutes(minutes),
+        };
+        let mut expired = record(-1);
+        let mut active = record(30);
+        store.create(&mut expired).await.unwrap();
+        store.create(&mut active).await.unwrap();
+        assert!(store.load(&expired.id).await.unwrap().is_none());
+        assert!(store.load(&active.id).await.unwrap().is_some());
+        assert_eq!(store.len(), 2);
+
+        store.purge();
+        assert_eq!(store.len(), 1);
+        assert!(store.load(&active.id).await.unwrap().is_some());
+        store.delete(&active.id).await.unwrap();
+        assert!(store.is_empty());
+
+        // a deleted session (logged out) is not brought back by a request that finishes later
+        store.save(&active).await.unwrap();
+        assert!(store.load(&active.id).await.unwrap().is_none());
+    }
 
     #[test]
     fn cookie_names_match_the_java_implementation() {

@@ -36,8 +36,10 @@ use super::flex::{FlexBool, FlexI64, FlexString, StringList};
 pub const DEFAULT_HEARTBEAT_RATE_MS: i64 = 10_000;
 /// Default heartbeat timeout in milliseconds (`RuntimeValueService.DEFAULT_TIMEOUT`).
 pub const DEFAULT_HEARTBEAT_TIMEOUT_MS: i64 = 60_000;
-/// Default time to wait for a container to become reachable, in milliseconds.
+/// Default timeout of one request that checks whether a container is reachable, in milliseconds.
 pub const DEFAULT_CONTAINER_WAIT_TIMEOUT_MS: i64 = 5_000;
+/// Default time a container may take to become reachable, in milliseconds (`ShinyProxyTestStrategy`).
+pub const DEFAULT_CONTAINER_WAIT_TIME_MS: i64 = 20_000;
 /// Default port ShinyProxy listens on.
 pub const DEFAULT_PORT: u16 = 8080;
 /// Default address ShinyProxy binds to.
@@ -211,12 +213,20 @@ impl ProxySettings {
             .unwrap_or(DEFAULT_HEARTBEAT_TIMEOUT_MS)
     }
 
-    /// Time to wait for a container to respond, in milliseconds (`proxy.container-wait-timeout`).
+    /// Timeout of one request that checks whether a container responds, in milliseconds
+    /// (`proxy.container-wait-timeout`).
     pub fn container_wait_timeout_ms(&self) -> i64 {
         self.container_wait_timeout
-            .or(self.container_wait_time)
             .map(|value| value.0)
             .unwrap_or(DEFAULT_CONTAINER_WAIT_TIMEOUT_MS)
+    }
+
+    /// How long a container may take to become reachable in total, in milliseconds
+    /// (`proxy.container-wait-time`, 20 seconds by default as in `ShinyProxyTestStrategy`).
+    pub fn container_wait_time_ms(&self) -> i64 {
+        self.container_wait_time
+            .map(|value| value.0)
+            .unwrap_or(DEFAULT_CONTAINER_WAIT_TIME_MS)
     }
 
     /// Maximum number of proxies across all users (`proxy.max-total-instances`, default -1 = unlimited).
@@ -915,6 +925,15 @@ impl ManagementSettings {
             .and_then(|value| u16::try_from(value).ok())
             .unwrap_or(DEFAULT_MANAGEMENT_PORT)
     }
+
+    /// Address of the management server (`management.server.address`), when it is configured.
+    pub fn address(&self) -> Option<&str> {
+        self.server
+            .address
+            .as_deref()
+            .map(str::trim)
+            .filter(|address| !address.is_empty())
+    }
 }
 
 /// `management.server.*`
@@ -922,6 +941,8 @@ impl ManagementSettings {
 #[serde(default, rename_all = "kebab-case")]
 pub struct ManagementServerSettings {
     pub port: Option<FlexI64>,
+    /// Address the management server listens on (`proxy.bind-address` when absent).
+    pub address: Option<String>,
 }
 
 /// `management.endpoints.*`
@@ -1048,6 +1069,7 @@ mod tests {
         assert_eq!(settings.proxy.heartbeat_rate_ms(), 10_000);
         assert_eq!(settings.proxy.heartbeat_timeout_ms(), 60_000);
         assert_eq!(settings.proxy.container_wait_timeout_ms(), 5_000);
+        assert_eq!(settings.proxy.container_wait_time_ms(), 20_000);
         assert_eq!(settings.proxy.max_total_instances(), -1);
         assert!(settings.proxy.stop_proxies_on_shutdown());
         assert!(settings.proxy.username_case_sensitive());

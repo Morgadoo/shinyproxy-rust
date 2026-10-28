@@ -170,8 +170,66 @@ pub fn router(state: Arc<AppState>) -> Router {
             state.clone(),
             app_recovery_filter,
         ))
+        // the first check of every request, as Spring's firewall is
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            request_firewall,
+        ))
         .with_state(state)
 }
+
+/// Refuses the requests Spring Security's `StrictHttpFirewall` refuses (encoded slashes, `..` segments,
+/// ...), with the answer of the Java `ErrorController` for a `RequestRejectedException`.
+async fn request_firewall(
+    State(state): State<Arc<AppState>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let Some(reason) = containerproxy::web::firewall::rejection(request.uri().path()) else {
+        return next.run(request).await;
+    };
+    tracing::debug!(
+        "Request rejected: {reason} [path: {}]",
+        request.uri().path()
+    );
+
+    let wants_html = request
+        .headers()
+        .get(header::ACCEPT)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|accept| accept.contains("text/html"));
+    if !wants_html {
+        return (
+            StatusCode::BAD_REQUEST,
+            axum::Json(serde_json::json!({"status": "fail", "data": "bad request"})),
+        )
+            .into_response();
+    }
+    let mut model = serde_json::Map::new();
+    model.insert("title".into(), serde_json::json!(state.resolve_title(None)));
+    model.insert("shortError".into(), serde_json::json!("Bad Request"));
+    model.insert(
+        "description".into(),
+        serde_json::json!("You are not allowed to send this request."),
+    );
+    model.insert(
+        "mainPage".into(),
+        serde_json::json!(state.context_path_with_slash()),
+    );
+    model.insert(
+        "contextPath".into(),
+        serde_json::json!(state.context_path_with_slash()),
+    );
+    (StatusCode::BAD_REQUEST, render(&state, "error.html", model)).into_response()
+}
+
+/// Paths `CustomHeaderAuthenticationFilter` does not authenticate (the logout page and the styles).
+fn is_custom_header_exempt(path: &str) -> bool {
+    path == "/logout-success" || path.starts_with("/webjars/") || path.starts_with("/css/")
+}
+
+/// Longest URL that is remembered to return to after logging in.
+const MAX_SAVED_URL: usize = 2048;
 
 /// Answers 503 with `startup.html` while app recovery is running (`AppRecoveryFilter`).
 ///
@@ -229,9 +287,12 @@ async fn authorize(
 
     let mut data = SessionData::load(&session).await;
 
-    // the `none` backend gives every session an anonymous user
+    // the `none` backend gives every session its own anonymous user, from a random id stored in the session
+    // (`NoAuthenticationBackend` uses a random UUID). It must not be derived from the session id: a new
+    // session has no id until it is saved, so every new visitor would become the same user and see, use
+    // and stop the apps of all the others.
     if data.user.is_none() && !state.auth.has_authorization() {
-        if let Some(user) = state.auth.anonymous_user(&session::session_id(&session)) {
+        if let Some(user) = state.auth.anonymous_user(&uuid::Uuid::new_v4().to_string()) {
             data.user = Some(user);
             data.store(&session).await;
         }
@@ -254,28 +315,42 @@ async fn authorize(
     }
 
     // header based authentication (`custom-header`): the reverse proxy in front of ShinyProxy decides who
-    // the user is, so every request is checked (and a changed header replaces the user of the session)
-    if !state.auth.uses_login_form() && state.auth.has_authorization() {
-        let from_headers = state.auth.user_from_headers(request.headers());
-        if let Some(user) = from_headers {
-            let changed = data
-                .user
-                .as_ref()
-                .map(|existing| existing != &user)
-                .unwrap_or(true);
-            if changed {
-                if data.user.is_none() {
-                    tracing::info!("User logged in [user: {}]", user.id);
-                    state
-                        .proxies
-                        .events()
-                        .publish(containerproxy::events::Event::UserLoggedIn {
-                            user_id: user.id.clone(),
-                        });
+    // the user is on every request, like `CustomHeaderAuthenticationFilter`. A request without the header
+    // is not authenticated (the session cookie alone must not be enough to get past the proxy), and a
+    // header naming somebody else than the user of the session is refused.
+    if state.auth.authenticates_with_headers() && !is_custom_header_exempt(&path) {
+        match state.auth.user_from_headers(request.headers()) {
+            None => {
+                if let Some(existing) = data.user.take() {
+                    tracing::warn!(
+                        "Authentication failed: missing username header [user: {}]",
+                        existing.id
+                    );
                 }
-                data.user = Some(user);
-                data.store(&session).await;
             }
+            Some(user) => match data.user.as_ref() {
+                Some(existing) if existing.id != user.id => {
+                    tracing::warn!(
+                        "Authentication failed: Username in header '{}' does not match existing session '{}'",
+                        user.id,
+                        existing.id
+                    );
+                    data.user = None;
+                }
+                Some(existing) if existing == &user => {}
+                existing => {
+                    if existing.is_none() {
+                        tracing::info!("User logged in [user: {}]", user.id);
+                        state.proxies.events().publish(
+                            containerproxy::events::Event::UserLoggedIn {
+                                user_id: user.id.clone(),
+                            },
+                        );
+                    }
+                    data.user = Some(user);
+                    data.store(&session).await;
+                }
+            },
         }
     }
 
@@ -329,7 +404,9 @@ async fn authorize(
                 // remember where the user wanted to go, like the Java saved-request handling; the
                 // session itself is always created, exactly as Spring does for every request
                 let mut data = data.clone();
-                if is_saveable_request(&request) {
+                // (a long URL is not remembered: anybody can make the server store it, without logging in)
+                if is_saveable_request(&request) && request.uri().to_string().len() <= MAX_SAVED_URL
+                {
                     data.auth_success_url = Some(request.uri().to_string());
                 }
                 data.store(&session).await;
