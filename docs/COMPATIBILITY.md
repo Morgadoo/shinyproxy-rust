@@ -98,11 +98,13 @@ types. Allow-listed static types: `java.lang.System.getenv`, `java.lang.String.v
 | Topic | Behaviour | Status |
 | --- | --- | --- |
 | `/admin/about` | The Java page lists JVM version, JVM arguments and heap sizes. This implementation is a native binary and shows the equivalent rows instead: implementation/compatibility, build (version, rustc, profile), process arguments, resident memory, container backend and authentication backend | 🟨 deliberate deviation |
-| `POST /issue` | Same validation and mail body as Java (incl. per-app recipient/subject). Container log **attachments** land with log collection in P10; until then the log paths are mentioned in the body, which is what Java does when the files do not exist | 🟨 |
-| `DELETE /admin/delegate-proxy` | Answers successfully; there is nothing to remove until container pre-initialization lands in P12 | 🟨 |
+| `POST /issue` | Same validation and mail body as Java (incl. per-app recipient/subject). Container log **attachments** are not added; the log paths are mentioned in the body, which is what Java does when the files do not exist. `spring.mail.properties.mail.smtp.{ssl.enable,starttls.enable,starttls.required}` select TLS as with JavaMail | 🟨 |
+| `DELETE /admin/delegate-proxy` | Marks the pre-initialized containers for removal (see *Pre-initialized containers*) | ✅ |
 | `PUT /api/proxy/{id}/status` with `Pausing`/`Resuming` | Pauses (container stopped, ports released) and resumes (container started, ports reclaimed, targets rebuilt from the stored port mappings) with the Docker backends; other backends answer `fail` with "not supported by this backend", as in Java. Choosing different parameters while resuming arrives with the parameters feature (P9) | 🟨 |
+| `POST /api/proxy/{specId}` | Not implemented: an app cannot be started through the API (the browser flow `POST /app_i/{specId}/{instance}` works). Requests get 405 | ⬜ |
+| HTTP Basic authentication | Not implemented: Java accepts `Authorization: Basic` on every route for the `simple`, `ldap` and `webservice` backends; here API clients need a session cookie or an OAuth2 bearer token (`proxy.oauth2.*`) | ⬜ |
 | `/app_direct[_i]/**` | Starts the app on demand, waits up to 10 minutes and proxies without injecting the iframe script, as in Java | ✅ |
-| OpenAPI (`springdoc.*`) | Disabled by default, as in Java. `/v3/api-docs` serves an OpenAPI 3.0.1 document describing the same endpoints and tags. `springdoc.swagger-ui.enabled` serves a readable HTML overview instead of the interactive Swagger UI (which would add several megabytes of vendored assets for a feature that is off by default) | 🟨 deliberate deviation |
+| OpenAPI (`springdoc.*`) | Disabled by default, as in Java. `/v3/api-docs` serves an OpenAPI 3.0.1 document describing the same endpoints and tags. `springdoc.swagger-ui.enabled` serves a readable HTML overview instead of the interactive Swagger UI (which would add several megabytes of vendored assets for a feature that is off by default). Both need a login, as in Java (they are not in the permit list of `WebSecurityConfig`) | 🟨 deliberate deviation |
 
 ## Container backends
 
@@ -159,7 +161,7 @@ types. Allow-listed static types: `java.lang.System.getenv`, `java.lang.String.v
 
 | Topic | Behaviour | Status |
 | --- | --- | --- |
-| Management server | Served on `management.server.port` (9090 by default), like Spring Boot; the health, prometheus and recyclable endpoints are also exposed on the public port, as `management.endpoints.web.exposure.include` of ShinyProxy does | ✅ |
+| Management server | Served on `management.server.port` (9090 by default) and `management.server.address` (`proxy.bind-address` when absent), like Spring Boot; the actuator endpoints are **not** served on the public port | ✅ |
 | `/actuator/health[/liveness,/readiness]` | Same JSON; readiness is `DOWN` (503) while app recovery runs, with the `appRecovery` component | ✅ |
 | `/actuator/recyclable` | `{"isRecyclable": ..., "activeConnections": n}` with the number of open WebSocket tunnels, and false while a proxy action is in progress | ✅ |
 | `/actuator/prometheus` | Same metric names, label keys and values as the Micrometer registry: `appStarts`/`appStops`/`appCrashes`/`startFailed`/`userLogins`/`userLogouts`/`authFailed` counters (`_total`), `absolute_apps_running` and `appInfo` gauges (with the Java status values 1/10/20/30/40/50/100), `startupTime`/`usageTime`/`imagePullTime`/`containerScheduleTime`/`containerStartupTime`/`applicationStartupTime` summaries, the `shinyproxy_instance`/`shinyproxy_realm` labels and the `proxy.usage-stats-micrometer-prefix` prefix | ✅ |
@@ -218,10 +220,25 @@ types. Allow-listed static types: `java.lang.System.getenv`, `java.lang.String.v
 | Redis heartbeat store | `shinyproxy_{realmId}__heartbeats`, so a heartbeat that arrives at one server is seen by all of them | ✅ |
 | Pre-initialized containers | `minimum-seats-available`, `seats-per-container`, `allow-container-re-use`, `scale-down-delay` and `proxy.seat-wait-time`: the scaler keeps containers running (only on the leader), users claim a seat and are served under the public path of their container (`/api/route/{id}/`), released seats are re-used or the container is marked for removal, `max-total-instances` caps the seats, and `DELETE /admin/delegate-proxy[?id=&specId=]` marks containers for removal. `seats_unclaimed`, `seats_claimed` and `seats_creating` are exposed as metrics. With `store-mode: Redis` the seats and the containers are shared by the servers of a realm (`shinyproxy_{realm}__seats_{specId}`, `..__unclaimed_seat_ids_{specId}` and `..__delegate_proxies_{specId}`, claimed with `SPOP` so two servers never hand out one seat) | ✅ (deviation: a released seat is processed by the server that released it instead of being bridged to the leader through Redis; every step is one idempotent operation on the shared store, and the scaling itself is still leader-only) |
 | Rolling updates | `proxy.version` is published in Redis (`shinyproxy_{realm}__version`, with `WATCH`/`MULTI`/`EXEC` as `VersionChecker` does); a server that runs an older configuration steps out of the leader election, and a leader waits 25 seconds before releasing the lock so the other servers notice first | ✅ |
-| Redis sessions | Not implemented; sessions live in memory, so a user has to log in again when they reach another server. `proxy.store-mode: Redis` without Redis sessions warns at startup (as in Java) | ⬜ |
+| Redis sessions | `spring.session.store-type: redis` shares the sessions of the realm (see the row above); `proxy.store-mode: Redis` without Redis sessions warns at startup (as in Java). Redis Sentinel (`spring.data.redis.sentinel.*`) and TLS (`spring.data.redis.ssl.*`) are not implemented: with a Sentinel configuration the server refuses to start instead of connecting to `spring.data.redis.host` | 🟨 Sentinel/TLS missing |
 | Redis port allocator | `shinyproxy_{realmId}__ports` maps an owner to the JSON array of its ports (the Java `PortList`), claimed with `WATCH`/`MULTI`/`EXEC`, so two servers never publish the same host port | ✅ |
 | Leader election | A single server is always the leader; with Redis the servers of a realm take the `shinyproxy_{realmId}__leader` lock (30 seconds, renewed every 10), and only the leader releases inactive or expired apps and collects container logs — the same division of work as `ILeaderService` | ✅ |
-| `RedisCheckLatestConfigService`, proxy sharing seats | Not implemented yet | ⬜ |
+| `RedisCheckLatestConfigService`, proxy sharing seats | Implemented, see *Rolling updates* and *Pre-initialized containers* above. Not implemented: the Redis event bridge (`RedisEventBridge`), so container logs of apps started on another server are not collected and `?watch=true` status requests on another server wait for their timeout | 🟨 |
+
+## Security hardening (deliberate deviations)
+
+These differ from the Java implementation on purpose, because the Java behaviour is exploitable. Each one
+only changes what happens to input that an attacker controls; a configuration that works with Java keeps
+working. See [SECURITY_REVIEW.md](SECURITY_REVIEW.md) for the findings behind them.
+
+| Topic | Behaviour | Java |
+| --- | --- | --- |
+| Expressions in `kubernetes-pod-patches` and `kubernetes-*-manifests` | The YAML is parsed first and only its strings are evaluated, so the value of an expression (a user name, a group, a claim) stays one string and cannot add YAML. An expression YAML reads as a comment (`subPath: #{proxy.userId}` without quotes) is evaluated in the text, as Java does, with a warning to quote it | Evaluates the text before parsing it |
+| `secretKeyRef:` environment values (Kubernetes) | Only a `container-env` value written as `secretKeyRef:name:key` (or a line of the `container-env-file`) becomes a secret reference; the runtime values (`SHINYPROXY_USERNAME`, ...), the OpenID access token and the results of expressions never do, so a user cannot name a secret of the namespace | Every value |
+| `webservice` authentication | The user name and the password are JSON escaped before they are put in `authentication-request-body`, so a password cannot replace the user name the service checks | Pasted as they are |
+| `X-SP-UserId`, `X-SP-UserGroups` and the `http-headers` of an app | A copy sent by the client is always removed (also in the `X_SP_UserId` spelling, and with `add-default-http-headers: false`) | Overwritten when set |
+| Slow clients | A client must send the headers of a request within 30 seconds, and an idle keep-alive connection is closed after 30 seconds | Undertow defaults |
+| In-memory sessions | Expired sessions are removed (every minute at most), and a request that finishes after the logout does not bring the session back (also with Redis, `SET ... XX`) | Undertow's session manager |
 
 ## Not yet implemented
 
@@ -309,7 +326,8 @@ per request.
 
 ## Dependency advisories
 
-`cargo audit` runs in CI. One advisory is accepted and documented in `.cargo/audit.toml`: the Marvin attack in
+`cargo audit` runs in CI; the lock file is kept free of known vulnerabilities (the last update fixed
+advisories of `ammonia`, `rustls`, `rustls-webpki`, `webpki-roots`, `h2`, `quinn-proto` and `ctutils`). One advisory is accepted and documented in `.cargo/audit.toml`: the Marvin attack in
 the `rsa` crate (RUSTSEC-2023-0071), which has no fixed release and is only reachable through the RSA based
 authentication handshake of MySQL — that is, when `proxy.usage-stats-url` points at a MySQL database. Three
 unmaintained (not vulnerable) crates of the Kubernetes and AWS clients are accepted as well.

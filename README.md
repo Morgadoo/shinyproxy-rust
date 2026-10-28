@@ -65,14 +65,15 @@ docker run --rm -p 8080:8080 -v /var/run/docker.sock:/var/run/docker.sock \
 | Container backends | `docker`, `docker-swarm`, `kubernetes`, `ecs` (best effort, see below), `local` (testing only) |
 | Authentication | `none`, `simple`, `ldap`, `openid` (auth-code flow, PKCE, refresh, MS Graph groups), `webservice`, `custom-header`, OAuth2 bearer tokens for the API |
 | UI | index, app page, admin pages, parameters, template groups, logos, my-apps modes, error pages — ported from the Thymeleaf templates |
-| API | every documented endpoint, plus the OpenAPI document and Swagger UI |
+| API | the documented endpoints except starting an app with `POST /api/proxy/{specId}` and HTTP Basic authentication of API calls (see [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)), plus the OpenAPI document and Swagger UI |
 | Operations | heartbeats and timeouts, max lifetime, container logs, Prometheus metrics on a management port, usage statistics (CSV and SQL), structured and JSON logging |
 | High availability | `store-mode: Redis` (apps, heartbeats, host ports, sessions, seats), leader election, rolling updates with `proxy.version` |
 | Pre-initialized containers | `minimum-seats-available` with the seat model, the scaler and the delegate proxies |
 
-Known gaps: SAML authentication (fails at startup with a migration message), the ECS backend has not been
-validated against a real AWS account, and a few operational extras (S3 log storage, InfluxDB usage
-statistics, request dumping). See [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) for the full list and
+Known gaps: SAML authentication (fails at startup with a migration message), `POST /api/proxy/{specId}` and
+HTTP Basic authentication for API clients, Redis Sentinel/TLS, the ECS backend has not been validated against
+a real AWS account, and a few operational extras (S3 log storage, InfluxDB usage statistics, request
+dumping). The security review and the fixes it led to are in [docs/SECURITY_REVIEW.md](docs/SECURITY_REVIEW.md). See [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) for the full list and
 [docs/PROGRESS.md](docs/PROGRESS.md) for the state of the rewrite.
 
 ## Documentation
@@ -83,6 +84,8 @@ statistics, request dumping). See [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)
   every deviation.
 * [docs/MIGRATION.md](docs/MIGRATION.md) — how to move an existing ShinyProxy deployment to this build.
 * [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how the crates map onto the Java layering.
+* [docs/SECURITY_REVIEW.md](docs/SECURITY_REVIEW.md) — the security review, the fixes it led to and the
+  remaining recommendations, plus a verified feature-parity inventory.
 * [docs/TESTING.md](docs/TESTING.md) — how to run the test suites, including the ones that need Docker,
   Kubernetes, Redis or LDAP.
 * [docs/PROGRESS.md](docs/PROGRESS.md) — phases, test inventory and what is left.
