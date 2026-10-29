@@ -730,6 +730,16 @@ impl ServerSettings {
 #[serde(default, rename_all = "kebab-case")]
 pub struct ServletSettings {
     pub context_path: Option<String>,
+    pub session: ServletSessionSettings,
+}
+
+/// `server.servlet.session.*`
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct ServletSessionSettings {
+    /// The session timeout of the servlet container, which Spring Session also uses when
+    /// `spring.session.timeout` is not set.
+    pub timeout: Option<String>,
 }
 
 /// The `spring.*` subset ShinyProxy uses.
@@ -779,11 +789,17 @@ impl SessionSettings {
     /// Spring reads the value as a `Duration`: a number is a number of seconds, and the suffixes `ms`,
     /// `s`, `m`, `h` and `d` are supported.
     pub fn timeout_duration(&self) -> std::time::Duration {
+        self.timeout_or(None)
+    }
+
+    /// The timeout, or `fallback` (`server.servlet.session.timeout`) when it is not set.
+    pub fn timeout_or(&self, fallback: Option<&str>) -> std::time::Duration {
         const DEFAULT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
-        let Some(value) = self.timeout.as_deref().map(str::trim) else {
-            return DEFAULT;
-        };
-        parse_spring_duration(value).unwrap_or(DEFAULT)
+        [self.timeout.as_deref(), fallback]
+            .into_iter()
+            .flatten()
+            .find_map(parse_spring_duration)
+            .unwrap_or(DEFAULT)
     }
 }
 
@@ -1040,6 +1056,14 @@ impl SpringdocToggle {
 }
 
 impl Settings {
+    /// How long a session lives without being used: `spring.session.timeout`, else
+    /// `server.servlet.session.timeout` (which Spring Session falls back to), else 30 minutes.
+    pub fn session_timeout(&self) -> std::time::Duration {
+        self.spring
+            .session
+            .timeout_or(self.server.servlet.session.timeout.as_deref())
+    }
+
     /// Application name (`spring.application.name`, default `ShinyProxy`).
     pub fn application_name(&self) -> &str {
         self.spring
@@ -1145,6 +1169,29 @@ mod tests {
 #[cfg(test)]
 mod session_timeout_tests {
     use super::*;
+
+    #[test]
+    fn the_servlet_session_timeout_is_the_fallback() {
+        let settings: Settings =
+            serde_yaml_ng::from_str("server:\n  servlet:\n    session:\n      timeout: 2h\n")
+                .unwrap();
+        assert_eq!(
+            settings.session_timeout(),
+            std::time::Duration::from_secs(7200)
+        );
+        let settings: Settings = serde_yaml_ng::from_str(
+            "server:\n  servlet:\n    session:\n      timeout: 2h\nspring:\n  session:\n    timeout: 10m\n",
+        )
+        .unwrap();
+        assert_eq!(
+            settings.session_timeout(),
+            std::time::Duration::from_secs(600)
+        );
+        assert_eq!(
+            Settings::default().session_timeout(),
+            std::time::Duration::from_secs(1800)
+        );
+    }
 
     #[test]
     fn parses_the_session_timeout_like_spring() {

@@ -126,6 +126,7 @@ static ENGINE_KEYS: &[KeyDef] = {
         scalar("proxy.bind-address", Supported),
         scalar("proxy.same-site-cookie", Supported),
         scalar("server.servlet.context-path", Supported),
+        scalar("server.servlet.session.timeout", Supported),
         scalar("server.secure-cookies", Supported),
         scalar("server.frame-options", Supported),
         scalar(

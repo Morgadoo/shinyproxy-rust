@@ -64,6 +64,7 @@ static SPEC_KEYS: &[KeyDef] = {
         scalar("proxy.specs[].container-cpu-limit", Supported),
         scalar("proxy.specs[].container-privileged", Supported),
         scalar("proxy.specs[].container-resource-name", Supported),
+        scalar("proxy.specs[].resource-name", Supported),
         map("proxy.specs[].labels", Supported),
         scalar("proxy.specs[].port", Supported),
         scalar("proxy.specs[].target-path", Supported),

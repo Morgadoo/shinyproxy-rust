@@ -173,12 +173,33 @@ pub fn router(state: Arc<AppState>) -> Router {
             state.clone(),
             app_recovery_filter,
         ))
+        .layer(axum::middleware::from_fn(ms_office_filter))
         // the first check of every request, as Spring's firewall is
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             request_firewall,
         ))
         .with_state(state)
+}
+
+/// Answers requests of Microsoft Office with an empty page (`UserAgentFilter`): Office opens a link to
+/// check it first, and following the login redirects there would sign the user in to (or out of) the
+/// session of Office instead of the browser.
+async fn ms_office_filter(request: Request, next: Next) -> Response {
+    let from_office = request
+        .headers()
+        .get(header::USER_AGENT)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|agent| agent.contains("ms-office"));
+    if from_office {
+        return (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html;charset=UTF-8")],
+            "",
+        )
+            .into_response();
+    }
+    next.run(request).await
 }
 
 /// Refuses the requests Spring Security's `StrictHttpFirewall` refuses (encoded slashes, `..` segments,
@@ -514,7 +535,7 @@ fn add_headers(state: &AppState, _path: &str, response: &mut Response) {
 /// expires; `tower-sessions` only moves the expiry when a handler changes the session. Setting the expiry
 /// marks the session as modified, so the store keeps it alive for another `spring.session.timeout`.
 async fn keep_session_alive(state: &AppState, session: &Session) {
-    let timeout = state.settings.spring.session.timeout_duration();
+    let timeout = state.settings.session_timeout();
     let Ok(as_duration) = time::Duration::try_from(timeout) else {
         return;
     };
@@ -1012,6 +1033,13 @@ async fn static_asset(
     }
     if let Some(spec_id) = path.strip_prefix("/favicon/") {
         return serve_favicon(&state, Some(spec_id), user.as_ref());
+    }
+    // the static files of a custom template directory
+    if let (Some(relative), Some(template_path)) = (
+        path.strip_prefix("/assets/"),
+        state.templates.template_path(),
+    ) {
+        return assets::serve_template_asset(template_path, relative).await;
     }
     if !assets::exists(&path) {
         return not_found().await;

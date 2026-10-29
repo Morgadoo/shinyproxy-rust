@@ -86,11 +86,21 @@ pub enum TemplateError {
         #[source]
         source: std::io::Error,
     },
+    #[error(
+        "Configuration error: the templates in proxy.template-path are Thymeleaf templates ({}), \
+         which this implementation cannot render; convert them to the MiniJinja syntax of the built-in \
+         templates (see docs/COMPATIBILITY.md, section Templates)",
+        files.join(", ")
+    )]
+    Thymeleaf { files: Vec<String> },
 }
 
 impl TemplateEngine {
     /// Creates an engine that renders the embedded templates.
     pub fn new(template_path: Option<PathBuf>) -> Result<Self, TemplateError> {
+        if let Some(directory) = &template_path {
+            refuse_thymeleaf(directory)?;
+        }
         let mut environment = Environment::new();
         // everything ShinyProxy renders is HTML (including templates that come from the
         // configuration, which are rendered without a file name)
@@ -181,10 +191,103 @@ impl TemplateEngine {
     }
 }
 
+/// Refuses a template directory written for the Java implementation.
+///
+/// Java renders `proxy.template-path` with Thymeleaf; MiniJinja would emit the `th:` attributes as they
+/// are and show broken pages, so the server does not start and names the files instead. The `assets`
+/// directory holds static files and is not checked.
+fn refuse_thymeleaf(directory: &std::path::Path) -> Result<(), TemplateError> {
+    fn visit(
+        directory: &std::path::Path,
+        root: &std::path::Path,
+        found: &mut Vec<String>,
+    ) -> std::io::Result<()> {
+        for entry in std::fs::read_dir(directory)? {
+            let path = entry?.path();
+            if path.is_dir() {
+                if path != root.join("assets") {
+                    visit(&path, root, found)?;
+                }
+            } else if path
+                .extension()
+                .is_some_and(|extension| extension == "html")
+            {
+                let text = std::fs::read_to_string(&path).unwrap_or_default();
+                if is_thymeleaf(&text) {
+                    let relative = path.strip_prefix(root).unwrap_or(&path);
+                    found.push(relative.display().to_string());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    let mut found = Vec::new();
+    // a directory that cannot be read is reported when a template is loaded from it
+    let _ = visit(directory, directory, &mut found);
+    found.sort();
+    if found.is_empty() {
+        Ok(())
+    } else {
+        Err(TemplateError::Thymeleaf { files: found })
+    }
+}
+
+/// Whether a template uses Thymeleaf: the `xmlns:th` namespace or a `th:*` attribute.
+fn is_thymeleaf(text: &str) -> bool {
+    text.contains("xmlns:th")
+        || text.match_indices("th:").any(|(index, _)| {
+            index > 0
+                && text.as_bytes()[index - 1].is_ascii_whitespace()
+                && text[index + 3..]
+                    .chars()
+                    .next()
+                    .is_some_and(|character| character.is_ascii_alphabetic())
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use minijinja::context;
+
+    #[test]
+    fn refuses_thymeleaf_templates_in_the_template_path() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        std::fs::create_dir_all(directory.path().join("fragments")).unwrap();
+        std::fs::create_dir_all(directory.path().join("assets")).unwrap();
+        std::fs::write(
+            directory.path().join("index.html"),
+            "<html xmlns:th=\"http://www.thymeleaf.org\"><p th:text=\"${title}\">x</p></html>",
+        )
+        .unwrap();
+        std::fs::write(
+            directory.path().join("fragments/navbar.html"),
+            "<nav><a th:href=\"@{/}\">home</a></nav>",
+        )
+        .unwrap();
+        // static files are not templates, and MiniJinja templates are fine
+        std::fs::write(
+            directory.path().join("assets/th.html"),
+            "<p th:text=\"x\"></p>",
+        )
+        .unwrap();
+        std::fs::write(directory.path().join("app.html"), "<p>{{ title }}</p>").unwrap();
+
+        let error = TemplateEngine::new(Some(directory.path().to_path_buf()))
+            .expect_err("thymeleaf is refused");
+        let message = error.to_string();
+        assert!(
+            message.contains("fragments/navbar.html, index.html"),
+            "{message}"
+        );
+        assert!(!message.contains("app.html"), "{message}");
+
+        assert!(!is_thymeleaf(
+            "width: 100%; <p class=\"path:x\">{{ width }}</p>"
+        ));
+        assert!(is_thymeleaf("<div\n  th:if=\"${x}\">"));
+    }
 
     #[test]
     fn renders_embedded_templates() {

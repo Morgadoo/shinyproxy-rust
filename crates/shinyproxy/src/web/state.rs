@@ -324,7 +324,7 @@ impl AppState {
         };
 
         // the sessions of a realm are shared through Redis when Spring Session is configured that way
-        let session_timeout = settings.spring.session.timeout_duration();
+        let session_timeout = settings.session_timeout();
         let session_store = match (&redis_stores, redis_sessions_wanted) {
             (Some(stores), true) => Some(stores.session_store(
                 identifiers.realm_id.as_deref(),

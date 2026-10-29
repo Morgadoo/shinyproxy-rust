@@ -113,7 +113,38 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or(&bind_address)
         .to_string();
     let management_address = format!("{management_bind_address}:{management_port}");
-    match tokio::net::TcpListener::bind(&management_address).await {
+    // the same port as the application: Spring Boot serves the actuator there instead of on a second
+    // server (binding twice would make the start fail)
+    let shared_port = management_port == port;
+    if shared_port {
+        tracing::info!("Management endpoints available on the port of the application");
+    } else {
+        start_management_server(&state, &management_address).await;
+    }
+
+    let mut app = shinyproxy::web::server::build(state.clone());
+    if shared_port {
+        app = shinyproxy::web::server::with_actuator(app, state.clone());
+    }
+
+    let address = format!("{bind_address}:{port}");
+    let listener = tokio::net::TcpListener::bind(&address).await?;
+    tracing::info!(
+        "ShinyProxy {VERSION} listening on http://{}{}",
+        listener.local_addr()?,
+        state.context_path()
+    );
+    shinyproxy::web::server::serve(listener, app, shutdown_signal()).await;
+    tracing::info!("ShinyProxy stopped");
+    Ok(())
+}
+
+/// Starts the management server (actuator) on its own address, as Spring Boot does.
+async fn start_management_server(
+    state: &std::sync::Arc<shinyproxy::web::state::AppState>,
+    management_address: &str,
+) {
+    match tokio::net::TcpListener::bind(management_address).await {
         Ok(listener) => {
             tracing::info!(
                 "Management endpoints available on http://{management_address}/actuator"
@@ -129,19 +160,6 @@ async fn main() -> anyhow::Result<()> {
             tracing::warn!("cannot start the management server on {management_address}: {error}")
         }
     }
-
-    let app = shinyproxy::web::server::build(state.clone());
-
-    let address = format!("{bind_address}:{port}");
-    let listener = tokio::net::TcpListener::bind(&address).await?;
-    tracing::info!(
-        "ShinyProxy {VERSION} listening on http://{}{}",
-        listener.local_addr()?,
-        state.context_path()
-    );
-    shinyproxy::web::server::serve(listener, app, shutdown_signal()).await;
-    tracing::info!("ShinyProxy stopped");
-    Ok(())
 }
 
 /// Waits for `SIGTERM`/`SIGINT` so that the server can shut down gracefully.

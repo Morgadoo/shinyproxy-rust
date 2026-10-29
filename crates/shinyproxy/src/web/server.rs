@@ -40,7 +40,7 @@ pub fn build(state: Arc<AppState>) -> Router {
     // sessions live in Redis when Spring Session is configured that way, so that the servers of a realm
     // share them (`spring.session.store-type: redis`), and in memory otherwise
     let expiry = Expiry::OnInactivity(
-        time::Duration::try_from(state.settings.spring.session.timeout_duration())
+        time::Duration::try_from(state.settings.session_timeout())
             .unwrap_or(time::Duration::minutes(30)),
     );
 
@@ -75,6 +75,13 @@ pub fn build(state: Arc<AppState>) -> Router {
         browser_cookie_name,
         browser_session_cookie,
     ))
+}
+
+/// The application with the actuator endpoints next to it, for a `management.server.port` that is the
+/// port of the application: Spring Boot then serves the actuator on that port, below the context path.
+pub fn with_actuator(app: Router, state: Arc<AppState>) -> Router {
+    let context = state.context_path().to_string();
+    super::management::router_at(state, &context).merge(app)
 }
 
 /// How long a client may take to send the headers of a request, and how long a keep-alive connection may

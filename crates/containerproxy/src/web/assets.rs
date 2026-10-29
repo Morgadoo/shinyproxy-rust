@@ -75,6 +75,51 @@ pub fn serve(path: &str, cacheable: bool) -> Response {
     }
 }
 
+/// Serves a file of `{template-path}/assets/` (`/assets/**` and `/{instanceId}/assets/**`, the resource
+/// handlers of the Java `TemplateResolverConfig`, with their cache time of one day).
+///
+/// Only plain names are accepted, and the file must really be inside the directory (no `..`, no symbolic
+/// link pointing outside), so a request cannot read other files of the server.
+pub async fn serve_template_asset(template_path: &std::path::Path, relative: &str) -> Response {
+    let not_found = || (StatusCode::NOT_FOUND, "not found\n").into_response();
+    let relative = std::path::Path::new(relative.trim_start_matches('/'));
+    if relative.as_os_str().is_empty()
+        || relative
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return not_found();
+    }
+    let root = template_path.join("assets");
+    let (Ok(root), Ok(file)) = (
+        tokio::fs::canonicalize(&root).await,
+        tokio::fs::canonicalize(root.join(relative)).await,
+    ) else {
+        return not_found();
+    };
+    if !file.starts_with(&root) || !file.is_file() {
+        return not_found();
+    }
+    match tokio::fs::read(&file).await {
+        Ok(content) => {
+            let mime = mime_guess::from_path(&file).first_or_octet_stream();
+            (
+                [
+                    (
+                        CONTENT_TYPE,
+                        HeaderValue::from_str(mime.as_ref())
+                            .unwrap_or(HeaderValue::from_static("application/octet-stream")),
+                    ),
+                    (CACHE_CONTROL, HeaderValue::from_static("max-age=86400")),
+                ],
+                content,
+            )
+                .into_response()
+        }
+        Err(_) => not_found(),
+    }
+}
+
 /// Whether an asset exists.
 pub fn exists(path: &str) -> bool {
     StaticAssets::get(path.trim_start_matches('/')).is_some()
@@ -99,6 +144,37 @@ pub const ASSET_PREFIXES: &[&str] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn serves_the_assets_of_the_template_path_and_nothing_else() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        std::fs::create_dir_all(directory.path().join("assets/css")).unwrap();
+        std::fs::write(directory.path().join("assets/css/brand.css"), "body {}").unwrap();
+        std::fs::write(directory.path().join("secret.txt"), "secret").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(
+            directory.path().join("secret.txt"),
+            directory.path().join("assets/link.txt"),
+        )
+        .unwrap();
+
+        let response = serve_template_asset(directory.path(), "css/brand.css").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[CONTENT_TYPE], "text/css");
+        assert_eq!(response.headers()[CACHE_CONTROL], "max-age=86400");
+
+        for path in [
+            "../secret.txt",
+            "css/../../secret.txt",
+            "/etc/passwd",
+            "",
+            "css",
+            "link.txt",
+        ] {
+            let response = serve_template_asset(directory.path(), path).await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+        }
+    }
 
     #[test]
     fn embeds_the_shinyproxy_frontend() {
