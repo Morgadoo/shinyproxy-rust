@@ -963,3 +963,77 @@ async fn a_session_that_is_used_does_not_expire() {
 
     instance.stop();
 }
+
+#[tokio::test]
+async fn cors_only_allows_the_configured_origins() {
+    // without `cors-allowed-origins` there is no CORS at all
+    let instance = TestInstance::start(CONFIG).await;
+    let jack = instance.login("jack", "password").await;
+    let response = jack
+        .get(instance.url("/api/proxyspec"))
+        .header("origin", "https://allowed.example.com")
+        .send()
+        .await
+        .expect("request");
+    assert!(response
+        .headers()
+        .get("access-control-allow-origin")
+        .is_none());
+    instance.stop();
+
+    let instance = TestInstance::start(&CONFIG.replace(
+        "  allow-transfer-app: true\n",
+        "  allow-transfer-app: true\n  api-security:\n    cors-allowed-origins: https://allowed.example.com\n",
+    ))
+    .await;
+    let jack = instance.login("jack", "password").await;
+
+    // the preflight is answered before authentication
+    let response = instance
+        .client()
+        .request(reqwest::Method::OPTIONS, instance.url("/api/proxyspec"))
+        .header("origin", "https://allowed.example.com")
+        .header("access-control-request-method", "GET")
+        .header("access-control-request-headers", "content-type")
+        .send()
+        .await
+        .expect("preflight");
+    assert_eq!(response.status(), 200);
+    let headers = response.headers();
+    assert_eq!(
+        headers["access-control-allow-origin"],
+        "https://allowed.example.com"
+    );
+    assert_eq!(headers["access-control-allow-credentials"], "true");
+    assert!(headers["access-control-allow-methods"]
+        .to_str()
+        .unwrap()
+        .contains("POST"));
+
+    // a request of the allowed origin may read the answer, with the session of the user
+    let response = jack
+        .get(instance.url("/api/proxyspec"))
+        .header("origin", "https://allowed.example.com")
+        .send()
+        .await
+        .expect("request");
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response.headers()["access-control-allow-origin"],
+        "https://allowed.example.com"
+    );
+
+    // another origin may not
+    let response = jack
+        .get(instance.url("/api/proxyspec"))
+        .header("origin", "https://evil.example.com")
+        .send()
+        .await
+        .expect("request");
+    assert!(response
+        .headers()
+        .get("access-control-allow-origin")
+        .is_none());
+
+    instance.stop();
+}

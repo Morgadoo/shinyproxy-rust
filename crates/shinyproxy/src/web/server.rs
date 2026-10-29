@@ -35,6 +35,7 @@ pub fn build(state: Arc<AppState>) -> Router {
     let same_site = session::same_site(state.settings.proxy.same_site_cookie());
     let cookie_name = session::cookie_name(state.settings.spring.session.is_redis()).to_string();
     let browser_cookie_name = cookie_name.clone();
+    let cors = cors_layer(&state.settings);
     let context_path = state.context_path_with_slash().to_string();
 
     // sessions live in Redis when Spring Session is configured that way, so that the servers of a realm
@@ -71,10 +72,55 @@ pub fn build(state: Arc<AppState>) -> Router {
     // disappears when the browser is closed, while the session itself expires server side after
     // `spring.session.timeout`. `tower-sessions` derives the cookie lifetime from that timeout, so the
     // attribute is removed again here (the cookie that *clears* the session keeps its `Max-Age=0`).
-    router.layer(axum::middleware::from_fn_with_state(
+    let router = router.layer(axum::middleware::from_fn_with_state(
         browser_cookie_name,
         browser_session_cookie,
-    ))
+    ));
+    match cors {
+        Some(cors) => router.layer(cors),
+        None => router,
+    }
+}
+
+/// CORS for `proxy.api-security.cors-allowed-origins`, as `TemplateResolverConfig.addCorsMappings`
+/// configures it: the listed origins (exactly), with credentials, and the defaults of Spring's
+/// `CorsRegistry` for the rest (`GET`, `HEAD` and `POST`, every request header, 30 minutes of preflight
+/// cache). It is the outermost layer, so a preflight is answered before authentication, as Spring
+/// Security's `CorsFilter` does.
+fn cors_layer(settings: &containerproxy::config::Settings) -> Option<tower_http::cors::CorsLayer> {
+    use tower_http::cors::{AllowHeaders, AllowOrigin, CorsLayer};
+
+    let origins: Vec<axum::http::HeaderValue> = settings
+        .proxy
+        .api_security
+        .cors_allowed_origins
+        .values()
+        .iter()
+        .map(|origin| origin.trim())
+        .filter(|origin| !origin.is_empty())
+        .filter_map(|origin| match axum::http::HeaderValue::from_str(origin) {
+            Ok(value) => Some(value),
+            Err(_) => {
+                tracing::warn!("Ignoring invalid CORS origin '{origin}'");
+                None
+            }
+        })
+        .collect();
+    if origins.is_empty() {
+        return None;
+    }
+    Some(
+        CorsLayer::new()
+            .allow_origin(AllowOrigin::list(origins))
+            .allow_credentials(true)
+            .allow_methods([
+                axum::http::Method::GET,
+                axum::http::Method::HEAD,
+                axum::http::Method::POST,
+            ])
+            .allow_headers(AllowHeaders::mirror_request())
+            .max_age(std::time::Duration::from_secs(1800)),
+    )
 }
 
 /// The application with the actuator endpoints next to it, for a `management.server.port` that is the
