@@ -103,7 +103,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route(&path("/api/proxyspec"), get(super::api::proxy_specs))
         .route(&path("/api/proxyspec/{spec}"), get(super::api::proxy_spec))
         .route(&path("/api/proxy"), get(super::api::proxies))
-        .route(&path("/api/proxy/{proxy}"), get(super::api::proxy))
+        .route(
+            &path("/api/proxy/{proxy}"),
+            get(super::api::proxy).post(super::apps::start_proxy_api),
+        )
         .route(
             &path("/api/proxy/{proxy}/status"),
             get(super::api::proxy_status).put(super::api::change_proxy_status),
@@ -275,6 +278,11 @@ async fn redirect_to_index(State(state): State<Arc<AppState>>) -> Response {
 #[derive(Debug, Clone, Default)]
 pub struct CurrentUser(pub Option<AuthenticatedUser>);
 
+/// Marks a request whose `Authorization` header carries the credentials the user authenticated with at
+/// ShinyProxy; the header is then not forwarded to the apps.
+#[derive(Debug, Clone, Copy)]
+pub struct CredentialsInHeader;
+
 /// Authorization middleware, mirroring the matcher order of the Java `WebSecurityConfig`.
 async fn authorize(
     State(state): State<Arc<AppState>>,
@@ -299,6 +307,7 @@ async fn authorize(
     }
 
     // bearer tokens (`proxy.oauth2.*`): API clients authenticate per request, without a session
+    let mut credentials_in_header = false;
     if data.user.is_none() {
         if let (Some(authenticator), Some(token)) = (
             state.bearer.as_ref(),
@@ -310,6 +319,33 @@ async fn authorize(
                     user.id
                 );
                 data.user = Some(user);
+                credentials_in_header = true;
+            }
+        }
+    }
+
+    // HTTP Basic (`http.httpBasic(...)` of `WebSecurityConfig`): API clients of the backends with a login
+    // form send their credentials with every request; like Spring Security 6 the result is kept for this
+    // request only, not in the session
+    if data.user.is_none() && state.auth.uses_login_form() {
+        if let Some(credentials) = containerproxy::auth::basic_credentials(request.headers()) {
+            match state.auth.authenticate_async(&credentials).await {
+                Ok(user) => {
+                    tracing::debug!("Request authenticated with HTTP Basic [user: {}]", user.id);
+                    data.user = Some(user);
+                    credentials_in_header = true;
+                }
+                Err(error) => {
+                    tracing::info!(
+                        "Authentication failure [user: {}] [error: {error}]",
+                        credentials.username
+                    );
+                    state.proxies.events().publish(
+                        containerproxy::events::Event::AuthenticationFailed {
+                            user_id: credentials.username.clone(),
+                        },
+                    );
+                }
             }
         }
     }
@@ -384,6 +420,9 @@ async fn authorize(
             .touch(&session::session_id(&session), &user.id);
     }
     request.extensions_mut().insert(CurrentUser(user.clone()));
+    if credentials_in_header {
+        request.extensions_mut().insert(CredentialsInHeader);
+    }
 
     if !is_public_path(&path, &state.identifiers.instance_id) {
         if state.auth.has_authorization() && user.is_none() {

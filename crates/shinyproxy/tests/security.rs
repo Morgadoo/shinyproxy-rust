@@ -467,6 +467,36 @@ async fn headers_of_the_client_cannot_be_injected_into_the_app() {
 }
 
 #[tokio::test]
+async fn the_session_of_shinyproxy_never_reaches_the_app() {
+    let instance = TestInstance::start(CONFIG).await;
+    let jack = instance.login("jack", "password").await;
+    let proxy_id = start_app(&instance, &jack).await;
+    let session = instance.session_cookie(&jack).expect("session cookie");
+    assert!(session.starts_with("JSESSIONID="), "{session}");
+
+    // an app (or whoever controls its container) must not be able to take over the session of the user;
+    // its own cookies still reach it (one of the same name too, see `remove_cookie`)
+    let headers: std::collections::BTreeMap<String, String> = reqwest::Client::new()
+        .get(instance.url(&format!("/app_proxy/{proxy_id}/headers")))
+        .header(
+            "cookie",
+            format!("theme=dark; {session}; APPSESSION=of-the-app"),
+        )
+        .send()
+        .await
+        .expect("request")
+        .json()
+        .await
+        .expect("json");
+    let cookie = headers.get("cookie").cloned().unwrap_or_default();
+    let session_value = session.trim_start_matches("JSESSIONID=");
+    assert!(!cookie.contains(session_value), "{cookie}");
+    assert_eq!(cookie, "theme=dark; APPSESSION=of-the-app");
+
+    instance.stop();
+}
+
+#[tokio::test]
 async fn requests_spring_security_rejects_are_refused() {
     let instance = TestInstance::start(CONFIG).await;
     let jack = instance.login("jack", "password").await;

@@ -442,3 +442,171 @@ async fn the_api_reports_specs_and_unknown_proxies() {
 
     instance.stop();
 }
+
+#[tokio::test]
+async fn apps_can_be_started_through_the_api() {
+    let instance = TestInstance::start(CONFIG).await;
+    let jack = instance.login("jack", "password").await;
+
+    // `ProxyController.startProxy`: the answer comes when the app is up
+    let response = jack
+        .post(instance.url("/api/proxy/01_hello"))
+        .json(&serde_json::json!({"parameters": null}))
+        .send()
+        .await
+        .expect("start request");
+    assert_eq!(response.status(), 201);
+    let json: serde_json::Value = response.json().await.expect("json");
+    assert_eq!(json["status"], "success", "{json}");
+    assert_eq!(json["data"]["status"], "Up", "{json}");
+    let proxy_id = json["data"]["id"].as_str().expect("proxy id").to_string();
+    // served under /api/route, without an instance name (so it is not the app of the browser page)
+    assert_eq!(
+        json["data"]["runtimeValues"]["SHINYPROXY_PUBLIC_PATH"],
+        format!("/api/route/{proxy_id}/")
+    );
+    assert!(json["data"]["runtimeValues"]
+        .get("SHINYPROXY_APP_INSTANCE")
+        .is_none());
+
+    let response = jack
+        .get(instance.url(&format!("/api/route/{proxy_id}/")))
+        .send()
+        .await
+        .expect("route request");
+    assert_eq!(response.status(), 200);
+
+    // max-instances (1 by default) applies to the API as well
+    let response = jack
+        .post(instance.url("/api/proxy/01_hello"))
+        .send()
+        .await
+        .expect("start request");
+    assert_eq!(response.status(), 400);
+
+    // unknown apps, and apps of others, are forbidden
+    let response = jack
+        .post(instance.url("/api/proxy/does-not-exist"))
+        .send()
+        .await
+        .expect("start request");
+    assert_eq!(response.status(), 403);
+    let response = instance
+        .client()
+        .post(instance.url("/api/proxy/01_hello"))
+        .send()
+        .await
+        .expect("start request");
+    assert_eq!(response.status(), 410, "not logged in");
+
+    instance.stop();
+}
+
+// the server needs several worker threads for the starts to really run in parallel
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn parallel_starts_cannot_exceed_max_instances() {
+    let instance = TestInstance::start(&CONFIG.replace(
+        "      access-groups: [ scientists, admins ]\n",
+        "      access-groups: [ scientists, admins ]\n      max-instances: 2\n",
+    ))
+    .await;
+    let jack = instance.login("jack", "password").await;
+
+    let starts = (0..32).map(|index| {
+        let request = jack
+            .post(instance.url(&format!("/app_i/01_hello/instance{index}")))
+            .json(&serde_json::json!({"timezone": "Europe/Brussels"}));
+        async move { request.send().await.expect("start request").status() }
+    });
+    let statuses = futures::future::join_all(starts).await;
+    let started = statuses
+        .iter()
+        .filter(|status| status.as_u16() == 200)
+        .count();
+    assert_eq!(started, 2, "{statuses:?}");
+
+    instance.stop();
+}
+
+#[tokio::test]
+async fn api_clients_can_use_http_basic_authentication() {
+    let instance = TestInstance::start(CONFIG).await;
+    // a client without a session, as `curl -u jack:password` is
+    let client = reqwest::Client::new();
+
+    let response = client
+        .get(instance.url("/api/proxyspec"))
+        .basic_auth("jack", Some("password"))
+        .send()
+        .await
+        .expect("request");
+    assert_eq!(response.status(), 200);
+    let json: serde_json::Value = response.json().await.expect("json");
+    assert_eq!(json["data"][0]["id"], "01_hello");
+
+    // a wrong password leaves the request unauthenticated
+    let response = client
+        .get(instance.url("/api/proxyspec"))
+        .basic_auth("jack", Some("wrong"))
+        .send()
+        .await
+        .expect("request");
+    assert_eq!(response.status(), 410);
+
+    // a script can start an app and use it, and the app never sees the password
+    let response = client
+        .post(instance.url("/api/proxy/01_hello"))
+        .basic_auth("jack", Some("password"))
+        .send()
+        .await
+        .expect("start request");
+    assert_eq!(response.status(), 201);
+    let json: serde_json::Value = response.json().await.expect("json");
+    let proxy_id = json["data"]["id"].as_str().expect("proxy id").to_string();
+    let headers: serde_json::Value = client
+        .get(instance.url(&format!("/api/route/{proxy_id}/headers")))
+        .basic_auth("jack", Some("password"))
+        .send()
+        .await
+        .expect("route request")
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(headers["x-sp-userid"], "jack", "{headers}");
+    assert!(headers.get("authorization").is_none(), "{headers}");
+
+    instance.stop();
+}
+
+#[tokio::test]
+async fn a_503_of_a_healthy_app_is_the_answer_of_the_app() {
+    let instance = TestInstance::start(CONFIG).await;
+    let jack = instance.login("jack", "password").await;
+    let proxy = start_app(&instance, &jack).await;
+    let proxy_id = proxy["id"].as_str().expect("proxy id").to_string();
+
+    // the app is healthy, so its own 503 reaches the client (`defaultResponseListener` returns false)
+    let response = jack
+        .get(instance.url(&format!("/app_proxy/{proxy_id}/status/503")))
+        .send()
+        .await
+        .expect("request");
+    assert_eq!(response.status(), 503);
+    assert_eq!(
+        response.text().await.expect("body"),
+        "status 503 of the app\n"
+    );
+
+    // and the app keeps running
+    let json: serde_json::Value = jack
+        .get(instance.url(&format!("/api/proxy/{proxy_id}")))
+        .send()
+        .await
+        .expect("request")
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(json["data"]["status"], "Up", "{json}");
+
+    instance.stop();
+}

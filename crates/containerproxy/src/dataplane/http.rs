@@ -46,10 +46,17 @@ const HOP_BY_HOP: &[&str] = &[
     "upgrade",
 ];
 
+/// How long connecting to an app may take.
+pub const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// The pooled HTTP client used for proxying, shared by all proxies.
 static CLIENT: Lazy<Client<HttpConnector, Body>> = Lazy::new(|| {
     let mut connector = HttpConnector::new();
     connector.set_nodelay(true);
+    // an app that does not accept the connection (a black-holed address) would otherwise hold the request
+    // for the time-out of the operating system (minutes), three times with the retries; there is no
+    // limit on the response, which may be long polling or streaming
+    connector.set_connect_timeout(Some(CONNECT_TIMEOUT));
     connector.set_keepalive(Some(std::time::Duration::from_secs(60)));
     Client::builder(TokioExecutor::new())
         // apps are long-polling and streaming, so connections must not be closed eagerly
@@ -64,6 +71,14 @@ pub struct ForwardOptions {
     pub extra_headers: std::sync::Arc<BTreeMap<String, String>>,
     /// Ask the app not to compress the response, needed when the response is rewritten.
     pub force_identity_encoding: bool,
+    /// The session cookie of ShinyProxy (`name`, `value`), removed from the `Cookie` header: an app (or
+    /// whoever controls its container, which may be shared or re-used) must not get the session of the
+    /// user. Only the pair with this exact value is removed, so an app's own cookie of the same name
+    /// (`JSESSIONID` of a Java app) still reaches it.
+    pub hidden_cookie: Option<(String, String)>,
+    /// Remove the `Authorization` header, because it carries the credentials the user authenticated
+    /// with at ShinyProxy (a bearer token or a password).
+    pub hide_authorization: bool,
 }
 
 /// Why a request could not be forwarded.
@@ -93,6 +108,12 @@ pub async fn forward(
         .map_err(|error| ForwardError::InvalidRequest(format!("{url}: {error}")))?;
 
     let mut headers = filter_headers(&parts.headers);
+    if options.hide_authorization {
+        headers.remove(axum::http::header::AUTHORIZATION);
+    }
+    if let Some((name, value)) = &options.hidden_cookie {
+        remove_cookie(&mut headers, name, value);
+    }
 
     // Undertow adds X-Forwarded-* headers; the host header must include a non-standard port, which is
     // what apps compare the Origin header against (see #31010 in the Java implementation).
@@ -185,6 +206,41 @@ pub fn filter_headers(headers: &HeaderMap) -> HeaderMap {
         result.append(name.clone(), value.clone());
     }
     result
+}
+
+/// Removes the cookie `name=value` from the `Cookie` headers, keeping every other cookie.
+pub fn remove_cookie(headers: &mut HeaderMap, name: &str, value: &str) {
+    let values: Vec<HeaderValue> = headers
+        .get_all(axum::http::header::COOKIE)
+        .iter()
+        .cloned()
+        .collect();
+    if values.is_empty() {
+        return;
+    }
+    headers.remove(axum::http::header::COOKIE);
+    for header in values {
+        let Ok(text) = header.to_str() else {
+            headers.append(axum::http::header::COOKIE, header);
+            continue;
+        };
+        let kept: Vec<&str> = text
+            .split(';')
+            .map(str::trim)
+            .filter(|pair| !pair.is_empty())
+            .filter(|pair| {
+                pair.split_once('=').is_none_or(|(cookie, content)| {
+                    cookie.trim() != name || content.trim() != value
+                })
+            })
+            .collect();
+        if kept.is_empty() {
+            continue;
+        }
+        if let Ok(rewritten) = HeaderValue::from_str(&kept.join("; ")) {
+            headers.append(axum::http::header::COOKIE, rewritten);
+        }
+    }
 }
 
 /// Headers that only the server sets; a copy sent by the client never reaches the app.
@@ -324,6 +380,24 @@ mod tests {
         assert!(!headers.contains_key("x_sp_usergroups"));
         assert!(!headers.contains_key("x-custom-token"));
         assert_eq!(headers.get("x-ok").unwrap(), "value");
+    }
+
+    #[test]
+    fn removes_only_the_session_cookie_of_shinyproxy() {
+        let mut headers = HeaderMap::new();
+        headers.append(
+            "cookie",
+            HeaderValue::from_static("JSESSIONID=sp-session; theme=dark; JSESSIONID=app-session"),
+        );
+        headers.append("cookie", HeaderValue::from_static("JSESSIONID=sp-session"));
+        remove_cookie(&mut headers, "JSESSIONID", "sp-session");
+        let cookies: Vec<&str> = headers
+            .get_all("cookie")
+            .iter()
+            .map(|value| value.to_str().unwrap())
+            .collect();
+        // the app keeps its own cookie of the same name, and a header with nothing left disappears
+        assert_eq!(cookies, ["theme=dark; JSESSIONID=app-session"]);
     }
 
     #[test]

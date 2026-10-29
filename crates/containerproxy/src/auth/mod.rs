@@ -278,9 +278,51 @@ pub struct UnsupportedBackend {
     pub name: String,
 }
 
+/// The credentials of an `Authorization: Basic` header (`BasicAuthenticationFilter`), decoded as UTF-8.
+pub fn basic_credentials(headers: &axum::http::HeaderMap) -> Option<LoginForm> {
+    use base64::Engine;
+    let value = headers
+        .get(axum::http::header::AUTHORIZATION)?
+        .to_str()
+        .ok()?
+        .trim();
+    let (scheme, encoded) = value.split_once(' ')?;
+    if !scheme.eq_ignore_ascii_case("basic") {
+        return None;
+    }
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(encoded.trim())
+        .ok()?;
+    let decoded = String::from_utf8(decoded).ok()?;
+    let (username, password) = decoded.split_once(':')?;
+    Some(LoginForm {
+        username: username.to_string(),
+        password: password.to_string(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_basic_credentials() {
+        let headers = |value: &'static str| {
+            let mut headers = axum::http::HeaderMap::new();
+            headers.insert("authorization", axum::http::HeaderValue::from_static(value));
+            headers
+        };
+        // jack:pass:word (the password may contain colons)
+        let form = basic_credentials(&headers("Basic amFjazpwYXNzOndvcmQ=")).expect("credentials");
+        assert_eq!(form.username, "jack");
+        assert_eq!(form.password, "pass:word");
+        assert!(basic_credentials(&headers("basic amFjazpwYXNzOndvcmQ=")).is_some());
+        assert!(basic_credentials(&headers("Bearer amFjazpwYXNz")).is_none());
+        assert!(basic_credentials(&headers("Basic not-base64!")).is_none());
+        // no colon
+        assert!(basic_credentials(&headers("Basic amFjaw==")).is_none());
+        assert!(basic_credentials(&axum::http::HeaderMap::new()).is_none());
+    }
 
     #[test]
     fn normalises_groups_like_java() {

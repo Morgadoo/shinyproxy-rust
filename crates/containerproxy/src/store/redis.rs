@@ -1080,6 +1080,14 @@ impl RedisVersionStore {
     }
 }
 
+/// Renews the lock `KEYS[1]` for `ARGV[2]` seconds when `ARGV[1]` holds it; answers 1 when it did.
+const RENEW_IF_OWNER: &str = "if redis.call('GET', KEYS[1]) == ARGV[1] then \
+     return redis.call('EXPIRE', KEYS[1], ARGV[2]) else return 0 end";
+
+/// Deletes the lock `KEYS[1]` when `ARGV[1]` holds it.
+const DELETE_IF_OWNER: &str = "if redis.call('GET', KEYS[1]) == ARGV[1] then \
+     return redis.call('DEL', KEYS[1]) else return 0 end";
+
 /// A lock in Redis, used to elect the leader of a realm (`RedisLockRegistry`).
 ///
 /// The key `shinyproxy_{realmId}__leader` holds the runtime id of the leader and expires, so a server that
@@ -1119,19 +1127,18 @@ impl RedisLock {
             return true;
         }
 
-        // renew it when this server holds it
-        let holder: Option<String> = redis::cmd("GET")
+        // renew it when this server holds it; checking and renewing is one step (a script), otherwise
+        // the lock could expire and be taken by another server in between, and this one would renew
+        // the lock of the other server and believe it is the leader too
+        let renewed: i64 = redis::cmd("EVAL")
+            .arg(RENEW_IF_OWNER)
+            .arg(1)
             .arg(&self.key)
+            .arg(owner)
+            .arg(seconds)
             .query(&mut connection)
-            .unwrap_or_default();
-        if holder.as_deref() == Some(owner) {
-            let _: Result<(), _> = redis::cmd("EXPIRE")
-                .arg(&self.key)
-                .arg(seconds)
-                .query(&mut connection);
-            return true;
-        }
-        false
+            .unwrap_or(0);
+        renewed == 1
     }
 
     /// Releases the lock when this owner holds it.
@@ -1139,13 +1146,13 @@ impl RedisLock {
         let Some(mut connection) = self.stores.connection() else {
             return;
         };
-        let holder: Option<String> = redis::cmd("GET")
+        // one step, for the same reason: never delete the lock another server took in the meantime
+        let _: Result<i64, _> = redis::cmd("EVAL")
+            .arg(DELETE_IF_OWNER)
+            .arg(1)
             .arg(&self.key)
-            .query(&mut connection)
-            .unwrap_or_default();
-        if holder.as_deref() == Some(owner) {
-            let _: Result<(), _> = redis::cmd("DEL").arg(&self.key).query(&mut connection);
-        }
+            .arg(owner)
+            .query(&mut connection);
     }
 
     /// The current holder of the lock (used by tests).
@@ -1201,6 +1208,27 @@ impl RedisStores {
 mod tests {
     use super::*;
     use crate::config::Settings;
+
+    #[test]
+    fn the_leader_lock_only_acts_for_its_holder() {
+        let Some(stores) = test_stores("leader-lock") else {
+            return;
+        };
+        let lock = stores.leader_lock();
+        let ttl = std::time::Duration::from_secs(30);
+
+        assert!(lock.acquire("server-a", ttl));
+        // another server neither gets nor renews nor releases the lock of the holder
+        assert!(!lock.acquire("server-b", ttl));
+        lock.release("server-b");
+        assert_eq!(lock.holder().as_deref(), Some("server-a"));
+        // the holder renews and releases it
+        assert!(lock.acquire("server-a", ttl));
+        lock.release("server-a");
+        assert_eq!(lock.holder(), None);
+        assert!(lock.acquire("server-b", ttl));
+        lock.release("server-b");
+    }
 
     #[test]
     fn builds_the_url_of_a_spring_configuration() {

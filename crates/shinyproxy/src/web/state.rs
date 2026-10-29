@@ -102,6 +102,8 @@ pub struct AppState {
     ///
     /// Parsing the JSON per request showed up in the profile of the proxy path; the headers of a proxy
     /// never change while it runs.
+    /// Serializes the starts of one user, see [`AppState::lock_starts`].
+    start_locks: StartLocks,
     proxy_header_cache:
         dashmap::DashMap<String, (i64, Arc<std::collections::BTreeMap<String, String>>)>,
     /// The scalers of the app definitions that use pre-started, shared containers.
@@ -483,6 +485,7 @@ impl AppState {
                 }
             },
             proxy_header_cache: dashmap::DashMap::new(),
+            start_locks: StartLocks::default(),
             sharing_scalers,
             metrics,
             logs,
@@ -583,6 +586,30 @@ impl AppState {
     /// The context path, always ending with a slash (`ContextPathHelper.withEndingSlash`).
     pub fn context_path_with_slash(&self) -> &str {
         &self.context_path_with_slash
+    }
+
+    /// The options of a request that is forwarded to an app (or to Grafana): the extra headers, and the
+    /// credentials of the user at ShinyProxy that must not reach it (the session cookie, and the
+    /// `Authorization` header when ShinyProxy authenticated the request with it).
+    pub fn forward_options(
+        &self,
+        extra_headers: Arc<std::collections::BTreeMap<String, String>>,
+        session: &tower_sessions::Session,
+        request: &axum::extract::Request,
+    ) -> containerproxy::dataplane::http::ForwardOptions {
+        let cookie_name =
+            containerproxy::web::session::cookie_name(self.settings.spring.session.is_redis());
+        containerproxy::dataplane::http::ForwardOptions {
+            extra_headers,
+            force_identity_encoding: false,
+            hidden_cookie: session
+                .id()
+                .map(|id| (cookie_name.to_string(), id.to_string())),
+            hide_authorization: request
+                .extensions()
+                .get::<super::router::CredentialsInHeader>()
+                .is_some(),
+        }
     }
 
     /// The `SHINYPROXY_HTTP_HEADERS` of a proxy, parsed once per proxy instead of once per request.
@@ -936,6 +963,29 @@ impl AppState {
     }
 
     /// Maximum number of instances per app for this user (`ShinyProxySpecProvider.getMaxInstances`).
+    /// Holds off the other starts of the same user until the guard is dropped, so that checking
+    /// `max-instances` and creating the proxy are one step: otherwise parallel starts all pass the check.
+    /// (Between servers of a Redis realm the check stays best effort, as it is in Java.)
+    pub async fn lock_starts(&self, user_id: &str) -> tokio::sync::MutexGuard<'_, ()> {
+        self.start_locks.of(user_id).lock().await
+    }
+
+    /// Checks `max-instances` of an app for a user: the error is the limit that is reached. Call it while
+    /// holding [`AppState::lock_starts`].
+    pub fn check_max_instances(&self, user: &AuthenticatedUser, spec_id: &str) -> Result<(), i64> {
+        let max_instances = self
+            .max_instances(Some(user))
+            .get(spec_id)
+            .copied()
+            .unwrap_or(1);
+        if max_instances >= 0
+            && self.proxies.user_proxies_by_spec(&user.id, spec_id).len() as i64 >= max_instances
+        {
+            return Err(max_instances);
+        }
+        Ok(())
+    }
+
     pub fn max_instances(&self, user: Option<&AuthenticatedUser>) -> BTreeMap<String, i64> {
         let resolver = self.resolver(user);
         let default = self.settings.proxy.default_max_instances().to_string();
@@ -994,6 +1044,25 @@ pub fn grafana_url(settings: &Settings) -> Option<String> {
         .as_deref()
         .map(|url| url.trim_end_matches('/').to_string())
         .filter(|url| !url.is_empty())
+}
+
+/// A fixed set of locks, one picked per user: a lock per user would grow without bound (every visitor is a
+/// user with `authentication: none`), and users that share a lock only wait for each other's checks.
+struct StartLocks(Vec<tokio::sync::Mutex<()>>);
+
+impl Default for StartLocks {
+    fn default() -> Self {
+        StartLocks((0..64).map(|_| tokio::sync::Mutex::new(())).collect())
+    }
+}
+
+impl StartLocks {
+    fn of(&self, user_id: &str) -> &tokio::sync::Mutex<()> {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        user_id.hash(&mut hasher);
+        &self.0[hasher.finish() as usize % self.0.len()]
+    }
 }
 
 #[cfg(test)]

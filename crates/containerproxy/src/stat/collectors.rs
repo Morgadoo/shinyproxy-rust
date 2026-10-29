@@ -219,10 +219,29 @@ fn record_line(record: &UsageRecord, attributes: &[String]) -> String {
         "{}\n",
         values
             .iter()
-            .map(|value| format!("\"{}\"", value.replace('"', "\"\"")))
+            .enumerate()
+            .map(|(index, value)| {
+                // the time is a number; every other column may hold a value of a user
+                let value = if index == 0 {
+                    value.clone()
+                } else {
+                    neutralise_formula(value)
+                };
+                format!("\"{}\"", value.replace('"', "\"\""))
+            })
             .collect::<Vec<_>>()
             .join(",")
     )
+}
+
+/// A spreadsheet opening the file runs a cell that starts with `=`, `+`, `-` or `@` as a formula
+/// (`=HYPERLINK(...)` as a user name), so such a value gets a leading `'`, as OWASP recommends.
+fn neutralise_formula(value: &str) -> String {
+    if value.starts_with(['=', '+', '-', '@', '\t', '\r']) {
+        format!("'{value}")
+    } else {
+        value.to_string()
+    }
 }
 
 #[async_trait::async_trait]
@@ -754,6 +773,14 @@ mod tests {
             "\"1700000000000\",\"jack\",\"ProxyStart\",\"01_hello\",\"openanalytics\""
         );
         assert_eq!(lines[2], "\"1700000000000\",\"jack\",\"Logout\",\"\",\"\"");
+        // a value of a user cannot become a formula in a spreadsheet
+        let formula = UsageRecord {
+            username: "=HYPERLINK(\"https://evil.example\")".to_string(),
+            ..record.clone()
+        };
+        assert!(
+            record_line(&formula, &[]).contains("\"'=HYPERLINK(\"\"https://evil.example\"\")\"")
+        );
 
         // an existing file is appended to, and the header is not repeated
         let collector =

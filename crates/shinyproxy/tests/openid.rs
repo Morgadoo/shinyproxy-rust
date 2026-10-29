@@ -674,6 +674,38 @@ proxy:
     assert_eq!(response["data"].as_array().map(Vec::len), Some(1));
     assert_eq!(response["data"][0]["id"], "01_hello");
 
+    // the token authenticates the client at ShinyProxy only: the app never gets it
+    let started: serde_json::Value = client
+        .post(instance.url("/app_i/01_hello/_"))
+        .header("authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({"timezone": "Europe/Brussels"}))
+        .send()
+        .await
+        .expect("start request")
+        .json()
+        .await
+        .expect("json");
+    let proxy_id = started["data"]["id"]
+        .as_str()
+        .expect("proxy id")
+        .to_string();
+    let mut headers = serde_json::Value::Null;
+    for _ in 0..100 {
+        let response = client
+            .get(instance.url(&format!("/app_proxy/{proxy_id}/headers")))
+            .header("authorization", format!("Bearer {token}"))
+            .send()
+            .await
+            .expect("request");
+        if response.status() == 200 {
+            headers = response.json().await.expect("json");
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(headers.is_object(), "the app must answer: {headers}");
+    assert!(headers.get("authorization").is_none(), "{headers}");
+
     // a token for another audience is refused
     let token = provider.issue_access_token("api-client", "another-resource", 600);
     let response = client
