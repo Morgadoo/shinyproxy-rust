@@ -31,7 +31,6 @@ use std::sync::Arc;
 use axum::extract::{Request, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use containerproxy::dataplane::http::ForwardOptions;
 use containerproxy::dataplane::ws::{proxy_upgrade, TunnelObserver};
 
 use super::router::CurrentUser;
@@ -52,6 +51,7 @@ impl TunnelObserver for NoObserver {
 pub async fn grafana(
     State(state): State<Arc<AppState>>,
     axum::Extension(CurrentUser(user)): axum::Extension<CurrentUser>,
+    session: tower_sessions::Session,
     request: Request,
 ) -> Response {
     let Some(grafana_url) = state.grafana_url() else {
@@ -85,10 +85,7 @@ pub async fn grafana(
         extra_headers.insert("X-SP-UserId".to_string(), user.id.clone());
     }
 
-    let options = ForwardOptions {
-        extra_headers: std::sync::Arc::new(extra_headers),
-        force_identity_encoding: false,
-    };
+    let options = state.forward_options(std::sync::Arc::new(extra_headers), &session, &request);
     match proxy_upgrade(
         request,
         &target,

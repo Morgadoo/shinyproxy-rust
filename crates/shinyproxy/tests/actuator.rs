@@ -478,3 +478,50 @@ async fn prometheus_counts_the_users_that_are_logged_in() {
 
     instance.stop();
 }
+
+#[tokio::test]
+async fn the_actuator_can_share_the_port_of_the_application() {
+    // `management.server.port` equal to `proxy.port`: Spring Boot serves the actuator on the
+    // application port (below the context path) instead of failing to bind twice
+    let instance = TestInstance::start(&format!(
+        "{CONFIG}server:\n  servlet:\n    context-path: /shiny\n"
+    ))
+    .await;
+    let app = shinyproxy::web::server::with_actuator(
+        shinyproxy::web::server::build(instance.state.clone()),
+        instance.state.clone(),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let address = listener.local_addr().expect("address");
+    let server = tokio::spawn(shinyproxy::web::server::serve(
+        listener,
+        app,
+        std::future::pending(),
+    ));
+
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("client");
+    let health: serde_json::Value = client
+        .get(format!("http://{address}/shiny/actuator/health"))
+        .send()
+        .await
+        .expect("health request")
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(health["status"], "UP", "{health}");
+    // the application itself is still served (and still asks for a login)
+    let response = client
+        .get(format!("http://{address}/shiny/"))
+        .send()
+        .await
+        .expect("index request");
+    assert_eq!(response.status(), 302);
+
+    server.abort();
+    instance.stop();
+}

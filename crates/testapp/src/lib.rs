@@ -38,6 +38,7 @@
 //! | `GET /big/{bytes}` | streamed response of N bytes |
 //! | `POST /upload` | consumes the request body, replies with its size and sha256 |
 //! | `GET /sleep/{ms}` | delayed response |
+//! | `GET /status/{code}` | answers with that status (an app that is healthy but answers 503) |
 //! | `GET /exit/{code}` | terminates the process (crash detection tests) |
 //! | `GET /stats` | counters: requests, upgrades, pings, pongs |
 //! | `GET /slowheaders` | response whose headers are sent after a delay |
@@ -107,6 +108,7 @@ pub fn router_with_state(state: AppState) -> Router {
         .route("/big/{bytes}", get(big_handler))
         .route("/upload", post(upload_handler))
         .route("/sleep/{ms}", get(sleep_handler))
+        .route("/status/{code}", get(status_handler))
         .route("/exit/{code}", get(exit_handler))
         .route("/stats", get(stats_handler))
         .route("/slowheaders", get(slow_headers_handler))
@@ -234,6 +236,12 @@ async fn upload_handler(request: Request) -> Response {
 async fn sleep_handler(Path(ms): Path<u64>) -> Response {
     tokio::time::sleep(Duration::from_millis(ms)).await;
     format!("slept {ms}ms\n").into_response()
+}
+
+/// Answers with the given status code (the app is healthy, the answer is its own).
+async fn status_handler(Path(code): Path<u16>) -> Response {
+    let status = StatusCode::from_u16(code).unwrap_or(StatusCode::BAD_REQUEST);
+    (status, format!("status {code} of the app\n")).into_response()
 }
 
 async fn exit_handler(Path(code): Path<i32>) -> Response {

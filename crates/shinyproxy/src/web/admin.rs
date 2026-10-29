@@ -111,7 +111,28 @@ const BUILD_TIMESTAMP: &str = env!("SHINYPROXY_BUILD_TIMESTAMP");
 
 /// The command line of this process, one argument per line (as the Java page does for JVM arguments).
 fn process_arguments() -> String {
-    std::env::args().skip(1).collect::<Vec<_>>().join("\n")
+    std::env::args()
+        .skip(1)
+        .map(|argument| redact_argument(&argument))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Hides the value of a `--key=value` argument whose key names a secret
+/// (`--spring.data.redis.password=...`, `--proxy.openid.client-secret=...`): the page is for
+/// administrators, but it is no place for credentials.
+fn redact_argument(argument: &str) -> String {
+    const SECRET_WORDS: [&str; 5] = ["password", "secret", "token", "credential", "key"];
+    match argument.split_once('=') {
+        Some((key, _))
+            if SECRET_WORDS
+                .iter()
+                .any(|word| key.to_ascii_lowercase().contains(word)) =>
+        {
+            format!("{key}=******")
+        }
+        _ => argument.to_string(),
+    }
 }
 
 /// Resident memory of this process, read from `/proc` on Linux.
@@ -152,6 +173,20 @@ pub fn format_bytes(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hides_secrets_in_the_arguments() {
+        assert_eq!(
+            redact_argument("--spring.data.redis.password=s3cret"),
+            "--spring.data.redis.password=******"
+        );
+        assert_eq!(
+            redact_argument("--proxy.openid.client-secret=abc"),
+            "--proxy.openid.client-secret=******"
+        );
+        assert_eq!(redact_argument("--proxy.port=8080"), "--proxy.port=8080");
+        assert_eq!(redact_argument("--version"), "--version");
+    }
 
     #[test]
     fn formats_byte_counts_like_java() {

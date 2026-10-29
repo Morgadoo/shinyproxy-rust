@@ -350,3 +350,45 @@ proxy:
 
     instance.stop();
 }
+
+#[tokio::test]
+async fn the_apps_stop_when_the_session_expires() {
+    // heartbeats are off, so only the expiry of the session can stop the app (`UserService`
+    // `onHttpSessionDestroyedEvent` runs the logout strategy)
+    let instance = TestInstance::start(
+        r##"
+proxy:
+  authentication: simple
+  container-backend: local
+  container-wait-timeout: 15000
+  heartbeat-timeout: -1
+  docker:
+    port-range-start: 27200
+  users:
+    - name: jack
+      password: password
+  specs:
+    - id: 01_hello
+      container-image: sp-testapp
+      container-cmd: [ "sp-testapp" ]
+spring:
+  session:
+    timeout: 2s
+"##,
+    )
+    .await;
+    let jack = instance.login("jack", "password").await;
+    let proxy_id = start_app(&instance, &jack).await;
+
+    let mut stopped = false;
+    for _ in 0..80 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        if instance.state.proxies.proxy(&proxy_id).is_none() {
+            stopped = true;
+            break;
+        }
+    }
+    assert!(stopped, "the app of an expired session must be stopped");
+
+    instance.stop();
+}

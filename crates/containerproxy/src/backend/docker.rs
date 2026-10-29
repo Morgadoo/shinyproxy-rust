@@ -996,13 +996,15 @@ impl ContainerBackend for DockerBackend {
             );
 
             // the ports of existing containers are registered even when the app is not recovered, so
-            // that they are never handed out twice
+            // that they are never handed out twice; they belong to the proxy (when the labels say which),
+            // because that is the owner whose ports are released when the app stops
+            let owner = port_owner(&runtime_values, &id);
             let mut port_bindings = BTreeMap::new();
             for port in container.ports.unwrap_or_default() {
                 let Some(public) = port.public_port else {
                     continue;
                 };
-                self.port_allocator.add_existing_port(&id, public);
+                self.port_allocator.add_existing_port(&owner, public);
                 port_bindings.insert(port.private_port, public);
             }
 
@@ -1034,9 +1036,31 @@ impl DockerBackend {
     }
 }
 
+/// The owner of the ports of an existing container: its proxy, or the container itself when the labels do
+/// not say which proxy it belongs to.
+pub(crate) fn port_owner(runtime_values: &RuntimeValues, container_id: &str) -> String {
+    runtime_values
+        .get(&crate::model::runtime_value::PROXY_ID)
+        .map(|value| value.to_value_string())
+        .filter(|proxy_id| !proxy_id.is_empty())
+        .unwrap_or_else(|| container_id.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ports_of_existing_containers_belong_to_their_proxy() {
+        let mut values = RuntimeValues::new();
+        assert_eq!(port_owner(&values, "container-1"), "container-1");
+        values.add(
+            RuntimeValue::string(&crate::model::runtime_value::PROXY_ID, "proxy-1"),
+            true,
+        );
+        // the owner `release` uses when the app stops, so the ports do not leak
+        assert_eq!(port_owner(&values, "container-1"), "proxy-1");
+    }
     use crate::model::proxy::{Container, ProxyStatus};
     use crate::model::spec::{ContainerSpec, DockerDeviceRequest, PortMapping};
     use crate::model::spel_field::{SpelString, SpelStringList, SpelStringMap};

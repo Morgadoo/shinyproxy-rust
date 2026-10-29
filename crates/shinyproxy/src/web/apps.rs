@@ -36,7 +36,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use containerproxy::auth::AuthenticatedUser;
 use containerproxy::dataplane::cache_headers;
-use containerproxy::dataplane::http::{app_unavailable_response, ForwardOptions};
+use containerproxy::dataplane::http::app_unavailable_response;
 use containerproxy::dataplane::inject::ScriptInjector;
 use containerproxy::dataplane::ws::{proxy_upgrade, TunnelObserver};
 use containerproxy::model::proxy::{now_millis, Proxy, ProxyStatus, ProxyStopReason};
@@ -88,6 +88,11 @@ pub async fn app_page(
         .cloned()
         .unwrap_or_else(|| DEFAULT_INSTANCE.to_string());
     let sub_path = path.get("sub").cloned().unwrap_or_default();
+    // the instance ends up in the page and in the URLs its script builds, so it must be a valid name
+    // (`AppRequestInfo.fromURI` refuses the page otherwise)
+    if instance.len() > 64 || !is_valid_instance_name(&instance) {
+        return api_fail("Invalid app instance name");
+    }
 
     let spec = state.specs.spec(&app_name).cloned();
     let proxy = find_user_proxy(&state, user.as_ref(), &app_name, &instance);
@@ -363,23 +368,17 @@ pub async fn start_app(
         return api_fail("Invalid app instance name");
     }
 
+    // the checks and the creation of the proxy are one step, so parallel starts cannot pass them all
+    let start_guard = state.lock_starts(&user.id).await;
     if find_user_proxy(&state, Some(&user), &spec_id, &instance).is_some() {
         return api_fail("You already have an instance of this app with the given name");
     }
 
     // max-instances per user and app
-    let max_instances = state
-        .max_instances(Some(&user))
-        .get(&spec_id)
-        .copied()
-        .unwrap_or(1);
-    if max_instances >= 0 {
-        let running = state.proxies.user_proxies_by_spec(&user.id, &spec_id).len() as i64;
-        if running >= max_instances {
-            return api_fail(&format!(
-                "Cannot start this app because you are using the maximum number of instances ({max_instances}) of this app."
-            ));
-        }
+    if let Err(max_instances) = state.check_max_instances(&user, &spec_id) {
+        return api_fail(&format!(
+            "Cannot start this app because you are using the maximum number of instances ({max_instances}) of this app."
+        ));
     }
 
     let proxy_id = uuid::Uuid::new_v4().to_string();
@@ -401,6 +400,7 @@ pub async fn start_app(
             Ok(proxy) => proxy,
             Err(error) => return api_fail(&error.to_string()),
         };
+    drop(start_guard);
 
     // starting takes a while: answer immediately (status New) and continue in the background, exactly
     // like the Java AsyncProxyService
@@ -423,6 +423,87 @@ pub async fn start_app(
         Json(json!({"status": "success", "data": response})),
     )
         .into_response()
+}
+
+/// `POST /api/proxy/{specId}` — starts an app through the API (`ProxyController.startProxy`).
+///
+/// Unlike the start of the page of an app, the answer comes when the app is up: 201 with the proxy, as in
+/// Java. The app is served under `/api/route/{proxyId}/` and has no instance name, so it never takes the
+/// place of an app the user opened in the browser. `max-instances` applies here too (Java only checks it
+/// in the browser flow, which lets a script start any number of apps).
+pub async fn start_proxy_api(
+    State(state): State<Arc<AppState>>,
+    axum::Extension(CurrentUser(user)): axum::Extension<CurrentUser>,
+    Path(spec_id): Path<String>,
+    body: Option<Json<StartAppBody>>,
+) -> Response {
+    let Some(user) = user else {
+        return api_forbidden();
+    };
+    let Some(spec) = state
+        .specs
+        .spec(&spec_id)
+        .cloned()
+        .filter(|spec| state.can_access(Some(&user), spec))
+    else {
+        return api_forbidden();
+    };
+
+    let start_guard = state.lock_starts(&user.id).await;
+    if let Err(max_instances) = state.check_max_instances(&user, &spec_id) {
+        return api_fail(&format!(
+            "Cannot start this app because you are using the maximum number of instances ({max_instances}) of this app."
+        ));
+    }
+
+    let proxy_id = uuid::Uuid::new_v4().to_string();
+    let body = body.map(|Json(body)| body).unwrap_or_default();
+    let mut runtime_values =
+        shinyproxy_runtime_values(&state, &spec, DEFAULT_INSTANCE, &proxy_id, body.timezone);
+    runtime_values.retain(|value| {
+        value.key.env_var != PUBLIC_PATH.env_var && value.key.env_var != APP_INSTANCE.env_var
+    });
+    runtime_values.push(RuntimeValue::string(
+        &PUBLIC_PATH,
+        format!("{}api/route/{proxy_id}/", state.context_path_with_slash()),
+    ));
+    match state.parse_parameters(Some(&user), &spec, body.parameters.as_ref()) {
+        Ok(values) => runtime_values.extend(values),
+        Err(error) => return api_fail(&error.0),
+    }
+
+    let created =
+        match state
+            .proxies
+            .create_proxy(&proxy_id, &user.to_user_context(), &spec, runtime_values)
+        {
+            Ok(created) => created,
+            Err(error) => return api_fail(&error.to_string()),
+        };
+    drop(start_guard);
+
+    match state
+        .proxies
+        .start_proxy(created, &spec, &user.to_user_context())
+        .await
+    {
+        Ok(started) => {
+            state.router.add_mappings(&started);
+            (
+                StatusCode::CREATED,
+                Json(json!({"status": "success", "data": started.api_json()})),
+            )
+                .into_response()
+        }
+        Err(error) => {
+            tracing::warn!("failed to start app {spec_id} through the API: {error}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"status": "error", "data": "Failed to start proxy"})),
+            )
+                .into_response()
+        }
+    }
 }
 
 /// The ShinyProxy specific runtime values of a new proxy (`ShinyProxySpecProvider.getRuntimeValues`).
@@ -520,13 +601,8 @@ pub async fn app_proxy(
     let inject = should_inject_script(&method, request.headers());
     let url = resolved.url(request.uri().query());
 
-    let mut options = ForwardOptions {
-        extra_headers: state.proxy_headers(&proxy),
-        force_identity_encoding: inject,
-    };
-    if !inject {
-        options.force_identity_encoding = false;
-    }
+    let mut options = state.forward_options(state.proxy_headers(&proxy), &session, &request);
+    options.force_identity_encoding = inject;
 
     let heartbeat_rate =
         Duration::from_millis(state.settings.proxy.heartbeat_rate_ms().max(1) as u64);
@@ -556,7 +632,9 @@ pub async fn app_proxy(
     };
 
     if response.status() == StatusCode::SERVICE_UNAVAILABLE {
-        return app_crashed_or_stopped(&state, &proxy).await;
+        if let Some(unavailable) = unavailable_after_503(&state, &proxy).await {
+            return unavailable;
+        }
     }
 
     // cache headers of the app, according to the mode of the proxy
@@ -575,11 +653,25 @@ pub async fn app_proxy(
         );
         let (mut parts, body) = response.into_parts();
         parts.headers.remove(header::CONTENT_LENGTH);
-        let mut injector = ScriptInjector::new(&script);
-        let stream = body.into_data_stream().map(move |chunk| match chunk {
-            Ok(chunk) => Ok(injector.push(&chunk)),
-            Err(error) => Err(error),
-        });
+        // the injector holds back the last bytes of every chunk (a marker may be split across chunks), so
+        // the end of the body must flush it, otherwise the tail of the page is lost
+        let stream = futures::stream::unfold(
+            (body.into_data_stream(), Some(ScriptInjector::new(&script))),
+            |(mut body, mut injector)| async move {
+                let active = injector.as_mut()?;
+                match body.next().await {
+                    Some(Ok(chunk)) => {
+                        let output = active.push(&chunk);
+                        Some((Ok(output), (body, injector)))
+                    }
+                    Some(Err(error)) => Some((Err(error), (body, None))),
+                    None => {
+                        let output = active.finish();
+                        Some((Ok(output), (body, None)))
+                    }
+                }
+            },
+        );
         return Response::from_parts(parts, Body::from_stream(stream));
     }
 
@@ -647,6 +739,35 @@ fn is_html(headers: &HeaderMap) -> bool {
 
 /// The headers ShinyProxy adds to every request to the app.
 /// Decides between `app_crashed` and `app_stopped_or_non_existent` and stops a crashed app.
+/// An app answered 503 (`defaultResponseListener`): when it is still healthy that is the app's own
+/// answer and it passes through (`None`); otherwise the app crashed (and is stopped) or is gone.
+async fn unavailable_after_503(state: &Arc<AppState>, proxy: &Proxy) -> Option<Response> {
+    let Some(current) = state
+        .proxies
+        .proxy(&proxy.id)
+        .filter(|current| !current.status.is_unavailable())
+    else {
+        return Some(app_unavailable_response(false));
+    };
+    if state.proxies.is_proxy_healthy(&current).await {
+        tracing::info!(
+            "Failed request was proxied to the app, status: 503 [proxyId: {}]",
+            current.id
+        );
+        return None;
+    }
+    tracing::info!(
+        "Proxy unreachable/crashed, stopping it now [proxyId: {}]",
+        current.id
+    );
+    state.router.remove_mappings(&current.id);
+    let _ = state
+        .proxies
+        .stop_proxy(&current, ProxyStopReason::Crashed)
+        .await;
+    Some(app_unavailable_response(true))
+}
+
 async fn app_crashed_or_stopped(state: &Arc<AppState>, proxy: &Proxy) -> Response {
     let current = state.proxies.proxy(&proxy.id);
     match current {
@@ -702,6 +823,16 @@ pub async fn app_direct(
     };
 
     let mut proxy = find_user_proxy(&state, Some(&user), &info.app_name, &info.app_instance);
+    // every request of the app passes here, so the lock is only taken when the app has to be started;
+    // a request that waited for it looks again, another one may just have started the app
+    let mut start_guard = None;
+    if proxy.is_none() {
+        start_guard = Some(state.lock_starts(&user.id).await);
+        proxy = find_user_proxy(&state, Some(&user), &info.app_name, &info.app_instance);
+        if proxy.is_some() {
+            start_guard = None;
+        }
+    }
     if proxy.is_none() {
         let Some(spec) = state
             .specs
@@ -712,19 +843,8 @@ pub async fn app_direct(
             return (StatusCode::FORBIDDEN, "Forbidden\n").into_response();
         };
 
-        // max-instances per user and app
-        let max_instances = state
-            .max_instances(Some(&user))
-            .get(&info.app_name)
-            .copied()
-            .unwrap_or(1);
-        if max_instances >= 0
-            && state
-                .proxies
-                .user_proxies_by_spec(&user.id, &info.app_name)
-                .len() as i64
-                >= max_instances
-        {
+        // max-instances per user and app (checked and created in one step, see `lock_starts`)
+        if state.check_max_instances(&user, &info.app_name).is_err() {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Cannot start new proxy because the maximum amount of instances of this proxy has been reached\n",
@@ -760,6 +880,7 @@ pub async fn app_direct(
                     .into_response()
             }
         };
+        drop(start_guard);
 
         match state
             .proxies
@@ -861,10 +982,7 @@ async fn forward_to_app(
     user: Option<&containerproxy::auth::AuthenticatedUser>,
 ) -> Response {
     let method = request.method().clone();
-    let options = ForwardOptions {
-        extra_headers: state.proxy_headers(proxy),
-        force_identity_encoding: false,
-    };
+    let options = state.forward_options(state.proxy_headers(proxy), session, &request);
     let heartbeat_rate =
         Duration::from_millis(state.settings.proxy.heartbeat_rate_ms().max(1) as u64);
     let observer: Arc<dyn TunnelObserver> = Arc::new(HeartbeatObserver {
@@ -878,7 +996,9 @@ async fn forward_to_app(
     match proxy_upgrade(request, url, &options, heartbeat_rate, observer).await {
         Ok(mut response) => {
             if response.status() == StatusCode::SERVICE_UNAVAILABLE {
-                return app_crashed_or_stopped(state, proxy).await;
+                if let Some(unavailable) = unavailable_after_503(state, proxy).await {
+                    return unavailable;
+                }
             }
             let mode = proxy
                 .runtime_value(&runtime_value::CACHE_HEADERS_MODE)

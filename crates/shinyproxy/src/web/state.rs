@@ -102,6 +102,8 @@ pub struct AppState {
     ///
     /// Parsing the JSON per request showed up in the profile of the proxy path; the headers of a proxy
     /// never change while it runs.
+    /// Serializes the starts of one user, see [`AppState::lock_starts`].
+    start_locks: StartLocks,
     proxy_header_cache:
         dashmap::DashMap<String, (i64, Arc<std::collections::BTreeMap<String, String>>)>,
     /// The scalers of the app definitions that use pre-started, shared containers.
@@ -195,6 +197,17 @@ impl AppState {
         // `proxy.store-mode: Redis` shares the state with the other servers of the realm, and
         // `spring.session.store-type: redis` shares the sessions; both need a connection
         let redis_sessions_wanted = settings.spring.session.is_redis();
+        // Sentinel is not implemented: connecting to `spring.data.redis.host` (localhost by default)
+        // instead would send the password to the wrong server, so the server refuses to start
+        if settings.spring.data.redis.sentinel.master.is_some()
+            && (redis_sessions_wanted || settings.proxy.store_mode().eq_ignore_ascii_case("redis"))
+        {
+            return Err(StateError::Store(
+                "Redis Sentinel (spring.data.redis.sentinel.*) is not supported by this \
+                 implementation; configure spring.data.redis.host/port of the Redis master instead"
+                    .to_string(),
+            ));
+        }
         let mut port_registry: Option<Box<dyn containerproxy::backend::ports::PortRegistry>> = None;
         let mut redis_stores: Option<RedisStores> = None;
         let (store, heartbeats): (Arc<dyn ProxyStore>, Arc<dyn HeartbeatStore>) =
@@ -206,7 +219,7 @@ impl AppState {
                     runtime_values.clone(),
                 )
                 .map_err(StateError::Store)?;
-                tracing::info!("Using the Redis store ({url})");
+                tracing::info!("Using the Redis store ({})", RedisStores::redacted(&url));
                 // the host ports are allocated through Redis as well, so that two servers never publish
                 // the same port
                 port_registry = Some(Box::new(containerproxy::store::RedisPortRegistry::new(
@@ -227,7 +240,10 @@ impl AppState {
                         runtime_values.clone(),
                     )
                     .map_err(StateError::Store)?;
-                    tracing::info!("Using Redis for the sessions ({url})");
+                    tracing::info!(
+                        "Using Redis for the sessions ({})",
+                        RedisStores::redacted(&url)
+                    );
                     redis_stores = Some(stores);
                 }
                 (
@@ -308,7 +324,7 @@ impl AppState {
         };
 
         // the sessions of a realm are shared through Redis when Spring Session is configured that way
-        let session_timeout = settings.spring.session.timeout_duration();
+        let session_timeout = settings.session_timeout();
         let session_store = match (&redis_stores, redis_sessions_wanted) {
             (Some(stores), true) => Some(stores.session_store(
                 identifiers.realm_id.as_deref(),
@@ -469,6 +485,7 @@ impl AppState {
                 }
             },
             proxy_header_cache: dashmap::DashMap::new(),
+            start_locks: StartLocks::default(),
             sharing_scalers,
             metrics,
             logs,
@@ -526,6 +543,32 @@ impl AppState {
             sessions.clone().spawn_refresh();
         }
 
+        // a user whose session expired is logged out like one who signs out (`UserService`
+        // `onHttpSessionDestroyedEvent`): their apps stop when they say so, and the logout is counted
+        let state = self.clone();
+        // checked twice per timeout (at most every 30 seconds), so a logout follows the expiry closely
+        let check_every = (self.settings.session_timeout() / 2).clamp(
+            std::time::Duration::from_secs(1),
+            std::time::Duration::from_secs(30),
+        );
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(check_every);
+            loop {
+                ticker.tick().await;
+                for user_id in state.sessions.take_expired_users() {
+                    tracing::info!("User logged out [user: {user_id}]");
+                    state
+                        .proxies
+                        .events()
+                        .publish(containerproxy::events::Event::UserLoggedOut {
+                            user_id: user_id.clone(),
+                            expired: true,
+                        });
+                    state.stop_apps_on_logout(&user_id);
+                }
+            }
+        });
+
         // take part in the leader election (and become the leader immediately when this server is alone),
         // unless a newer configuration is already running in this realm
         if let Some(latest) = &self.latest_config {
@@ -552,6 +595,22 @@ impl AppState {
         })
     }
 
+    /// Stops the apps of a user that logged out (or whose session expired) when they say so
+    /// (`proxy.default-stop-proxy-on-logout` is true by default), in the background.
+    pub fn stop_apps_on_logout(self: &Arc<Self>, user_id: &str) {
+        let state = self.clone();
+        let user_id = user_id.to_string();
+        tokio::spawn(async move {
+            let stopped = state
+                .release
+                .on_logout(&user_id, &|proxy| state.stop_on_logout(proxy))
+                .await;
+            for proxy_id in stopped {
+                state.router.remove_mappings(&proxy_id);
+            }
+        });
+    }
+
     /// Whether an app is stopped when its user logs out (`DefaultProxyLogoutStrategy.shouldBeStopped`).
     pub fn stop_on_logout(&self, proxy: &containerproxy::model::proxy::Proxy) -> bool {
         // the app definition wins over the global default (which is true)
@@ -569,6 +628,30 @@ impl AppState {
     /// The context path, always ending with a slash (`ContextPathHelper.withEndingSlash`).
     pub fn context_path_with_slash(&self) -> &str {
         &self.context_path_with_slash
+    }
+
+    /// The options of a request that is forwarded to an app (or to Grafana): the extra headers, and the
+    /// credentials of the user at ShinyProxy that must not reach it (the session cookie, and the
+    /// `Authorization` header when ShinyProxy authenticated the request with it).
+    pub fn forward_options(
+        &self,
+        extra_headers: Arc<std::collections::BTreeMap<String, String>>,
+        session: &tower_sessions::Session,
+        request: &axum::extract::Request,
+    ) -> containerproxy::dataplane::http::ForwardOptions {
+        let cookie_name =
+            containerproxy::web::session::cookie_name(self.settings.spring.session.is_redis());
+        containerproxy::dataplane::http::ForwardOptions {
+            extra_headers,
+            force_identity_encoding: false,
+            hidden_cookie: session
+                .id()
+                .map(|id| (cookie_name.to_string(), id.to_string())),
+            hide_authorization: request
+                .extensions()
+                .get::<super::router::CredentialsInHeader>()
+                .is_some(),
+        }
     }
 
     /// The `SHINYPROXY_HTTP_HEADERS` of a proxy, parsed once per proxy instead of once per request.
@@ -922,6 +1005,29 @@ impl AppState {
     }
 
     /// Maximum number of instances per app for this user (`ShinyProxySpecProvider.getMaxInstances`).
+    /// Holds off the other starts of the same user until the guard is dropped, so that checking
+    /// `max-instances` and creating the proxy are one step: otherwise parallel starts all pass the check.
+    /// (Between servers of a Redis realm the check stays best effort, as it is in Java.)
+    pub async fn lock_starts(&self, user_id: &str) -> tokio::sync::MutexGuard<'_, ()> {
+        self.start_locks.of(user_id).lock().await
+    }
+
+    /// Checks `max-instances` of an app for a user: the error is the limit that is reached. Call it while
+    /// holding [`AppState::lock_starts`].
+    pub fn check_max_instances(&self, user: &AuthenticatedUser, spec_id: &str) -> Result<(), i64> {
+        let max_instances = self
+            .max_instances(Some(user))
+            .get(spec_id)
+            .copied()
+            .unwrap_or(1);
+        if max_instances >= 0
+            && self.proxies.user_proxies_by_spec(&user.id, spec_id).len() as i64 >= max_instances
+        {
+            return Err(max_instances);
+        }
+        Ok(())
+    }
+
     pub fn max_instances(&self, user: Option<&AuthenticatedUser>) -> BTreeMap<String, i64> {
         let resolver = self.resolver(user);
         let default = self.settings.proxy.default_max_instances().to_string();
@@ -980,6 +1086,25 @@ pub fn grafana_url(settings: &Settings) -> Option<String> {
         .as_deref()
         .map(|url| url.trim_end_matches('/').to_string())
         .filter(|url| !url.is_empty())
+}
+
+/// A fixed set of locks, one picked per user: a lock per user would grow without bound (every visitor is a
+/// user with `authentication: none`), and users that share a lock only wait for each other's checks.
+struct StartLocks(Vec<tokio::sync::Mutex<()>>);
+
+impl Default for StartLocks {
+    fn default() -> Self {
+        StartLocks((0..64).map(|_| tokio::sync::Mutex::new(())).collect())
+    }
+}
+
+impl StartLocks {
+    fn of(&self, user_id: &str) -> &tokio::sync::Mutex<()> {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        user_id.hash(&mut hasher);
+        &self.0[hasher.finish() as usize % self.0.len()]
+    }
 }
 
 #[cfg(test)]

@@ -9,9 +9,9 @@ on:
       - "v*"
   workflow_dispatch:
 
+# each job gets only what it needs: the builds read, the image job pushes packages, the release job writes
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -70,6 +70,9 @@ jobs:
   image:
     name: Container image
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
 
@@ -102,6 +105,8 @@ jobs:
     name: GitHub release
     needs: [binaries, image]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     if: always() && github.event_name == 'push' && needs.binaries.result == 'success'
     steps:
       # Only the binary tarballs. docker/build-push-action also uploads a

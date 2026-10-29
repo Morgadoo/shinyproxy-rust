@@ -75,8 +75,16 @@ impl WebServiceAuthenticationBackend {
     }
 
     /// The body of the authentication request (`String.format` with the name and the password).
+    ///
+    /// The body is JSON, so the values are JSON escaped first. Java pastes them as they are, which lets a
+    /// password like `x","username":"attacker","password":"pw` replace the user name the service checks
+    /// (most parsers keep the last duplicate key) while ShinyProxy logs the user in under the submitted one.
     pub fn request_body(&self, form: &LoginForm) -> String {
-        format_credentials(&self.request_body_template, &form.username, &form.password)
+        format_credentials(
+            &self.request_body_template,
+            &json_escape(&form.username),
+            &json_escape(&form.password),
+        )
     }
 
     /// The expression that extracts the groups from the answer.
@@ -143,6 +151,12 @@ impl WebServiceAuthenticationBackend {
 
 /// Replaces the `%s` placeholders of the template with the user name and the password.
 ///
+/// The content of a JSON string for `value`, without the surrounding quotes.
+fn json_escape(value: &str) -> String {
+    let quoted = serde_json::Value::String(value.to_string()).to_string();
+    quoted[1..quoted.len() - 1].to_string()
+}
+
 /// Java uses `String.format(template, username, password)`; only `%s` is supported here, which is what the
 /// documented configurations use.
 pub fn format_credentials(template: &str, username: &str, password: &str) -> String {
@@ -263,6 +277,18 @@ proxy:
             password: "s3cret".to_string(),
         });
         assert_eq!(body, r#"{"username":"jack","password":"s3cret"}"#);
+
+        // the values cannot leave their JSON strings
+        let body = backend.request_body(&LoginForm {
+            username: "victim".to_string(),
+            password: r#"x","username":"attacker","password":"pw\"#.to_string(),
+        });
+        let parsed: serde_json::Value = serde_json::from_str(&body).expect("valid JSON");
+        assert_eq!(parsed["username"], "victim");
+        assert_eq!(
+            parsed["password"],
+            r#"x","username":"attacker","password":"pw\"#
+        );
 
         // literal percent signs and missing placeholders
         assert_eq!(format_credentials("100%% sure", "a", "b"), "100% sure");

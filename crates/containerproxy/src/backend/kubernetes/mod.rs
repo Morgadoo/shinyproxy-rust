@@ -56,6 +56,7 @@ use crate::model::runtime_value::{
     BACKEND_CONTAINER_NAME, CONTAINER_IMAGE, PROXIED_APP,
 };
 use crate::model::spec::ProxySpec;
+use crate::model::spel_field::{ResolveError, SpecResolver};
 
 /// Name of the backend.
 pub const NAME: &str = "kubernetes";
@@ -102,6 +103,61 @@ impl KubernetesSpecExtension {
     pub fn of(spec: &ProxySpec) -> Self {
         spec.spec_extensions.get("kubernetes")
     }
+}
+
+/// Evaluates the expressions of the patches and manifests of an app (`KubernetesSpecExtension.finalResolve`);
+/// the access control of the authorized ones is evaluated when it is checked.
+pub fn resolve_extension(
+    extension: &Value,
+    resolver: &dyn SpecResolver,
+) -> Result<Value, ResolveError> {
+    let mut resolved = extension.clone();
+    if let Value::Object(fields) = &mut resolved {
+        for (name, value) in fields.iter_mut() {
+            match name.as_str() {
+                "pod-patches" | "additional-manifests" | "additional-persistent-manifests" => {
+                    resolve_documents(value, resolver)?
+                }
+                "authorized-pod-patches" => resolve_authorized(value, "patches", resolver)?,
+                "authorized-additional-manifests"
+                | "authorized-additional-persistent-manifests" => {
+                    resolve_authorized(value, "manifests", resolver)?
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(resolved)
+}
+
+/// Resolves a YAML document, or every document of a list.
+fn resolve_documents(value: &mut Value, resolver: &dyn SpecResolver) -> Result<(), ResolveError> {
+    match value {
+        Value::String(text) => *value = Value::String(manifest::resolve_document(text, resolver)?),
+        Value::Array(items) => {
+            for item in items {
+                resolve_documents(item, resolver)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Resolves the documents in `field` of every entry of an authorized list.
+fn resolve_authorized(
+    value: &mut Value,
+    field: &str,
+    resolver: &dyn SpecResolver,
+) -> Result<(), ResolveError> {
+    if let Value::Array(entries) = value {
+        for entry in entries {
+            if let Some(documents) = entry.get_mut(field) {
+                resolve_documents(documents, resolver)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Decides whether a user may use an authorized patch or manifest.
@@ -966,6 +1022,115 @@ impl KubernetesBackend {
 mod tests {
     use super::*;
     use crate::model::spec::ProxySpec;
+
+    /// Replaces `#{proxy.userId}` with the given value, the way the expression engine would.
+    struct UserIdResolver(&'static str);
+
+    impl SpecResolver for UserIdResolver {
+        fn string(&self, raw: &str) -> Result<String, ResolveError> {
+            Ok(raw.replace("#{proxy.userId}", self.0))
+        }
+
+        fn integer(&self, raw: &str) -> Result<i64, ResolveError> {
+            raw.parse()
+                .map_err(|_| ResolveError::new(raw, "not a number"))
+        }
+
+        fn boolean(&self, raw: &str) -> Result<bool, ResolveError> {
+            Ok(raw == "true")
+        }
+    }
+
+    fn spec_with_patches(extension: Value) -> ProxySpec {
+        let mut spec = ProxySpec::new("01_hello");
+        spec.spec_extensions.insert("kubernetes", extension);
+        spec
+    }
+
+    #[test]
+    fn evaluates_the_expressions_of_patches_and_manifests() {
+        let spec = spec_with_patches(serde_json::json!({
+            "pod-patches": "- op: add\n  path: /spec/volumes/0/nfs/path\n  value: /exports/#{proxy.userId}\n",
+            "additional-manifests": ["apiVersion: v1\nkind: PersistentVolumeClaim\nmetadata:\n  name: home-#{proxy.userId}\n"],
+            "authorized-pod-patches": [{
+                "access-control": {"expression": "#{proxy.userId == 'admin'}"},
+                "patches": "- op: add\n  path: /spec/nodeName\n  value: '#{proxy.userId}'\n"
+            }],
+        }));
+
+        // the patches use runtime values, so they are evaluated in the final phase only (as in Java)
+        let first = spec.first_resolve(&UserIdResolver("jack")).unwrap();
+        assert!(KubernetesSpecExtension::of(&first)
+            .pod_patches
+            .unwrap()
+            .contains("#{proxy.userId}"));
+
+        let resolved = first.final_resolve(&UserIdResolver("jack")).unwrap();
+        let extension = KubernetesSpecExtension::of(&resolved);
+        let patched = manifest::apply_patch(
+            &serde_json::json!({"spec": {"volumes": [{"nfs": {}}]}}),
+            extension.pod_patches.as_deref(),
+        )
+        .unwrap();
+        assert_eq!(
+            patched["spec"]["volumes"][0]["nfs"]["path"],
+            "/exports/jack"
+        );
+        assert!(extension.additional_manifests[0].contains("home-jack"));
+        let authorized = &extension.authorized_pod_patches[0];
+        assert!(authorized.patches.as_deref().unwrap().contains("jack"));
+        // the access control is evaluated when it is checked, not here
+        assert_eq!(
+            authorized
+                .access_control
+                .as_ref()
+                .unwrap()
+                .expression
+                .as_deref(),
+            Some("#{proxy.userId == 'admin'}")
+        );
+    }
+
+    #[test]
+    fn a_user_value_cannot_change_the_structure_of_a_patch() {
+        let spec = spec_with_patches(serde_json::json!({
+            "pod-patches": "- op: add\n  path: /spec/nodeName\n  value: \"#{proxy.userId}\"\n",
+        }));
+        let resolved = spec
+            .final_resolve(&UserIdResolver(
+                "jack\"\n- op: add\n  path: /spec/hostNetwork\n  value: true\n#",
+            ))
+            .unwrap();
+        let patched = manifest::apply_patch(
+            &serde_json::json!({"spec": {}}),
+            KubernetesSpecExtension::of(&resolved)
+                .pod_patches
+                .as_deref(),
+        )
+        .unwrap();
+        assert!(patched["spec"].get("hostNetwork").is_none());
+        assert!(patched["spec"]["nodeName"]
+            .as_str()
+            .unwrap()
+            .starts_with("jack\""));
+    }
+
+    #[test]
+    fn an_expression_yaml_reads_as_a_comment_is_still_evaluated() {
+        // `value: #{...}` is a comment in YAML; Java evaluates the text before parsing, so this works there
+        let spec = spec_with_patches(serde_json::json!({
+            "pod-patches": "- op: add\n  path: /spec/volumes/0/subPath\n  value: #{proxy.userId}\n",
+        }));
+        let resolved = spec.final_resolve(&UserIdResolver("jack")).unwrap();
+        let patched = manifest::apply_patch(
+            &serde_json::json!({"spec": {"volumes": [{}]}}),
+            KubernetesSpecExtension::of(&resolved)
+                .pod_patches
+                .as_deref(),
+        )
+        .unwrap();
+        assert_eq!(patched["spec"]["volumes"][0]["subPath"], "jack");
+    }
 
     #[test]
     fn reads_the_kubernetes_fields_of_an_app() {

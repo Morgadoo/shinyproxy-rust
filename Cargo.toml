@@ -28,7 +28,7 @@ tokio-util = { version = "0.7", features = ["io"] }
 axum = { version = "0.8", features = ["macros", "query", "json", "form"] }
 axum-extra = { version = "0.10", features = ["cookie", "typed-header"] }
 hyper = { version = "1", features = ["http1", "server", "client"] }
-hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", "server", "tokio"] }
+hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", "http2", "server", "server-auto", "service", "tokio"] }
 http = "1"
 http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }

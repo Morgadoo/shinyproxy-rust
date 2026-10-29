@@ -232,7 +232,7 @@ impl<'a> Evaluator<'a> {
                 match operator {
                     UnaryOperator::Not => Ok(Value::Bool(!value.as_bool(self.expression)?)),
                     UnaryOperator::Negate => match value {
-                        Value::Int(value) => Ok(Value::Int(-value)),
+                        Value::Int(value) => Ok(Value::Int(value.wrapping_neg())),
                         Value::Float(value) => Ok(Value::Float(-value)),
                         other => Err(SpelError::evaluation(
                             self.expression,
@@ -353,8 +353,10 @@ impl<'a> Evaluator<'a> {
                 (Value::Float(_), _) | (_, Value::Float(_)) => Ok(Value::Float(
                     as_float(&left, self.expression)? + as_float(&right, self.expression)?,
                 )),
+                // Java's arithmetic wraps on overflow instead of failing; Rust's would panic
                 _ => Ok(Value::Int(
-                    left.as_int(self.expression)? + right.as_int(self.expression)?,
+                    left.as_int(self.expression)?
+                        .wrapping_add(right.as_int(self.expression)?),
                 )),
             },
             BinaryOperator::Subtract
@@ -380,11 +382,12 @@ impl<'a> Evaluator<'a> {
                     {
                         return Err(SpelError::evaluation(self.expression, "division by zero"));
                     }
+                    // wrapping like Java (`Long.MIN_VALUE / -1` is `Long.MIN_VALUE`), never a panic
                     let value = match operator {
-                        BinaryOperator::Subtract => left - right,
-                        BinaryOperator::Multiply => left * right,
-                        BinaryOperator::Divide => left / right,
-                        _ => left % right,
+                        BinaryOperator::Subtract => left.wrapping_sub(right),
+                        BinaryOperator::Multiply => left.wrapping_mul(right),
+                        BinaryOperator::Divide => left.wrapping_div(right),
+                        _ => left.wrapping_rem(right),
                     };
                     Ok(Value::Int(value))
                 }
@@ -911,6 +914,25 @@ mod tests {
                 "HOME".to_string(),
                 "/home/jack".to_string(),
             )]))
+    }
+
+    #[test]
+    fn integer_overflow_wraps_like_java_instead_of_panicking() {
+        let context = Context::new().with_root("min", Value::Int(i64::MIN));
+        for (expression, expected) in [
+            ("min / -1", i64::MIN),
+            ("min % -1", 0),
+            ("min - 1", i64::MAX),
+            ("min * -1", i64::MIN),
+            ("-min", i64::MIN),
+            ("9223372036854775807 + 1", i64::MIN),
+        ] {
+            assert_eq!(
+                evaluate_expression(expression, &context).unwrap(),
+                Value::Int(expected),
+                "{expression}"
+            );
+        }
     }
 
     #[test]

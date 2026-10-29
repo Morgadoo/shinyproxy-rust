@@ -51,6 +51,13 @@ pub async fn proxy_upgrade(
     let client_upgrade = request
         .extensions_mut()
         .remove::<hyper::upgrade::OnUpgrade>();
+    // pings are WebSocket frames, so only a WebSocket gets them; another protocol (`h2c`, ...) is
+    // tunnelled as it is
+    let websocket = request
+        .headers()
+        .get(axum::http::header::UPGRADE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case("websocket"));
 
     let response = super::http::forward(request, url, options).await?;
     if response.status() != axum::http::StatusCode::SWITCHING_PROTOCOLS {
@@ -71,14 +78,18 @@ pub async fn proxy_upgrade(
                     }
                 };
                 observer.opened();
-                if let Err(error) = tunnel(
-                    hyper_util::rt::TokioIo::new(client),
-                    hyper_util::rt::TokioIo::new(upstream),
-                    heartbeat_rate,
-                    observer,
-                )
-                .await
-                {
+                let mut client = hyper_util::rt::TokioIo::new(client);
+                let mut upstream = hyper_util::rt::TokioIo::new(upstream);
+                let result = if websocket {
+                    tunnel(client, upstream, heartbeat_rate, observer).await
+                } else {
+                    let copied = tokio::io::copy_bidirectional(&mut client, &mut upstream)
+                        .await
+                        .map(|_| ());
+                    observer.closed();
+                    copied
+                };
+                if let Err(error) = result {
                     tracing::debug!("websocket tunnel ended: {error}");
                 }
             });
@@ -100,6 +111,14 @@ pub const WEBSOCKET_PONG: u8 = 0b1000_1010;
 /// Whether a buffer starts with a WebSocket pong frame.
 pub fn is_pong(buffer: &[u8]) -> bool {
     !buffer.is_empty() && buffer[0] == WEBSOCKET_PONG
+}
+
+/// Whether a chunk read from the client is exactly the answer to [`WEBSOCKET_PING`]: one complete pong
+/// frame, final and masked (as frames of a client are), without payload: `0x8A 0x80` and the four bytes
+/// of the mask. Anything else is forwarded, also a chunk that only *starts* with `0x8A` (TCP may split a
+/// frame anywhere, so dropping it would corrupt the stream).
+pub fn is_reply_to_ping(chunk: &[u8]) -> bool {
+    chunk.len() == 6 && chunk[0] == WEBSOCKET_PONG && chunk[1] == 0b1000_0000
 }
 
 /// What happened on a tunnel, reported to the heartbeat service.
@@ -159,9 +178,8 @@ where
                 };
                 last_activity.store(now_millis(), Ordering::SeqCst);
                 observer.heartbeat();
-                if is_pong(&buffer[..read]) && read <= 6 {
-                    // a pong for our injected ping (a masked, empty pong is 6 bytes): the app never
-                    // asked for it, so it must not be forwarded
+                if is_reply_to_ping(&buffer[..read]) {
+                    // the pong for our injected ping: the app never asked for it, so it is not forwarded
                     continue;
                 }
                 let mut writer = upstream_write.lock().await;
@@ -285,6 +303,14 @@ mod tests {
         assert!(is_pong(&[WEBSOCKET_PONG, 0]));
         assert!(!is_pong(&[0x81, 0x05]));
         assert!(!is_pong(&[]));
+
+        // only the exact answer to the injected ping is swallowed
+        assert!(is_reply_to_ping(&[WEBSOCKET_PONG, 0x80, 1, 2, 3, 4]));
+        // a pong with payload, an unmasked one and the start of a frame split by TCP are forwarded
+        assert!(!is_reply_to_ping(&[WEBSOCKET_PONG, 0x81, 1, 2, 3, 4]));
+        assert!(!is_reply_to_ping(&[WEBSOCKET_PONG, 0x00, 1, 2, 3, 4]));
+        assert!(!is_reply_to_ping(&[WEBSOCKET_PONG, 0x85, 1]));
+        assert!(!is_reply_to_ping(&[WEBSOCKET_PONG, 0x80, 1, 2, 3, 4, 0x81]));
     }
 
     #[test]

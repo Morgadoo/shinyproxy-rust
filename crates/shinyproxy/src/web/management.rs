@@ -46,15 +46,21 @@ use super::state::AppState;
 
 /// Builds the router of the management server.
 pub fn router(state: Arc<AppState>) -> Router {
+    router_at(state, "")
+}
+
+/// The actuator endpoints below `prefix` (the context path, when they share the port of the application).
+pub fn router_at(state: Arc<AppState>, prefix: &str) -> Router {
+    let path = |path: &str| format!("{prefix}/actuator{path}");
     Router::new()
-        .route("/actuator", get(index))
-        .route("/actuator/health", get(health))
-        .route("/actuator/health/liveness", get(liveness))
-        .route("/actuator/health/readiness", get(readiness))
-        .route("/actuator/info", get(info))
-        .route("/actuator/prometheus", get(prometheus))
-        .route("/actuator/metrics", get(prometheus))
-        .route("/actuator/recyclable", get(recyclable))
+        .route(&path(""), get(index))
+        .route(&path("/health"), get(health))
+        .route(&path("/health/liveness"), get(liveness))
+        .route(&path("/health/readiness"), get(readiness))
+        .route(&path("/info"), get(info))
+        .route(&path("/prometheus"), get(prometheus))
+        .route(&path("/metrics"), get(prometheus))
+        .route(&path("/recyclable"), get(recyclable))
         .with_state(state)
 }
 

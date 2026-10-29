@@ -126,6 +126,29 @@ pub fn document(state: &AppState) -> serde_json::Value {
                 "parameters": [path_parameter("proxyId")],
                 "responses": {"200": response("The app."), "403": response("No access.")}
             }},
+            // springdoc lists the start under its own path variable name, as the Java controller has it
+            "/api/proxy/{proxySpecId}": {"post": {
+                "tags": ["ContainerProxy"],
+                "summary": "Start an app, and answer when it is up.",
+                "parameters": [path_parameter("proxySpecId")],
+                "requestBody": {
+                    "required": false,
+                    "content": {"application/json": {"schema": {
+                        "type": "object",
+                        "properties": {"parameters": {
+                            "type": "object",
+                            "description": "Map of parameters for the app.",
+                            "additionalProperties": {"type": "string"}
+                        }}
+                    }}}
+                },
+                "responses": {
+                    "201": response("The app has been started."),
+                    "400": response("Invalid parameters or too many instances, app not started."),
+                    "403": response("App definition not found or no permission to use it."),
+                    "500": response("Failed to start the app.")
+                }
+            }},
             "/api/proxy/{proxyId}/status": {
                 "get": {
                     "tags": ["ContainerProxy"],

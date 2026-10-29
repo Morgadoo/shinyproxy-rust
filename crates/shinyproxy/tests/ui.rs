@@ -423,6 +423,113 @@ async fn anonymous_access_without_authentication() {
 }
 
 #[tokio::test]
+async fn every_anonymous_visitor_is_a_different_user() {
+    let instance = TestInstance::start(ANONYMOUS_CONFIG).await;
+    let first = instance.client();
+    let second = instance.client();
+
+    // the very first request of a session starts an app: the session has no id yet at that point
+    let response = first
+        .post(instance.url("/app_i/01_hello/_"))
+        .json(&serde_json::json!({"timezone": "Europe/Brussels"}))
+        .send()
+        .await
+        .expect("start request");
+    assert_eq!(response.status(), 200);
+    let json: serde_json::Value = response.json().await.expect("json");
+    let owner = json["data"]["userId"]
+        .as_str()
+        .expect("user id")
+        .to_string();
+    assert!(owner.starts_with("anonymous-"), "{owner}");
+
+    let other: serde_json::Value = second
+        .get(instance.url("/api/proxy"))
+        .send()
+        .await
+        .expect("list request")
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(
+        other["data"],
+        serde_json::json!([]),
+        "another visitor must not see the app of {owner}"
+    );
+
+    let own: serde_json::Value = first
+        .get(instance.url("/api/proxy"))
+        .send()
+        .await
+        .expect("list request")
+        .json()
+        .await
+        .expect("json");
+    assert_eq!(own["data"].as_array().map(Vec::len), Some(1), "{own}");
+
+    instance.stop();
+}
+
+#[tokio::test]
+async fn microsoft_office_gets_an_empty_page() {
+    let instance = TestInstance::start(SIMPLE_CONFIG).await;
+    // `UserAgentFilter`: no login redirect for the link check of Office
+    let response = instance
+        .client()
+        .get(instance.url("/app/01_hello"))
+        .header(
+            "user-agent",
+            "Mozilla/4.0 (compatible; ms-office; MSOffice rmj)",
+        )
+        .send()
+        .await
+        .expect("request");
+    assert_eq!(response.status(), 200);
+    assert!(response.text().await.expect("body").is_empty());
+    instance.stop();
+}
+
+#[tokio::test]
+async fn the_assets_of_the_template_path_are_served() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    std::fs::create_dir_all(directory.path().join("assets/css")).expect("assets");
+    std::fs::write(
+        directory.path().join("assets/css/brand.css"),
+        "body { color: red }",
+    )
+    .expect("css");
+    let instance = TestInstance::start(&format!(
+        "{ANONYMOUS_CONFIG}  template-path: {}\n",
+        directory.path().display()
+    ))
+    .await;
+    let instance_id = instance.state.identifiers.instance_id.clone();
+
+    for path in [
+        "/assets/css/brand.css".to_string(),
+        format!("/{instance_id}/assets/css/brand.css"),
+    ] {
+        let response = instance
+            .client()
+            .get(instance.url(&path))
+            .send()
+            .await
+            .expect("request");
+        assert_eq!(response.status(), 200, "{path}");
+        assert_eq!(response.text().await.expect("body"), "body { color: red }");
+    }
+    let response = instance
+        .client()
+        .get(instance.url("/assets/css/missing.css"))
+        .send()
+        .await
+        .expect("request");
+    assert_eq!(response.status(), 404);
+
+    instance.stop();
+}
+
+#[tokio::test]
 async fn assets_are_served_with_and_without_the_instance_prefix() {
     let instance = TestInstance::start(ANONYMOUS_CONFIG).await;
     let client = instance.client();

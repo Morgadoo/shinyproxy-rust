@@ -218,8 +218,7 @@ pub fn is_public_path(path: &str, instance_id: &str) -> bool {
     const PUBLIC_PREFIXES: &[&str] = &[
         "/signin/",
         "/actuator/",
-        "/v3/api-docs",
-        "/swagger-ui/",
+        // `/v3/api-docs` and `/swagger-ui/` need a login, as in Java (they are not in its permit list)
         // the endpoints of the OpenID Connect flow (Spring permits `/oauth2/**` and `/login/oauth2/**`)
         "/oauth2/",
         "/login/oauth2/",
@@ -310,8 +309,6 @@ mod tests {
             "/webjars/jquery/3.7.1/jquery.min.js",
             "/abc123/js/shiny.common.js",
             "/actuator/health",
-            "/v3/api-docs",
-            "/swagger-ui/index.html",
             "/oauth2/authorization/shinyproxy",
             "/login/oauth2/code/shinyproxy",
         ] {
@@ -323,6 +320,9 @@ mod tests {
             "/api/proxy",
             "/admin",
             "/heartbeat/x",
+            // springdoc's endpoints need a login, as in Java
+            "/v3/api-docs",
+            "/swagger-ui/index.html",
             // the favicon of an app is not public: the Java implementation sends an unauthenticated
             // request to the login page (verified with the parity fixture)
             "/favicon",

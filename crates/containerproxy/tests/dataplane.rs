@@ -134,7 +134,7 @@ async fn handler(State(state): State<ProxyState>, request: Request) -> Response 
             ("X-SP-UserId".to_string(), "jack".to_string()),
             ("X-SP-UserGroups".to_string(), "SCIENTISTS".to_string()),
         ])),
-        force_identity_encoding: false,
+        ..Default::default()
     };
     if state.inject_script {
         options.force_identity_encoding = true;

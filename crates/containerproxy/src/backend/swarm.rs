@@ -686,6 +686,7 @@ impl ContainerBackend for SwarmBackend {
                 true,
             );
 
+            let owner = super::docker::port_owner(&runtime_values, &container_id);
             let mut port_bindings = BTreeMap::new();
             for port in service
                 .endpoint
@@ -700,7 +701,7 @@ impl ContainerBackend for SwarmBackend {
                 port_bindings.insert(target as u16, published as u16);
                 self.docker
                     .port_allocator()
-                    .add_existing_port(&container_id, published as u16);
+                    .add_existing_port(&owner, published as u16);
             }
 
             existing.push(ExistingContainerInfo {

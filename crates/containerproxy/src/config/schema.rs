@@ -126,6 +126,7 @@ static ENGINE_KEYS: &[KeyDef] = {
         scalar("proxy.bind-address", Supported),
         scalar("proxy.same-site-cookie", Supported),
         scalar("server.servlet.context-path", Supported),
+        scalar("server.servlet.session.timeout", Supported),
         scalar("server.secure-cookies", Supported),
         scalar("server.frame-options", Supported),
         scalar(
@@ -152,9 +153,9 @@ static ENGINE_KEYS: &[KeyDef] = {
         scalar("spring.data.redis.password", Supported),
         scalar("spring.data.redis.username", Supported),
         scalar("spring.data.redis.database", Supported),
-        scalar("spring.data.redis.sentinel.master", Supported),
-        list("spring.data.redis.sentinel.nodes", Supported),
-        scalar("spring.data.redis.sentinel.password", Supported),
+        scalar("spring.data.redis.sentinel.master", Unsupported("Redis Sentinel is not implemented; the server refuses to start")),
+        list("spring.data.redis.sentinel.nodes", Unsupported("Redis Sentinel is not implemented; the server refuses to start")),
+        scalar("spring.data.redis.sentinel.password", Unsupported("Redis Sentinel is not implemented; the server refuses to start")),
         scalar("spring.mail.host", Supported),
         scalar("spring.mail.port", Supported),
         scalar("spring.mail.username", Supported),
@@ -163,6 +164,7 @@ static ENGINE_KEYS: &[KeyDef] = {
         scalar("springdoc.api-docs.enabled", Supported),
         scalar("springdoc.swagger-ui.enabled", Supported),
         scalar("management.server.port", Supported),
+        scalar("management.server.address", Supported),
         scalar("management.endpoints.web.exposure.include", Unsupported("health, prometheus and recyclable are always exposed")),
         scalar("management.endpoint.health.probes.enabled", Unsupported("the liveness and readiness probes are always available")),
         scalar(

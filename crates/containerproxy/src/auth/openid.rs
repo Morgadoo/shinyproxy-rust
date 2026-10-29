@@ -248,7 +248,7 @@ impl OpenIdAuthenticationBackend {
         })
     }
 
-    /// Reads the claims of an id token, verifying its signature when a JWKS endpoint is configured.
+    /// Reads the claims of an id token after verifying its signature with the keys of `jwks-url`.
     pub async fn id_token_claims(
         &self,
         id_token: &str,
@@ -256,14 +256,14 @@ impl OpenIdAuthenticationBackend {
     ) -> Result<BTreeMap<String, serde_json::Value>, AuthError> {
         let claims = match &self.jwks_url {
             Some(jwks_url) => self.verify_with_jwks(id_token, jwks_url).await?,
+            // without the keys of the provider the token cannot be verified, and an unverified token
+            // must not log anybody in (Spring fails with `missing_signature_verifier` as well)
             None => {
-                // without a JWKS endpoint the token cannot be verified; the claims are still read, and
-                // the warning says why that is not enough on its own
-                tracing::warn!(
-                    "proxy.openid.jwks-url is not configured, the signature of the id token is not \
+                return Err(AuthError::Backend(
+                    "proxy.openid.jwks-url is not configured, so the signature of the id token cannot be \
                      verified"
-                );
-                decode_claims_without_verification(id_token)?
+                        .to_string(),
+                ))
             }
         };
 
@@ -487,22 +487,6 @@ pub fn parse_roles_claim(claim: Option<&serde_json::Value>) -> Vec<String> {
         }
         Some(_) => Vec::new(),
     }
-}
-
-/// Reads the claims of a JWT without verifying its signature.
-fn decode_claims_without_verification(
-    token: &str,
-) -> Result<BTreeMap<String, serde_json::Value>, AuthError> {
-    use base64::Engine;
-    let payload = token
-        .split('.')
-        .nth(1)
-        .ok_or_else(|| AuthError::Backend("invalid id token".to_string()))?;
-    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(payload)
-        .map_err(|error| AuthError::Backend(format!("invalid id token: {error}")))?;
-    serde_json::from_slice(&decoded)
-        .map_err(|error| AuthError::Backend(format!("invalid id token: {error}")))
 }
 
 /// A random string of the given length, used for `state`, `nonce` and the PKCE verifier.

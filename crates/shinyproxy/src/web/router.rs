@@ -103,7 +103,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route(&path("/api/proxyspec"), get(super::api::proxy_specs))
         .route(&path("/api/proxyspec/{spec}"), get(super::api::proxy_spec))
         .route(&path("/api/proxy"), get(super::api::proxies))
-        .route(&path("/api/proxy/{proxy}"), get(super::api::proxy))
+        .route(
+            &path("/api/proxy/{proxy}"),
+            get(super::api::proxy).post(super::apps::start_proxy_api),
+        )
         .route(
             &path("/api/proxy/{proxy}/status"),
             get(super::api::proxy_status).put(super::api::change_proxy_status),
@@ -170,8 +173,87 @@ pub fn router(state: Arc<AppState>) -> Router {
             state.clone(),
             app_recovery_filter,
         ))
+        .layer(axum::middleware::from_fn(ms_office_filter))
+        // the first check of every request, as Spring's firewall is
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            request_firewall,
+        ))
         .with_state(state)
 }
+
+/// Answers requests of Microsoft Office with an empty page (`UserAgentFilter`): Office opens a link to
+/// check it first, and following the login redirects there would sign the user in to (or out of) the
+/// session of Office instead of the browser.
+async fn ms_office_filter(request: Request, next: Next) -> Response {
+    let from_office = request
+        .headers()
+        .get(header::USER_AGENT)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|agent| agent.contains("ms-office"));
+    if from_office {
+        return (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html;charset=UTF-8")],
+            "",
+        )
+            .into_response();
+    }
+    next.run(request).await
+}
+
+/// Refuses the requests Spring Security's `StrictHttpFirewall` refuses (encoded slashes, `..` segments,
+/// ...), with the answer of the Java `ErrorController` for a `RequestRejectedException`.
+async fn request_firewall(
+    State(state): State<Arc<AppState>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let Some(reason) = containerproxy::web::firewall::rejection(request.uri().path()) else {
+        return next.run(request).await;
+    };
+    tracing::debug!(
+        "Request rejected: {reason} [path: {}]",
+        request.uri().path()
+    );
+
+    let wants_html = request
+        .headers()
+        .get(header::ACCEPT)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|accept| accept.contains("text/html"));
+    if !wants_html {
+        return (
+            StatusCode::BAD_REQUEST,
+            axum::Json(serde_json::json!({"status": "fail", "data": "bad request"})),
+        )
+            .into_response();
+    }
+    let mut model = serde_json::Map::new();
+    model.insert("title".into(), serde_json::json!(state.resolve_title(None)));
+    model.insert("shortError".into(), serde_json::json!("Bad Request"));
+    model.insert(
+        "description".into(),
+        serde_json::json!("You are not allowed to send this request."),
+    );
+    model.insert(
+        "mainPage".into(),
+        serde_json::json!(state.context_path_with_slash()),
+    );
+    model.insert(
+        "contextPath".into(),
+        serde_json::json!(state.context_path_with_slash()),
+    );
+    (StatusCode::BAD_REQUEST, render(&state, "error.html", model)).into_response()
+}
+
+/// Paths `CustomHeaderAuthenticationFilter` does not authenticate (the logout page and the styles).
+fn is_custom_header_exempt(path: &str) -> bool {
+    path == "/logout-success" || path.starts_with("/webjars/") || path.starts_with("/css/")
+}
+
+/// Longest URL that is remembered to return to after logging in.
+const MAX_SAVED_URL: usize = 2048;
 
 /// Answers 503 with `startup.html` while app recovery is running (`AppRecoveryFilter`).
 ///
@@ -217,6 +299,11 @@ async fn redirect_to_index(State(state): State<Arc<AppState>>) -> Response {
 #[derive(Debug, Clone, Default)]
 pub struct CurrentUser(pub Option<AuthenticatedUser>);
 
+/// Marks a request whose `Authorization` header carries the credentials the user authenticated with at
+/// ShinyProxy; the header is then not forwarded to the apps.
+#[derive(Debug, Clone, Copy)]
+pub struct CredentialsInHeader;
+
 /// Authorization middleware, mirroring the matcher order of the Java `WebSecurityConfig`.
 async fn authorize(
     State(state): State<Arc<AppState>>,
@@ -229,15 +316,19 @@ async fn authorize(
 
     let mut data = SessionData::load(&session).await;
 
-    // the `none` backend gives every session an anonymous user
+    // the `none` backend gives every session its own anonymous user, from a random id stored in the session
+    // (`NoAuthenticationBackend` uses a random UUID). It must not be derived from the session id: a new
+    // session has no id until it is saved, so every new visitor would become the same user and see, use
+    // and stop the apps of all the others.
     if data.user.is_none() && !state.auth.has_authorization() {
-        if let Some(user) = state.auth.anonymous_user(&session::session_id(&session)) {
+        if let Some(user) = state.auth.anonymous_user(&uuid::Uuid::new_v4().to_string()) {
             data.user = Some(user);
             data.store(&session).await;
         }
     }
 
     // bearer tokens (`proxy.oauth2.*`): API clients authenticate per request, without a session
+    let mut credentials_in_header = false;
     if data.user.is_none() {
         if let (Some(authenticator), Some(token)) = (
             state.bearer.as_ref(),
@@ -249,33 +340,74 @@ async fn authorize(
                     user.id
                 );
                 data.user = Some(user);
+                credentials_in_header = true;
+            }
+        }
+    }
+
+    // HTTP Basic (`http.httpBasic(...)` of `WebSecurityConfig`): API clients of the backends with a login
+    // form send their credentials with every request; like Spring Security 6 the result is kept for this
+    // request only, not in the session
+    if data.user.is_none() && state.auth.uses_login_form() {
+        if let Some(credentials) = containerproxy::auth::basic_credentials(request.headers()) {
+            match state.auth.authenticate_async(&credentials).await {
+                Ok(user) => {
+                    tracing::debug!("Request authenticated with HTTP Basic [user: {}]", user.id);
+                    data.user = Some(user);
+                    credentials_in_header = true;
+                }
+                Err(error) => {
+                    tracing::info!(
+                        "Authentication failure [user: {}] [error: {error}]",
+                        credentials.username
+                    );
+                    state.proxies.events().publish(
+                        containerproxy::events::Event::AuthenticationFailed {
+                            user_id: credentials.username.clone(),
+                        },
+                    );
+                }
             }
         }
     }
 
     // header based authentication (`custom-header`): the reverse proxy in front of ShinyProxy decides who
-    // the user is, so every request is checked (and a changed header replaces the user of the session)
-    if !state.auth.uses_login_form() && state.auth.has_authorization() {
-        let from_headers = state.auth.user_from_headers(request.headers());
-        if let Some(user) = from_headers {
-            let changed = data
-                .user
-                .as_ref()
-                .map(|existing| existing != &user)
-                .unwrap_or(true);
-            if changed {
-                if data.user.is_none() {
-                    tracing::info!("User logged in [user: {}]", user.id);
-                    state
-                        .proxies
-                        .events()
-                        .publish(containerproxy::events::Event::UserLoggedIn {
-                            user_id: user.id.clone(),
-                        });
+    // the user is on every request, like `CustomHeaderAuthenticationFilter`. A request without the header
+    // is not authenticated (the session cookie alone must not be enough to get past the proxy), and a
+    // header naming somebody else than the user of the session is refused.
+    if state.auth.authenticates_with_headers() && !is_custom_header_exempt(&path) {
+        match state.auth.user_from_headers(request.headers()) {
+            None => {
+                if let Some(existing) = data.user.take() {
+                    tracing::warn!(
+                        "Authentication failed: missing username header [user: {}]",
+                        existing.id
+                    );
                 }
-                data.user = Some(user);
-                data.store(&session).await;
             }
+            Some(user) => match data.user.as_ref() {
+                Some(existing) if existing.id != user.id => {
+                    tracing::warn!(
+                        "Authentication failed: Username in header '{}' does not match existing session '{}'",
+                        user.id,
+                        existing.id
+                    );
+                    data.user = None;
+                }
+                Some(existing) if existing == &user => {}
+                existing => {
+                    if existing.is_none() {
+                        tracing::info!("User logged in [user: {}]", user.id);
+                        state.proxies.events().publish(
+                            containerproxy::events::Event::UserLoggedIn {
+                                user_id: user.id.clone(),
+                            },
+                        );
+                    }
+                    data.user = Some(user);
+                    data.store(&session).await;
+                }
+            },
         }
     }
 
@@ -309,6 +441,9 @@ async fn authorize(
             .touch(&session::session_id(&session), &user.id);
     }
     request.extensions_mut().insert(CurrentUser(user.clone()));
+    if credentials_in_header {
+        request.extensions_mut().insert(CredentialsInHeader);
+    }
 
     if !is_public_path(&path, &state.identifiers.instance_id) {
         if state.auth.has_authorization() && user.is_none() {
@@ -329,7 +464,9 @@ async fn authorize(
                 // remember where the user wanted to go, like the Java saved-request handling; the
                 // session itself is always created, exactly as Spring does for every request
                 let mut data = data.clone();
-                if is_saveable_request(&request) {
+                // (a long URL is not remembered: anybody can make the server store it, without logging in)
+                if is_saveable_request(&request) && request.uri().to_string().len() <= MAX_SAVED_URL
+                {
                     data.auth_success_url = Some(request.uri().to_string());
                 }
                 data.store(&session).await;
@@ -398,7 +535,7 @@ fn add_headers(state: &AppState, _path: &str, response: &mut Response) {
 /// expires; `tower-sessions` only moves the expiry when a handler changes the session. Setting the expiry
 /// marks the session as modified, so the store keeps it alive for another `spring.session.timeout`.
 async fn keep_session_alive(state: &AppState, session: &Session) {
-    let timeout = state.settings.spring.session.timeout_duration();
+    let timeout = state.settings.session_timeout();
     let Ok(as_duration) = time::Duration::try_from(timeout) else {
         return;
     };
@@ -666,30 +803,29 @@ async fn logout(State(state): State<Arc<AppState>>, session: Session) -> Respons
                 expired: false,
             });
 
-        // the apps of the user are stopped when they say so (`proxy.default-stop-proxy-on-logout` is
-        // true by default), in the background so that the browser is not kept waiting
-        let logout_state = state.clone();
-        let user_id = user.id.clone();
-        tokio::spawn(async move {
-            let stopped = logout_state
-                .release
-                .on_logout(&user_id, &|proxy| logout_state.stop_on_logout(proxy))
-                .await;
-            for proxy_id in stopped {
-                logout_state.router.remove_mappings(&proxy_id);
-            }
-        });
+        // the apps of the user are stopped when they say so, in the background so that the browser is not
+        // kept waiting
+        state.stop_apps_on_logout(&user.id);
     }
     let mut data = data;
+    let logged_out = data.user.take();
     data.user_initiated_logout = true;
-    data.user = None;
     state.sessions.forget(&session::session_id(&session));
     data.store(&session).await;
     let _ = session.flush().await;
 
     // where a user lands after signing out depends on the authentication backend (`/login` by default,
     // `/logout-success` for header based authentication and the provider for OpenID Connect)
-    let target = state.auth.logout_success_url();
+    let mut target = state.auth.logout_success_url();
+    // the URL may use expressions about the user who logged out (the OpenID logout handler of Java
+    // evaluates it, typically for `id_token_hint=#{oidcUser.idToken.tokenValue}`)
+    if let Some(user) = logged_out.as_ref().filter(|_| target.contains("#{")) {
+        use containerproxy::model::spel_field::SpecResolver;
+        match state.resolver(Some(user)).string(&target) {
+            Ok(resolved) => target = resolved,
+            Err(error) => tracing::warn!("cannot evaluate the logout URL: {error}"),
+        }
+    }
     let target = if target.starts_with("http://") || target.starts_with("https://") {
         target
     } else {
@@ -896,6 +1032,13 @@ async fn static_asset(
     }
     if let Some(spec_id) = path.strip_prefix("/favicon/") {
         return serve_favicon(&state, Some(spec_id), user.as_ref());
+    }
+    // the static files of a custom template directory
+    if let (Some(relative), Some(template_path)) = (
+        path.strip_prefix("/assets/"),
+        state.templates.template_path(),
+    ) {
+        return assets::serve_template_asset(template_path, relative).await;
     }
     if !assets::exists(&path) {
         return not_found().await;

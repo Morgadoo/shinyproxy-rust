@@ -107,6 +107,9 @@ pub struct RawSpec {
     pub container_cpu_request: SpelString,
     pub container_cpu_limit: SpelString,
     pub container_privileged: Option<FlexBool>,
+    /// `resource-name` in the Java notation (`ShinyProxySpecProvider.setResourceName`); the longer
+    /// spelling is kept for existing configurations of this implementation.
+    #[serde(alias = "resource-name", alias = "resourceName")]
     pub container_resource_name: SpelString,
     pub labels: SpelStringMap,
 
@@ -502,6 +505,21 @@ mod tests {
         // scalar access-groups notation is accepted as well
         let tabsets = provider.spec("06_tabsets").expect("06_tabsets");
         assert_eq!(tabsets.access_control.groups(), ["scientists"]);
+    }
+
+    #[test]
+    fn accepts_the_java_resource_name_key() {
+        let provider = provider(
+            "proxy:\n  specs:\n    - id: app\n      container-image: img\n      resource-name: 'sp-#{proxy.userId}'\n",
+        );
+        let spec = provider.spec("app").expect("app");
+        assert_eq!(
+            spec.container_specs[0]
+                .resource_name
+                .original()
+                .map(String::as_str),
+            Some("sp-#{proxy.userId}")
+        );
     }
 
     #[test]

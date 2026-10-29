@@ -122,9 +122,10 @@ impl ProxyService {
         }
     }
 
-    /// How long a container may take to answer (`proxy.container-wait-timeout`).
-    fn container_wait_timeout(&self) -> Duration {
-        Duration::from_millis(self.settings.proxy.container_wait_timeout_ms().max(0) as u64)
+    /// How long a container may take to become reachable (`proxy.container-wait-time`; the
+    /// `container-wait-timeout` is the timeout of one attempt, not of the whole wait).
+    fn container_wait_time(&self) -> Duration {
+        Duration::from_millis(self.settings.proxy.container_wait_time_ms().max(0) as u64)
     }
 
     /// Registers the dispatcher of an app definition that uses shared containers.
@@ -347,7 +348,7 @@ impl ProxyService {
         }
 
         // the app has to answer before the proxy is considered up
-        if !wait_until_reachable(&proxy, self.container_wait_timeout()).await {
+        if !wait_until_reachable(&proxy, self.container_wait_time()).await {
             self.fail_start(&proxy, "Container did not respond in time")
                 .await;
             return Err(StartError::Timeout);
@@ -493,7 +494,7 @@ impl ProxyService {
                         resuming.targets.insert(mapping, target);
                     }
                 }
-                if !wait_until_reachable(&resuming, self.container_wait_timeout()).await {
+                if !wait_until_reachable(&resuming, self.container_wait_time()).await {
                     tracing::warn!(
                         "Proxy failed to resume: container did not respond in time [proxyId: {}]",
                         resuming.id

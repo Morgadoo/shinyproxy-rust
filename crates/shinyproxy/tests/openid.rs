@@ -674,6 +674,38 @@ proxy:
     assert_eq!(response["data"].as_array().map(Vec::len), Some(1));
     assert_eq!(response["data"][0]["id"], "01_hello");
 
+    // the token authenticates the client at ShinyProxy only: the app never gets it
+    let started: serde_json::Value = client
+        .post(instance.url("/app_i/01_hello/_"))
+        .header("authorization", format!("Bearer {token}"))
+        .json(&serde_json::json!({"timezone": "Europe/Brussels"}))
+        .send()
+        .await
+        .expect("start request")
+        .json()
+        .await
+        .expect("json");
+    let proxy_id = started["data"]["id"]
+        .as_str()
+        .expect("proxy id")
+        .to_string();
+    let mut headers = serde_json::Value::Null;
+    for _ in 0..100 {
+        let response = client
+            .get(instance.url(&format!("/app_proxy/{proxy_id}/headers")))
+            .header("authorization", format!("Bearer {token}"))
+            .send()
+            .await
+            .expect("request");
+        if response.status() == 200 {
+            headers = response.json().await.expect("json");
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(headers.is_object(), "the app must answer: {headers}");
+    assert!(headers.get("authorization").is_none(), "{headers}");
+
     // a token for another audience is refused
     let token = provider.issue_access_token("api-client", "another-resource", 600);
     let response = client
@@ -750,7 +782,54 @@ async fn login(instance: &TestInstance, provider: &Provider) -> common::TestClie
         .await
         .expect("callback request");
     assert_eq!(response.status(), 302, "the login must succeed");
+    // a failed login redirects too, to the error page
+    let location = response
+        .headers()
+        .get("location")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    assert!(
+        !location.contains("auth-error"),
+        "the login failed: {location}"
+    );
     client
+}
+
+#[tokio::test]
+async fn the_logout_url_can_use_the_id_token() {
+    let (address, provider, provider_task) = start_provider(
+        serde_json::json!({"email": "jack@example.com", "sub": "jack", "groups": ["scientists"]}),
+        serde_json::json!({}),
+    )
+    .await;
+    // the usual Keycloak/Entra logout: the provider wants the id token as a hint
+    let instance = TestInstance::start(&config(
+        &address,
+        "    logout-url: https://idp.example.com/logout?id_token_hint=#{oidcUser.idToken.tokenValue}",
+    ))
+    .await;
+    let client = login(&instance, &provider).await;
+
+    let response = client
+        .get(instance.url("/logout"))
+        .send()
+        .await
+        .expect("logout request");
+    assert_eq!(response.status(), 302);
+    let location = response
+        .headers()
+        .get("location")
+        .and_then(|value| value.to_str().ok())
+        .expect("location")
+        .to_string();
+    let hint = location
+        .strip_prefix("https://idp.example.com/logout?id_token_hint=")
+        .unwrap_or_else(|| panic!("{location}"));
+    // the id token the provider issued (a JWT), not the expression
+    assert_eq!(hint.split('.').count(), 3, "{location}");
+
+    instance.stop();
+    provider_task.abort();
 }
 
 #[tokio::test]

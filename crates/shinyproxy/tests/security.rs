@@ -467,6 +467,81 @@ async fn headers_of_the_client_cannot_be_injected_into_the_app() {
 }
 
 #[tokio::test]
+async fn the_session_of_shinyproxy_never_reaches_the_app() {
+    let instance = TestInstance::start(CONFIG).await;
+    let jack = instance.login("jack", "password").await;
+    let proxy_id = start_app(&instance, &jack).await;
+    let session = instance.session_cookie(&jack).expect("session cookie");
+    assert!(session.starts_with("JSESSIONID="), "{session}");
+
+    // an app (or whoever controls its container) must not be able to take over the session of the user;
+    // its own cookies still reach it (one of the same name too, see `remove_cookie`)
+    let headers: std::collections::BTreeMap<String, String> = reqwest::Client::new()
+        .get(instance.url(&format!("/app_proxy/{proxy_id}/headers")))
+        .header(
+            "cookie",
+            format!("theme=dark; {session}; APPSESSION=of-the-app"),
+        )
+        .send()
+        .await
+        .expect("request")
+        .json()
+        .await
+        .expect("json");
+    let cookie = headers.get("cookie").cloned().unwrap_or_default();
+    let session_value = session.trim_start_matches("JSESSIONID=");
+    assert!(!cookie.contains(session_value), "{cookie}");
+    assert_eq!(cookie, "theme=dark; APPSESSION=of-the-app");
+
+    instance.stop();
+}
+
+#[tokio::test]
+async fn requests_spring_security_rejects_are_refused() {
+    let instance = TestInstance::start(CONFIG).await;
+    let jack = instance.login("jack", "password").await;
+
+    // `/app_i/{app}/{instance}` decodes `%2F`: without the firewall the app page would post to /logout
+    for path in [
+        "/app_i/01_hello/..%2F..%2Flogout",
+        "/app/01_hello/..%2F..%2Fapp_direct%2Fother%2F",
+        "/admin;x=1",
+        "//admin",
+    ] {
+        let response = jack
+            .get(instance.url(path))
+            .header("accept", "text/html")
+            .send()
+            .await
+            .expect("request");
+        assert_eq!(response.status(), 400, "{path}");
+        let body = response.text().await.expect("body");
+        assert!(
+            body.contains("You are not allowed to send this request."),
+            "{path}: {body}"
+        );
+
+        let response = jack.get(instance.url(path)).send().await.expect("request");
+        assert_eq!(response.status(), 400, "{path}");
+        let json: serde_json::Value = response.json().await.expect("json");
+        assert_eq!(
+            json,
+            serde_json::json!({"status": "fail", "data": "bad request"})
+        );
+    }
+
+    // normal requests are not affected
+    let response = jack
+        .get(instance.url("/app/01_hello"))
+        .send()
+        .await
+        .expect("request");
+    assert_eq!(response.status(), 200);
+
+    instance.stop();
+}
+
+#[tokio::test]
 async fn redirects_stay_on_this_server() {
     let instance = TestInstance::start(CONFIG).await;
     let client = instance.client();
@@ -885,6 +960,80 @@ async fn a_session_that_is_used_does_not_expire() {
         410,
         "a session that was not used must expire"
     );
+
+    instance.stop();
+}
+
+#[tokio::test]
+async fn cors_only_allows_the_configured_origins() {
+    // without `cors-allowed-origins` there is no CORS at all
+    let instance = TestInstance::start(CONFIG).await;
+    let jack = instance.login("jack", "password").await;
+    let response = jack
+        .get(instance.url("/api/proxyspec"))
+        .header("origin", "https://allowed.example.com")
+        .send()
+        .await
+        .expect("request");
+    assert!(response
+        .headers()
+        .get("access-control-allow-origin")
+        .is_none());
+    instance.stop();
+
+    let instance = TestInstance::start(&CONFIG.replace(
+        "  allow-transfer-app: true\n",
+        "  allow-transfer-app: true\n  api-security:\n    cors-allowed-origins: https://allowed.example.com\n",
+    ))
+    .await;
+    let jack = instance.login("jack", "password").await;
+
+    // the preflight is answered before authentication
+    let response = instance
+        .client()
+        .request(reqwest::Method::OPTIONS, instance.url("/api/proxyspec"))
+        .header("origin", "https://allowed.example.com")
+        .header("access-control-request-method", "GET")
+        .header("access-control-request-headers", "content-type")
+        .send()
+        .await
+        .expect("preflight");
+    assert_eq!(response.status(), 200);
+    let headers = response.headers();
+    assert_eq!(
+        headers["access-control-allow-origin"],
+        "https://allowed.example.com"
+    );
+    assert_eq!(headers["access-control-allow-credentials"], "true");
+    assert!(headers["access-control-allow-methods"]
+        .to_str()
+        .unwrap()
+        .contains("POST"));
+
+    // a request of the allowed origin may read the answer, with the session of the user
+    let response = jack
+        .get(instance.url("/api/proxyspec"))
+        .header("origin", "https://allowed.example.com")
+        .send()
+        .await
+        .expect("request");
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        response.headers()["access-control-allow-origin"],
+        "https://allowed.example.com"
+    );
+
+    // another origin may not
+    let response = jack
+        .get(instance.url("/api/proxyspec"))
+        .header("origin", "https://evil.example.com")
+        .send()
+        .await
+        .expect("request");
+    assert!(response
+        .headers()
+        .get("access-control-allow-origin")
+        .is_none());
 
     instance.stop();
 }
