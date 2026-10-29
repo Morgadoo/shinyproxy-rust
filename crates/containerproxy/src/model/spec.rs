@@ -44,7 +44,7 @@ use super::spel_field::{
 };
 
 /// How cache headers of an app are handled.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
 pub enum CacheHeadersMode {
     /// Always send no-cache headers (default).
     #[default]
@@ -53,6 +53,20 @@ pub enum CacheHeadersMode {
     Passthrough,
     /// Cache static assets, no-cache for everything else.
     EnforceCacheAssets,
+}
+
+impl crate::config::LenientEnum for CacheHeadersMode {
+    const VARIANTS: &'static [(&'static str, Self)] = &[
+        ("EnforceNoCache", CacheHeadersMode::EnforceNoCache),
+        ("Passthrough", CacheHeadersMode::Passthrough),
+        ("EnforceCacheAssets", CacheHeadersMode::EnforceCacheAssets),
+    ];
+}
+
+impl<'de> Deserialize<'de> for CacheHeadersMode {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        crate::config::flex::deserialize_lenient_enum(deserializer)
+    }
 }
 
 /// Access control of an app (or of a value set / pod patch).
@@ -146,10 +160,15 @@ impl PortMapping {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct DockerSwarmSecret {
+    #[serde(deserialize_with = "crate::config::flex::opt_string")]
     pub name: Option<String>,
+    #[serde(deserialize_with = "crate::config::flex::opt_string")]
     pub target: Option<String>,
+    #[serde(deserialize_with = "crate::config::flex::opt_string")]
     pub uid: Option<String>,
+    #[serde(deserialize_with = "crate::config::flex::opt_string")]
     pub gid: Option<String>,
+    #[serde(deserialize_with = "crate::config::flex::opt_string")]
     pub mode: Option<String>,
 }
 
@@ -161,6 +180,7 @@ pub struct DockerDeviceRequest {
     pub count: Option<i64>,
     pub device_ids: Vec<String>,
     pub capabilities: Vec<Vec<String>>,
+    #[serde(deserialize_with = "crate::config::flex::string_map")]
     pub options: BTreeMap<String, String>,
 }
 
@@ -197,6 +217,7 @@ pub struct ParameterDefinition {
     /// Description shown to the user (sanitised HTML).
     pub description: Option<String>,
     /// Value selected by default.
+    #[serde(deserialize_with = "crate::config::flex::opt_string")]
     pub default_value: Option<String>,
     /// Human friendly names of the values.
     pub value_names: Vec<ParameterValueName>,
@@ -229,7 +250,9 @@ impl ParameterDefinition {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct ParameterValueName {
+    #[serde(deserialize_with = "crate::config::flex::opt_string")]
     pub value: Option<String>,
+    #[serde(deserialize_with = "crate::config::flex::opt_string")]
     pub name: Option<String>,
 }
 

@@ -30,7 +30,7 @@
 use std::collections::BTreeMap;
 
 use containerproxy::config::flex::{FlexBool, FlexI64, StringList};
-use containerproxy::config::Settings;
+use containerproxy::config::{LenientEnum, Settings};
 use containerproxy::model::spec::{
     AccessControl, CacheHeadersMode, ContainerSpec, DockerDeviceRequest, DockerSwarmSecret,
     Parameters, PortMapping, ProxySpec, SpecExtensions,
@@ -157,20 +157,28 @@ pub struct RawPortMapping {
 #[serde(default, rename_all = "kebab-case")]
 pub struct ShinyProxySpecExtension {
     pub websocket_reconnection_mode: Option<WebsocketReconnectionMode>,
+    #[serde(deserialize_with = "containerproxy::config::flex::opt_spring_bool")]
     pub shiny_force_full_reload: Option<bool>,
     pub max_instances: SpelLong,
+    #[serde(deserialize_with = "containerproxy::config::flex::opt_spring_bool")]
     pub hide_navbar_on_main_page_link: Option<bool>,
+    #[serde(deserialize_with = "containerproxy::config::flex::opt_spring_bool")]
     pub always_show_switch_instance: Option<bool>,
+    #[serde(deserialize_with = "containerproxy::config::flex::opt_spring_bool")]
     pub track_app_url: Option<bool>,
+    #[serde(deserialize_with = "containerproxy::config::flex::opt_string")]
     pub template_group: Option<String>,
+    #[serde(deserialize_with = "containerproxy::config::flex::string_map")]
     pub template_properties: BTreeMap<String, String>,
+    #[serde(deserialize_with = "containerproxy::config::flex::opt_string")]
     pub support_mail_to_address: Option<String>,
+    #[serde(deserialize_with = "containerproxy::config::flex::opt_string")]
     pub support_mail_subject: Option<String>,
     pub custom_app_details: Vec<CustomAppDetail>,
 }
 
 /// How the browser reconnects when a WebSocket connection of an app is lost.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
 pub enum WebsocketReconnectionMode {
     /// Do not reconnect (default).
     #[default]
@@ -181,13 +189,30 @@ pub enum WebsocketReconnectionMode {
     Auto,
 }
 
+impl LenientEnum for WebsocketReconnectionMode {
+    const VARIANTS: &'static [(&'static str, Self)] = &[
+        ("None", WebsocketReconnectionMode::None),
+        ("Confirm", WebsocketReconnectionMode::Confirm),
+        ("Auto", WebsocketReconnectionMode::Auto),
+    ];
+}
+
+impl<'de> Deserialize<'de> for WebsocketReconnectionMode {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        containerproxy::config::flex::deserialize_lenient_enum(deserializer)
+    }
+}
+
 /// An extra detail of an app shown in the UI.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct CustomAppDetail {
+    #[serde(deserialize_with = "containerproxy::config::flex::opt_string")]
     pub name: Option<String>,
+    #[serde(deserialize_with = "containerproxy::config::flex::opt_string")]
     pub description: Option<String>,
     /// May contain expressions; evaluated per request by `/api/proxy/{id}/details`.
+    #[serde(deserialize_with = "containerproxy::config::flex::opt_string")]
     pub value: Option<String>,
 }
 
@@ -206,6 +231,7 @@ pub struct TemplateGroup {
     /// Identifier referenced by `template-group` of an app.
     pub id: String,
     /// Free form properties available in the templates.
+    #[serde(deserialize_with = "containerproxy::config::flex::string_map")]
     pub properties: BTreeMap<String, String>,
 }
 
@@ -383,6 +409,12 @@ impl ShinyProxySpecProvider {
             if definition.id.as_ref().is_none_or(|id| id.trim().is_empty()) {
                 return Err(SpecError::MissingId { index });
             }
+            // the ShinyProxy fields are read separately; a value that cannot be bound fails the startup,
+            // as with the Spring binder, instead of silently dropping every ShinyProxy field of the app
+            serde_json::from_value::<ShinyProxySpecExtension>(raw.clone())
+                .map_err(|source| SpecError::Invalid { index, source })?;
+            serde_json::from_value::<ExternalAppSpecExtension>(raw.clone())
+                .map_err(|source| SpecError::Invalid { index, source })?;
             parsed.push(definition.into_proxy_spec(raw));
         }
 

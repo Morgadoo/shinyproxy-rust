@@ -28,6 +28,7 @@
 use std::collections::BTreeMap;
 
 use containerproxy::auth::AuthenticatedUser;
+use containerproxy::config::LenientEnum;
 use containerproxy::model::spec::ProxySpec;
 use containerproxy::spec::SpecProvider;
 use containerproxy::util::clean_html;
@@ -155,8 +156,10 @@ pub fn prepare_model(
         "myAppsMode".into(),
         json!(proxy
             .my_apps_mode
-            .clone()
-            .unwrap_or_else(|| "None".to_string())),
+            .as_deref()
+            .and_then(MyAppsMode::parse_lenient)
+            .unwrap_or(MyAppsMode::None)
+            .name()),
     );
     model.insert(
         "userId".into(),
@@ -257,6 +260,22 @@ fn group_apps(state: &AppState, apps: &[&ProxySpec]) -> (Value, Value, Value) {
         Value::Array(ungrouped),
         Value::Array(groups),
     )
+}
+
+/// Where the apps of the user are listed on the main page (`IndexController.MyAppsMode`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MyAppsMode {
+    Inline,
+    Modal,
+    None,
+}
+
+impl LenientEnum for MyAppsMode {
+    const VARIANTS: &'static [(&'static str, Self)] = &[
+        ("Inline", MyAppsMode::Inline),
+        ("Modal", MyAppsMode::Modal),
+        ("None", MyAppsMode::None),
+    ];
 }
 
 #[cfg(test)]
@@ -361,6 +380,15 @@ mod tests {
             .as_str()
             .expect("prefix")
             .starts_with("/shinyproxy/"));
+    }
+
+    #[tokio::test]
+    async fn my_apps_mode_is_matched_like_a_spring_enum() {
+        let state =
+            build_state("proxy:\n  authentication: none\n  my-apps-mode: inline\n  specs: []\n")
+                .await;
+        let model = prepare_model(&state, Page::Index, None, false);
+        assert_eq!(model["myAppsMode"], json!("Inline"));
     }
 
     #[tokio::test]

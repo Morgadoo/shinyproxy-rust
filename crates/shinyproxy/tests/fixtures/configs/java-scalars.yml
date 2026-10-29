@@ -1,0 +1,44 @@
+# Values that the Spring binder of the Java implementation converts: unquoted numbers and booleans in
+# string fields, enum names in another case, and booleans written as `yes` or through a placeholder.
+proxy:
+  authentication: none
+  container-backend: docker-swarm
+  template-groups:
+    - id: reporting
+      properties:
+        display-name: Reporting
+        order: 1
+  specs:
+    - id: scalars
+      container-image: openanalytics/shinyproxy-demo
+      cache-headers-mode: passthrough
+      websocket-reconnection-mode: auto
+      track-app-url: ${TRACK_APP_URL_FROM_ENV:true}
+      hide-navbar-on-main-page-link: yes
+      template-group: reporting
+      template-properties:
+        startup-time: 20
+        icon: fa-bolt
+      custom-app-details:
+        - name: Version
+          value: 2
+      docker-swarm-secrets:
+        - name: db-password
+          uid: 1000
+          gid: 1000
+          mode: 0400
+      docker-device-requests:
+        - driver: nvidia
+          count: 1
+          options:
+            com.nvidia.priority: 1
+      parameters:
+        definitions:
+          - id: year
+            default-value: 2020
+            value-names:
+              - value: 2020
+                name: This year
+        value-sets:
+          - values:
+              year: [2019, 2020]

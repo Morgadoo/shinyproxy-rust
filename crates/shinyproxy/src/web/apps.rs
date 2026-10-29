@@ -35,6 +35,7 @@ use axum::http::{header, HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use containerproxy::auth::AuthenticatedUser;
+use containerproxy::config::LenientEnum;
 use containerproxy::dataplane::cache_headers;
 use containerproxy::dataplane::http::app_unavailable_response;
 use containerproxy::dataplane::inject::ScriptInjector;
@@ -58,7 +59,7 @@ use crate::runtime_values::{
     APP_INSTANCE, CUSTOM_APP_DETAILS, DEFAULT_INSTANCE, FORCE_FULL_RELOAD, TRACK_APP_URL,
     USER_TIMEZONE, WEBSOCKET_RECONNECTION_MODE,
 };
-use crate::spec_provider::ShinyProxySpecProvider;
+use crate::spec_provider::{ShinyProxySpecProvider, WebsocketReconnectionMode};
 
 /// Length of a target id (a UUID), as in `DefaultTargetMappingStrategy.TARGET_ID_LENGTH`.
 pub const TARGET_ID_LENGTH: usize = 36;
@@ -519,8 +520,13 @@ fn shinyproxy_runtime_values(
 
     let reconnection_mode = extension
         .websocket_reconnection_mode
+        .or_else(|| {
+            proxy_settings
+                .default_websocket_reconnection_mode
+                .as_deref()
+                .and_then(WebsocketReconnectionMode::parse_lenient)
+        })
         .map(|mode| format!("{mode:?}"))
-        .or_else(|| proxy_settings.default_websocket_reconnection_mode.clone())
         .unwrap_or_else(|| "None".to_string());
 
     let track_app_url = extension.track_app_url.unwrap_or_else(|| {

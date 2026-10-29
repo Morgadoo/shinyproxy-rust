@@ -235,12 +235,7 @@ impl RuntimeValueService {
 
 /// Parses the value of `cache-headers-mode`.
 pub fn parse_cache_headers_mode(value: &str) -> Option<CacheHeadersMode> {
-    match value.to_ascii_lowercase().as_str() {
-        "enforcenocache" => Some(CacheHeadersMode::EnforceNoCache),
-        "passthrough" => Some(CacheHeadersMode::Passthrough),
-        "enforcecacheassets" => Some(CacheHeadersMode::EnforceCacheAssets),
-        _ => None,
-    }
+    crate::config::LenientEnum::parse_lenient(value)
 }
 
 /// Name of a cache headers mode as used in runtime values and the API.

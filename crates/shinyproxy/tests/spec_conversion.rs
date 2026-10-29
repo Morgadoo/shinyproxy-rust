@@ -186,3 +186,73 @@ fn template_group_fixture_exposes_groups_and_external_apps() {
         Some("https://example.com/app")
     );
 }
+
+#[test]
+fn scalars_are_bound_like_the_spring_binder() {
+    use containerproxy::model::spec::CacheHeadersMode;
+    use shinyproxy::spec_provider::WebsocketReconnectionMode;
+
+    let provider = load("java-scalars.yml");
+    let spec = provider.spec("scalars").expect("spec");
+    assert_eq!(spec.cache_headers_mode, Some(CacheHeadersMode::Passthrough));
+
+    let extension = ShinyProxySpecProvider::extension(spec);
+    assert_eq!(
+        extension.websocket_reconnection_mode,
+        Some(WebsocketReconnectionMode::Auto)
+    );
+    assert_eq!(extension.track_app_url, Some(true));
+    assert_eq!(extension.hide_navbar_on_main_page_link, Some(true));
+    assert_eq!(extension.template_group.as_deref(), Some("reporting"));
+    assert_eq!(
+        extension
+            .template_properties
+            .get("startup-time")
+            .map(String::as_str),
+        Some("20")
+    );
+    assert_eq!(extension.custom_app_details[0].value.as_deref(), Some("2"));
+    assert_eq!(
+        provider.template_groups()[0]
+            .properties
+            .get("order")
+            .map(String::as_str),
+        Some("1")
+    );
+
+    let container = spec.container_spec().expect("container");
+    let secret = &container.docker_swarm_secrets[0];
+    assert_eq!(secret.uid.as_deref(), Some("1000"));
+    // YAML 1.2 reads 0400 as the decimal 400, as SnakeYAML does for a leading zero followed by 4-7
+    assert!(secret.mode.is_some());
+    assert_eq!(
+        container.docker_device_requests[0]
+            .options
+            .get("com.nvidia.priority")
+            .map(String::as_str),
+        Some("1")
+    );
+
+    let parameters = spec.parameters.as_ref().expect("parameters");
+    assert_eq!(
+        parameters.definitions[0].default_value.as_deref(),
+        Some("2020")
+    );
+    assert_eq!(
+        parameters.definitions[0].name_of_value("2020"),
+        Some("This year")
+    );
+}
+
+#[test]
+fn a_shinyproxy_field_that_cannot_be_bound_fails_the_startup() {
+    let specs = vec![serde_json::json!({
+        "id": "app",
+        "container-image": "image",
+        "websocket-reconnection-mode": "sometimes",
+    })];
+    let Err(error) = ShinyProxySpecProvider::from_values(&specs, &[]) else {
+        panic!("the definition is refused");
+    };
+    assert!(error.to_string().contains("sometimes"), "{error}");
+}

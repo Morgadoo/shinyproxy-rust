@@ -25,6 +25,7 @@
 //! and `PROXY_HEARTBEAT_RATE=10000` all yield the same number, and `hide-navbar: "true"` is a boolean.
 //! These wrapper types reproduce that leniency for serde.
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 use serde::de::{self, Deserializer, Visitor};
@@ -263,6 +264,101 @@ impl<'de> Deserialize<'de> for StringList {
     }
 }
 
+/// `Option<String>` field that also accepts numbers and booleans, for `#[serde(deserialize_with)]`.
+///
+/// The Spring binder converts `uid: 1000` or `default-value: 2020` into the `String` fields of the Java
+/// model, so the YAML of a Java configuration often leaves them unquoted.
+pub fn opt_string<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
+    Option::<FlexString>::deserialize(deserializer).map(|value| value.map(String::from))
+}
+
+/// String map whose values may also be numbers and booleans, for `#[serde(deserialize_with)]`.
+pub fn string_map<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<BTreeMap<String, String>, D::Error> {
+    Option::<BTreeMap<String, Option<FlexString>>>::deserialize(deserializer).map(|map| {
+        map.unwrap_or_default()
+            .into_iter()
+            .map(|(key, value)| (key, value.map(String::from).unwrap_or_default()))
+            .collect()
+    })
+}
+
+/// `Option<bool>` field bound the way Spring's `StringToBooleanConverter` does, for
+/// `#[serde(deserialize_with)]`: `true`/`on`/`yes`/`1` and `false`/`off`/`no`/`0`, in any case. A YAML
+/// 1.1 parser (SnakeYAML) reads an unquoted `yes` as a boolean; here it arrives as a string, and a
+/// placeholder such as `${TRACK_URL:true}` always does.
+pub fn opt_spring_bool<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<bool>, D::Error> {
+    match Option::<FlexString>::deserialize(deserializer)? {
+        None => Ok(None),
+        Some(FlexString(value)) => match value.trim().to_ascii_lowercase().as_str() {
+            "" => Ok(None),
+            "true" | "on" | "yes" | "1" => Ok(Some(true)),
+            "false" | "off" | "no" | "0" => Ok(Some(false)),
+            _ => Err(de::Error::custom(format!(
+                "invalid boolean value '{value}'"
+            ))),
+        },
+    }
+}
+
+/// An enum that is bound the way Spring's lenient enum converter does: the exact name first, then the
+/// name with only its letters and digits, ignoring case (`passthrough`, `PASSTHROUGH` and `Passthrough`
+/// are the same, as are `ENFORCE_NO_CACHE` and `EnforceNoCache`).
+pub trait LenientEnum: Sized + Copy + 'static {
+    /// The names of the constants, as written in the Java enum.
+    const VARIANTS: &'static [(&'static str, Self)];
+
+    /// The constant with this name, if any.
+    fn parse_lenient(value: &str) -> Option<Self> {
+        let value = value.trim();
+        if let Some((_, variant)) = Self::VARIANTS.iter().find(|(name, _)| *name == value) {
+            return Some(*variant);
+        }
+        let canonical = canonical_enum_name(value);
+        Self::VARIANTS
+            .iter()
+            .find(|(name, _)| canonical_enum_name(name) == canonical)
+            .map(|(_, variant)| *variant)
+    }
+
+    /// The name of the constant, as written in the Java enum.
+    fn name(&self) -> &'static str
+    where
+        Self: PartialEq,
+    {
+        Self::VARIANTS
+            .iter()
+            .find(|(_, variant)| variant == self)
+            .map(|(name, _)| *name)
+            .unwrap_or_default()
+    }
+}
+
+/// Only the letters and digits of a name, in lower case (`getCanonicalName` of Spring's converter).
+fn canonical_enum_name(name: &str) -> String {
+    name.chars()
+        .filter(|character| character.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// Deserializes a [`LenientEnum`], for its `Deserialize` implementation.
+pub fn deserialize_lenient_enum<'de, D: Deserializer<'de>, T: LenientEnum>(
+    deserializer: D,
+) -> Result<T, D::Error> {
+    let value = FlexString::deserialize(deserializer)?.0;
+    T::parse_lenient(&value).ok_or_else(|| {
+        let names: Vec<&str> = T::VARIANTS.iter().map(|(name, _)| *name).collect();
+        de::Error::custom(format!(
+            "invalid value '{value}', expected one of {}",
+            names.join(", ")
+        ))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -325,5 +421,67 @@ mod tests {
             vec!["a".to_string(), "b".to_string()]
         );
         assert!(parse("number: 1").values.is_empty());
+    }
+
+    #[derive(Debug, Default, Deserialize)]
+    #[serde(default)]
+    struct Coerced {
+        #[serde(deserialize_with = "opt_string")]
+        text: Option<String>,
+        #[serde(deserialize_with = "string_map")]
+        map: BTreeMap<String, String>,
+        #[serde(deserialize_with = "opt_spring_bool")]
+        flag: Option<bool>,
+    }
+
+    #[test]
+    fn coerces_scalars_like_the_spring_binder() {
+        let coerced: Coerced =
+            serde_yaml_ng::from_str("text: 1000\nmap: {order: 1, on: true, empty: ~}\nflag: 'yes'")
+                .expect("parses");
+        assert_eq!(coerced.text.as_deref(), Some("1000"));
+        assert_eq!(coerced.map.get("order").map(String::as_str), Some("1"));
+        assert_eq!(coerced.map.get("on").map(String::as_str), Some("true"));
+        assert_eq!(coerced.map.get("empty").map(String::as_str), Some(""));
+        assert_eq!(coerced.flag, Some(true));
+
+        let absent: Coerced = serde_yaml_ng::from_str("{}").expect("parses");
+        assert_eq!(absent.text, None);
+        assert_eq!(absent.flag, None);
+        for (value, expected) in [("'OFF'", false), ("'1'", true), ("false", false)] {
+            let parsed: Coerced =
+                serde_yaml_ng::from_str(&format!("flag: {value}")).expect("parses");
+            assert_eq!(parsed.flag, Some(expected), "{value}");
+        }
+        assert!(serde_yaml_ng::from_str::<Coerced>("flag: maybe").is_err());
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    enum Mode {
+        EnforceNoCache,
+        Passthrough,
+    }
+
+    impl LenientEnum for Mode {
+        const VARIANTS: &'static [(&'static str, Self)] = &[
+            ("EnforceNoCache", Mode::EnforceNoCache),
+            ("Passthrough", Mode::Passthrough),
+        ];
+    }
+
+    #[test]
+    fn matches_enum_names_leniently() {
+        assert_eq!(Mode::parse_lenient("Passthrough"), Some(Mode::Passthrough));
+        assert_eq!(Mode::parse_lenient("passthrough"), Some(Mode::Passthrough));
+        assert_eq!(
+            Mode::parse_lenient("ENFORCE_NO_CACHE"),
+            Some(Mode::EnforceNoCache)
+        );
+        assert_eq!(
+            Mode::parse_lenient("enforce-no-cache"),
+            Some(Mode::EnforceNoCache)
+        );
+        assert_eq!(Mode::parse_lenient("Other"), None);
+        assert_eq!(Mode::Passthrough.name(), "Passthrough");
     }
 }
