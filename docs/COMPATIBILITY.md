@@ -15,6 +15,7 @@ Status legend: ✅ verified against the Java implementation · 🟨 implemented,
 | Sources & precedence | CLI `--key=value` > environment > `application-{profile}.yml` > `application.yml` > defaults | ✅ |
 | Configuration discovery | `application.yml`/`application.yaml` in the working directory, `--spring.config.location` (file, directory or comma separated list), `SPRING_CONFIG_LOCATION`; demo profile when nothing is found | ✅ |
 | Lists | Single value, comma separated string, YAML list and indexed environment variables (`PROXY_ADMIN_GROUPS_0`) | ✅ |
+| Scalar conversion | As with the Spring binder, numbers and booleans are accepted in string fields of app definitions (`uid: 1000`, `default-value: 2020`, `template-properties`, `options`), enum values match leniently (`cache-headers-mode: passthrough`, `websocket-reconnection-mode: auto`, `my-apps-mode: inline`) and the ShinyProxy booleans accept `yes`/`on`/`1` and placeholders. A value that still cannot be bound fails the startup with the app index, instead of being ignored | 🟨 |
 | Placeholders | `${VAR}` / `${property:default}` resolved against environment and configuration; **unresolvable placeholders are left untouched**, matching Spring's `Environment` (required for Thymeleaf snippets in `parameters.template`) | ✅ |
 | Unknown properties | Logged as a warning at startup and reported in the API-free `unknown_properties` list; Spring silently ignores them | 🟨 deliberate improvement |
 | Nested environment binding | Only one array level is bound from the environment (`PROXY_SPECS_0_CONTAINER_IMAGE`); deeper nesting such as `PROXY_USAGE_STATS_0_ATTRIBUTES_0_NAME` must be configured in the file | 🟨 deviation, no known usage |
@@ -92,6 +93,9 @@ types. Allow-listed static types: `java.lang.System.getenv`, `java.lang.String.v
 | Startup warnings | Same wording as Java for HA/session/recovery/cookie/spec-detail misconfigurations | ✅ |
 | Fatal configurations | `store-mode: Redis` + app recovery aborts startup | ✅ |
 | Panics | A panic inside a request or task does not terminate the server (`panic = "unwind"`), matching the Java thread-per-request behaviour | 🟨 |
+| Waiting for an app | As `ShinyProxyTestStrategy`: the first 5 requests time out after 200 ms, later ones after `proxy.container-wait-timeout` (5 s) and only while the backend reports the container as running, within `proxy.container-wait-time` (20 s); the health check after a `503` also uses `container-wait-timeout` | 🟨 |
+| Shutdown | With `proxy.stop-proxies-on-shutdown` (default `true`) the apps and the pre-initialized containers are stopped when the server receives `SIGTERM`/`SIGINT` (`ProxyService.shutdown`, `ProxySharingScaler.close`) | 🟨 |
+| Failed starts | A container, pod or ECS task that was created but did not start is removed, with its host ports (`ContainerFailedToStartException` carries the container in Java) | 🟨 |
 
 ## Pages and endpoints
 
@@ -288,8 +292,8 @@ down, which this implementation follows:
 | --- | --- |
 | The actuator endpoints | Only on the management port (`management.server.port`, which ShinyProxy defaults to 9090); the application port answers 404 |
 | `/favicon` | Not public: an unauthenticated request is sent to the login page |
-| An unknown path | `404` with `{"status":"error","data":"not found"}` (the document of Spring's error controller), whatever the request asked for |
-| Access denied | `403` with `{"status":"fail","data":"forbidden"}`, also for `/app/{spec}` of an app the user may not use or that does not exist |
+| An unknown path | `404` with `{"status":"error","data":"not found"}` (the document of Spring's error controller) for `*/*` and API clients; a browser (`Accept: text/html`) gets the error page, as `ErrorController.handleError` (`produces = "text/html"`) |
+| Access denied | `403` with `{"status":"fail","data":"forbidden"}`, also for `/app/{spec}` of an app the user may not use or that does not exist; a browser gets the error page |
 | `/admin/data`, `/api/**`, `/app_proxy/**`, `/heartbeat/*`, `/issue` | Any access denial (also of a user who is logged in but lacks the rights) answers `410` with `shinyproxy_authentication_required`, because `AuthenticationRequiredFilter` covers those paths |
 | `/api/route/{unknown}` | `403`, unlike `/app_proxy/{unknown}` which answers `410` |
 | Static assets | Carry the same `Cache-Control: no-cache, no-store, max-age=0, must-revalidate` as every other answer; only the instance-id-prefixed URLs are cacheable |
