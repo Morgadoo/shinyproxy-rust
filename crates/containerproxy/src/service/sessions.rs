@@ -61,6 +61,14 @@ pub trait SessionService: Send + Sync + std::fmt::Debug {
         true
     }
 
+    /// The users whose last session on this server expired since the last call, each once
+    /// (`HttpSessionDestroyedEvent`); a user who signed out is not reported (see [`forget`]).
+    ///
+    /// [`forget`]: SessionService::forget
+    fn take_expired_users(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Keeps a session alive while its app is used (`SessionReActivatorService`).
     ///
     /// The heartbeats of an app come from the browser through a WebSocket, so a user that only looks at
@@ -77,6 +85,8 @@ pub struct MemorySessionService {
     refreshed: DashMap<String, i64>,
     /// How long a session lives without being used.
     timeout: Duration,
+    /// The users of the sessions that expired, until [`SessionService::take_expired_users`] takes them.
+    expired: std::sync::Mutex<Vec<String>>,
 }
 
 impl MemorySessionService {
@@ -86,14 +96,27 @@ impl MemorySessionService {
             sessions: DashMap::new(),
             refreshed: DashMap::new(),
             timeout,
+            expired: std::sync::Mutex::new(Vec::new()),
         }
     }
 
     /// Removes the sessions that timed out.
     fn expire(&self) {
         let deadline = crate::model::proxy::now_millis() - self.timeout.as_millis() as i64;
-        self.sessions
-            .retain(|_, (_, last_used)| *last_used > deadline);
+        let mut expired = Vec::new();
+        self.sessions.retain(|_, (user_id, last_used)| {
+            let alive = *last_used > deadline;
+            if !alive {
+                expired.push(user_id.clone());
+            }
+            alive
+        });
+        if !expired.is_empty() {
+            self.expired
+                .lock()
+                .expect("expired sessions lock")
+                .extend(expired);
+        }
         self.refreshed.retain(|_, refreshed| *refreshed > deadline);
     }
 
@@ -144,6 +167,22 @@ impl SessionService for MemorySessionService {
 
     fn forget(&self, session_id: &str) {
         self.sessions.remove(session_id);
+    }
+
+    fn take_expired_users(&self) -> Vec<String> {
+        self.expire();
+        let mut users: Vec<String> =
+            std::mem::take(&mut *self.expired.lock().expect("expired sessions lock"));
+        users.sort();
+        users.dedup();
+        // a user who still uses another session (another browser) has not left
+        users.retain(|user_id| {
+            !self
+                .sessions
+                .iter()
+                .any(|entry| &entry.value().0 == user_id)
+        });
+        users
     }
 
     fn reactivate(&self, session_id: &str, user_id: &str) {
@@ -250,6 +289,23 @@ impl SessionService for RedisSessionService {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reports_the_users_whose_last_session_expired() {
+        let service = MemorySessionService::new(Duration::from_millis(50));
+        service.touch("session-1", "jack");
+        service.touch("session-2", "jeff");
+        service.touch("session-3", "jeff");
+        service.touch("session-4", "signed-out");
+        service.forget("session-4");
+        std::thread::sleep(Duration::from_millis(80));
+        // jeff still uses one of his sessions
+        service.touch("session-3", "jeff");
+
+        assert_eq!(service.take_expired_users(), vec!["jack".to_string()]);
+        // each expiry is reported once, and signing out is not an expiry
+        assert!(service.take_expired_users().is_empty());
+    }
 
     #[tokio::test]
     async fn counts_the_users_of_the_sessions() {

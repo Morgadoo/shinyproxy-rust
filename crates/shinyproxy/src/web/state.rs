@@ -543,6 +543,32 @@ impl AppState {
             sessions.clone().spawn_refresh();
         }
 
+        // a user whose session expired is logged out like one who signs out (`UserService`
+        // `onHttpSessionDestroyedEvent`): their apps stop when they say so, and the logout is counted
+        let state = self.clone();
+        // checked twice per timeout (at most every 30 seconds), so a logout follows the expiry closely
+        let check_every = (self.settings.session_timeout() / 2).clamp(
+            std::time::Duration::from_secs(1),
+            std::time::Duration::from_secs(30),
+        );
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(check_every);
+            loop {
+                ticker.tick().await;
+                for user_id in state.sessions.take_expired_users() {
+                    tracing::info!("User logged out [user: {user_id}]");
+                    state
+                        .proxies
+                        .events()
+                        .publish(containerproxy::events::Event::UserLoggedOut {
+                            user_id: user_id.clone(),
+                            expired: true,
+                        });
+                    state.stop_apps_on_logout(&user_id);
+                }
+            }
+        });
+
         // take part in the leader election (and become the leader immediately when this server is alone),
         // unless a newer configuration is already running in this realm
         if let Some(latest) = &self.latest_config {
@@ -567,6 +593,22 @@ impl AppState {
             // the timers that release inactive and expired apps run for the lifetime of the process
             state.release.clone().spawn();
         })
+    }
+
+    /// Stops the apps of a user that logged out (or whose session expired) when they say so
+    /// (`proxy.default-stop-proxy-on-logout` is true by default), in the background.
+    pub fn stop_apps_on_logout(self: &Arc<Self>, user_id: &str) {
+        let state = self.clone();
+        let user_id = user_id.to_string();
+        tokio::spawn(async move {
+            let stopped = state
+                .release
+                .on_logout(&user_id, &|proxy| state.stop_on_logout(proxy))
+                .await;
+            for proxy_id in stopped {
+                state.router.remove_mappings(&proxy_id);
+            }
+        });
     }
 
     /// Whether an app is stopped when its user logs out (`DefaultProxyLogoutStrategy.shouldBeStopped`).
