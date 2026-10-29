@@ -205,8 +205,21 @@ pub async fn serve(
 
     drop(close_rx);
     drop(listener);
-    close_tx.closed().await;
+    // the open requests may finish, but not forever: the apps are stopped after this returns (Spring
+    // Boot's graceful shutdown also waits 30 seconds, `spring.lifecycle.timeout-per-shutdown-phase`)
+    if tokio::time::timeout(SHUTDOWN_GRACE_PERIOD, close_tx.closed())
+        .await
+        .is_err()
+    {
+        tracing::warn!(
+            "Requests still open after {} seconds, shutting down anyway",
+            SHUTDOWN_GRACE_PERIOD.as_secs()
+        );
+    }
 }
+
+/// How long the open connections may take to finish when the server shuts down.
+const SHUTDOWN_GRACE_PERIOD: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Removes `Max-Age`/`Expires` from the session cookie, so that it lives as long as the browser session.
 ///
