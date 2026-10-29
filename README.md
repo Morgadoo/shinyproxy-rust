@@ -71,7 +71,7 @@ docker run --rm -p 8080:8080 -v /var/run/docker.sock:/var/run/docker.sock \
 | Pre-initialized containers | `minimum-seats-available` with the seat model, the scaler and the delegate proxies |
 
 Known gaps: SAML authentication (fails at startup with a migration message), Thymeleaf templates in
-`proxy.template-path`, Redis Sentinel/TLS and CORS; the ECS backend has not been validated against
+`proxy.template-path` (MiniJinja only) and Redis Sentinel/TLS; the ECS backend has not been validated against
 a real AWS account, and a few operational extras (S3 log storage, InfluxDB usage statistics, request
 dumping). The security review and the fixes it led to are in [docs/SECURITY_REVIEW.md](docs/SECURITY_REVIEW.md). See [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) for the full list and
 [docs/PROGRESS.md](docs/PROGRESS.md) for the state of the rewrite.

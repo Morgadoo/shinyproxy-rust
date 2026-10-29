@@ -11,7 +11,7 @@ ContainerProxy 1.2.4, the Java versions it replaces. It had three parts:
 Severity uses the usual scale: **Critical** means remote and unauthenticated, or a complete break of user
 isolation; **Low** means hardening.
 
-Status after the fixes: `cargo test --workspace --all-targets` passes 579 tests, the Redis suites pass
+Status after the fixes: `cargo test --workspace --all-targets` passes 590 tests, the Redis suites pass
 (`SP_TEST_REDIS=1`), CI is green including the Docker, Kubernetes and LDAP jobs, `cargo clippy -D warnings`
 is clean, and `cargo audit` reports nothing beyond one accepted, documented advisory.
 
@@ -84,25 +84,29 @@ with simple, LDAP or OpenID login, used from the browser or from scripts.
   served under `/api/route/{proxyId}/`. Unlike Java, `max-instances` applies to it as well.
 - HTTP Basic authentication (`http.httpBasic`) for `simple`, `ldap` and `webservice`, per request and
   without a session, as Spring Security 6 does. Failed attempts count as authentication failures.
+- CORS for `proxy.api-security.cors-allowed-origins`.
+- An expired session logs its user out: the apps with `stop-on-logout` stop and the logout is counted
+  (in-memory sessions, and only when the user has no other live session on the server).
+- `proxy.openid.logout-url` is evaluated as an expression (`id_token_hint=#{oidcUser.idToken.tokenValue}`).
+- `proxy.template-path`: `assets/**` is served; Thymeleaf templates are refused at startup with the files
+  listed, instead of rendering broken pages.
+- `server.servlet.session.timeout` as the fallback of `spring.session.timeout`, the Java `resource-name`
+  key, the MS-Office user-agent filter, and the actuator on the application port when
+  `management.server.port` equals `proxy.port`.
 
 These are the remaining verified differences, by impact:
 
 **Missing**
 
-1. Custom templates (`proxy.template-path`) are rendered with MiniJinja. Thymeleaf templates are not detected and render broken, and `{template-path}/assets/**` is not served.
-2. Redis Sentinel and TLS (now refused at startup instead of ignored).
-3. CORS (`proxy.api-security.cors-allowed-origins`) is parsed but not applied.
-4. Nothing happens when a session expires. Java stops the apps with `stop-on-logout`, records the logout and closes the session's WebSockets.
-5. `RedisEventBridge`: container logs of apps started on another server are not collected, and `?watch=true` status requests on another server wait for their timeout.
-6. OpenID: `logout-url` is not evaluated as an expression (so `id_token_hint=#{oidcUser.idToken.tokenValue}` does not work); `client-authentication-method` and `enforce-https-redirect-uri` are ignored; `oidcUser.idToken` / `getAttribute()` are missing in expressions.
-7. `server.servlet.session.timeout` is not read; only `spring.session.timeout` is.
-8. Smaller: the MS-Office user-agent filter, Kubernetes pod events (`imagePullTime`/`containerScheduleTime` metrics, warnings in the log), `kubernetes-debug-patches`.
+1. Thymeleaf templates in `proxy.template-path` have to be converted to MiniJinja (refused at startup).
+2. Redis Sentinel and TLS (refused at startup instead of ignored).
+3. `RedisEventBridge`: container logs of apps started on another server are not collected, and `?watch=true` status requests on another server wait for their timeout. With Redis sessions, an expired session does not stop the apps of its user.
+4. OpenID: `client-authentication-method` and `enforce-https-redirect-uri` are ignored; `getAttribute()` method calls on `oidcUser` are missing in expressions.
+5. Smaller: Kubernetes pod events (`imagePullTime`/`containerScheduleTime` metrics, warnings in the log), `kubernetes-debug-patches`.
 
 **Different without (previously) being documented**
 
 - The cleanup of Kubernetes additional manifests only deletes Secrets, ConfigMaps, PVCs, Services and ServiceAccounts in the pod's namespace. Java deletes every labelled resource type in all app namespaces.
-- `resource-name` (Java's ShinyProxy notation) is only accepted as `container-resource-name`.
-- When `management.server.port` equals `proxy.port`, startup fails instead of serving the actuator on the main port.
 - After login, any saved HTML page is the redirect target; Java only returns to app pages.
 
 **Documented gaps, confirmed**
