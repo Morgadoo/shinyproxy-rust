@@ -53,9 +53,17 @@ pub fn router(state: Arc<AppState>) -> Router {
     let mut routes = Router::new()
         .route(&path("/"), get(index))
         // --- apps ---
+        // `{*sub}` does not match an empty rest, so the URLs with a trailing slash (which the
+        // switch-instance dialog, My apps and track-app-url build) have their own routes, as
+        // `{*subPath}` of Spring matches them
         .route(&path("/app/{app}"), get(super::apps::app_page))
+        .route(&path("/app/{app}/"), get(super::apps::app_page))
         .route(&path("/app/{app}/{*sub}"), get(super::apps::app_page))
         .route(&path("/app_i/{app}/{instance}"), get(super::apps::app_page))
+        .route(
+            &path("/app_i/{app}/{instance}/"),
+            get(super::apps::app_page),
+        )
         .route(
             &path("/app_i/{app}/{instance}/{*sub}"),
             get(super::apps::app_page),
@@ -480,8 +488,8 @@ async fn authorize(
             return answer;
         }
         if is_admin_path(&path) && !state.is_admin(user.as_ref()) {
-            // Spring's access denied handler answers with the API document, whatever the request asked for —
-            // except on the paths of `AuthenticationRequiredFilter`, which turns *any* access denial into the
+            // Spring's access denied handler sends the error page (the API document unless the request asks
+            // for HTML) — except on the paths of `AuthenticationRequiredFilter`, which turns *any* access denial into the
             // document that makes the browser code log the user in again (`/admin/data` is such a path)
             let mut answer = if needs_authentication_answer(&path) {
                 (
@@ -493,11 +501,7 @@ async fn authorize(
                 )
                     .into_response()
             } else {
-                (
-                    StatusCode::FORBIDDEN,
-                    axum::Json(serde_json::json!({"status": "fail", "data": "forbidden"})),
-                )
-                    .into_response()
+                error_response(&state, request.headers(), StatusCode::FORBIDDEN)
             };
             add_headers(&state, &path, &mut answer);
             return answer;
@@ -924,25 +928,41 @@ async fn error_page(
         .and_then(|value| value.parse::<u16>().ok())
         .and_then(|value| StatusCode::from_u16(value).ok())
         .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    error_response(&state, &headers, status)
+}
 
-    if wants_json(&headers) {
-        return (
-            status,
-            axum::Json(serde_json::json!({"status": "fail", "data": status.canonical_reason()})),
-        )
-            .into_response();
+/// Whether an error is answered with the HTML page. Spring sends errors through `/error`, where
+/// `ErrorController.handleError` (`produces = "text/html"`) is chosen when the request asks for HTML;
+/// `*/*`, no `Accept` header and the calls of the browser code get the JSON document (verified with the
+/// parity fixture).
+pub fn wants_html(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::ACCEPT)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|accept| accept.contains("text/html"))
+        && !wants_json(headers)
+}
+
+/// The answer of `ErrorController` for an error status: the error page for a browser, the API document
+/// otherwise.
+pub fn error_response(state: &AppState, headers: &HeaderMap, status: StatusCode) -> Response {
+    if !wants_html(headers) {
+        return error_document(status);
     }
 
     let (short_error, description) = match status {
-        StatusCode::NOT_FOUND => ("Not found", "The requested page could not be found."),
-        StatusCode::FORBIDDEN => (
-            "Forbidden",
-            "You do not have access to this page or application.",
+        StatusCode::NOT_FOUND => ("Not found", "The requested page was not found"),
+        StatusCode::BAD_REQUEST => ("Bad Request", "You are not allowed to send this request."),
+        StatusCode::FORBIDDEN | StatusCode::UNAUTHORIZED => (
+            if status == StatusCode::FORBIDDEN {
+                "Forbidden"
+            } else {
+                "Unauthorized"
+            },
+            "You do not have access to this page",
         ),
-        _ => (
-            "An error occurred",
-            "Please try again or contact your administrator.",
-        ),
+        StatusCode::METHOD_NOT_ALLOWED => ("Method not allowed", ""),
+        _ => ("ShinyProxy experienced an unrecoverable error.", ""),
     };
 
     let mut model = serde_json::Map::new();
@@ -957,7 +977,33 @@ async fn error_page(
         "contextPath".into(),
         serde_json::json!(state.context_path_with_slash()),
     );
-    (status, render(&state, "error.html", model)).into_response()
+    (status, render(state, "error.html", model)).into_response()
+}
+
+/// The answer for a path that does not exist.
+async fn not_found(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
+    error_response(&state, &headers, StatusCode::NOT_FOUND)
+}
+
+/// The JSON document of `ErrorController.error` for an error status.
+pub fn error_document(status: StatusCode) -> Response {
+    let (status, kind, data) = match status {
+        StatusCode::NOT_FOUND => (status, "error", "not found"),
+        StatusCode::BAD_REQUEST => (status, "fail", "bad request"),
+        StatusCode::UNAUTHORIZED => (status, "error", "unauthorized"),
+        StatusCode::FORBIDDEN => (status, "fail", "forbidden"),
+        StatusCode::METHOD_NOT_ALLOWED => (status, "fail", "method not allowed"),
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "error",
+            "unrecoverable error",
+        ),
+    };
+    (
+        status,
+        axum::Json(serde_json::json!({"status": kind, "data": data})),
+    )
+        .into_response()
 }
 
 /// `GET /favicon.ico` and `GET /{instanceId}/favicon` (`FaviconController`).
@@ -1019,6 +1065,7 @@ fn serve_favicon(
 async fn static_asset(
     State(state): State<Arc<AppState>>,
     axum::Extension(CurrentUser(user)): axum::Extension<CurrentUser>,
+    headers: HeaderMap,
     uri: Uri,
 ) -> Response {
     let path = strip_context_path(&state, uri.path());
@@ -1041,21 +1088,9 @@ async fn static_asset(
         return assets::serve_template_asset(template_path, relative).await;
     }
     if !assets::exists(&path) {
-        return not_found().await;
+        return error_response(&state, &headers, StatusCode::NOT_FOUND);
     }
     assets::serve(&path, cacheable)
-}
-
-/// The answer for a path that does not exist.
-///
-/// The `ErrorController` of the Java implementation answers every unknown path with this document, whatever
-/// the request asked for (verified with the parity fixture).
-async fn not_found() -> Response {
-    (
-        StatusCode::NOT_FOUND,
-        axum::Json(serde_json::json!({"status": "error", "data": "not found"})),
-    )
-        .into_response()
 }
 
 /// Renders a template, turning failures into a plain error response (and a log line).

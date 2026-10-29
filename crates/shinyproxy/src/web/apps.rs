@@ -98,11 +98,11 @@ pub async fn app_page(
     let spec = state.specs.spec(&app_name).cloned();
     let proxy = find_user_proxy(&state, user.as_ref(), &app_name, &instance);
 
-    // no access (or no such app) and no running app: Spring's access denied handler answers with the API
-    // document, whatever the request asked for (verified against the Java implementation)
+    // no access (or no such app) and no running app: Spring's access denied handler sends the error page
+    // (the API document unless the request asks for HTML)
     let Some(spec) = spec.filter(|spec| state.can_access(user.as_ref(), spec)) else {
         if proxy.is_none() {
-            return forbidden_document();
+            return super::router::error_response(&state, request.headers(), StatusCode::FORBIDDEN);
         }
         return render_app_page(
             &state,
@@ -113,6 +113,7 @@ pub async fn app_page(
             proxy,
             &sub_path,
             &query,
+            request.uri().query(),
         );
     };
 
@@ -138,6 +139,7 @@ pub async fn app_page(
         proxy,
         &sub_path,
         &query,
+        request.uri().query(),
     )
 }
 
@@ -152,17 +154,17 @@ fn render_app_page(
     proxy: Option<Proxy>,
     sub_path: &str,
     query: &HashMap<String, String>,
+    raw_query: Option<&str>,
 ) -> Response {
     let hide_navbar = query.get("sp_hide_navbar").map(String::as_str) == Some("true");
     let mut model = prepare_model(state, Page::App, user, hide_navbar);
 
+    // without the context path: the script resolves it against `contextPath` (`"/app/" + appName` in
+    // `AppController`)
     let app_path = if instance == DEFAULT_INSTANCE {
-        format!("{}app/{app_name}", state.context_path_with_slash())
+        format!("/app/{app_name}")
     } else {
-        format!(
-            "{}app_i/{app_name}/{instance}",
-            state.context_path_with_slash()
-        )
+        format!("/app_i/{app_name}/{instance}")
     };
 
     let title = match (&proxy, spec) {
@@ -183,7 +185,7 @@ fn render_app_page(
     );
     model.insert(
         "containerSubPath".into(),
-        json!(container_sub_path(sub_path, query)),
+        json!(container_sub_path(sub_path, raw_query)),
     );
     model.insert(
         "refreshOpenidEnabled".into(),
@@ -294,16 +296,19 @@ fn render_app_page(
     }
 }
 
-/// The path inside the app, with the ShinyProxy query parameters removed (`buildContainerSubPath`).
-fn container_sub_path(sub_path: &str, query: &HashMap<String, String>) -> String {
-    let mut remaining: Vec<String> = query
-        .iter()
-        .filter(|(name, _)| {
-            name.as_str() != "sp_hide_navbar" && name.as_str() != "sp_automatic_reload"
+/// The path and query the iframe opens in the app (`buildContainerSubPath`): the query string is kept as
+/// the browser sent it (encoding, order, repeated and valueless parameters), without the parameters of
+/// ShinyProxy itself.
+fn container_sub_path(sub_path: &str, raw_query: Option<&str>) -> String {
+    let remaining: Vec<&str> = raw_query
+        .unwrap_or_default()
+        .split('&')
+        .filter(|pair| !pair.is_empty())
+        .filter(|pair| {
+            let name = pair.split_once('=').map_or(*pair, |(name, _)| name);
+            name != "sp_hide_navbar" && name != "sp_automatic_reload"
         })
-        .map(|(name, value)| format!("{name}={value}"))
         .collect();
-    remaining.sort();
 
     let path = sub_path.trim_start_matches('/');
     if remaining.is_empty() {
@@ -1233,19 +1238,19 @@ mod tests {
 
     #[test]
     fn builds_the_container_sub_path() {
-        let query = HashMap::from([
-            ("sp_hide_navbar".to_string(), "true".to_string()),
-            ("sp_automatic_reload".to_string(), "true".to_string()),
-            ("a".to_string(), "1".to_string()),
-        ]);
-        assert_eq!(container_sub_path("/sub/page", &query), "sub/page?a=1");
-        assert_eq!(container_sub_path("", &HashMap::new()), "");
         assert_eq!(
             container_sub_path(
-                "/x",
-                &HashMap::from([("sp_hide_navbar".to_string(), "true".to_string())])
+                "/sub/page",
+                Some("sp_hide_navbar=true&a=1&sp_automatic_reload=true")
             ),
-            "x"
+            "sub/page?a=1"
+        );
+        assert_eq!(container_sub_path("", None), "");
+        assert_eq!(container_sub_path("/x", Some("sp_hide_navbar=true")), "x");
+        // as the browser sent it: encoding, order, repeated and valueless parameters
+        assert_eq!(
+            container_sub_path("", Some("q=a%26b&z=1&a=1&a=2&flag")),
+            "?q=a%26b&z=1&a=1&a=2&flag"
         );
     }
 

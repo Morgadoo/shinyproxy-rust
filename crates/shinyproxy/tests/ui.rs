@@ -809,3 +809,76 @@ async fn api_requests_of_unauthenticated_users_get_json() {
 
     instance.stop();
 }
+
+const BROWSER_ACCEPT: &str =
+    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8";
+
+#[tokio::test]
+async fn app_pages_with_a_trailing_slash_are_served() {
+    let instance = TestInstance::start(SIMPLE_CONFIG).await;
+    let client = instance.login("jack", "password").await;
+
+    // the switch-instance dialog, My apps and track-app-url build these URLs (`{*subPath}` in Java)
+    for path in ["/app/01_hello/", "/app_i/01_hello/second/"] {
+        let response = client
+            .get(instance.url(path))
+            .header("accept", BROWSER_ACCEPT)
+            .send()
+            .await
+            .expect("request");
+        assert_eq!(response.status(), 200, "{path}");
+        let body = response.text().await.expect("body");
+        assert!(body.contains("Shiny.app.start("), "{path}: {body}");
+    }
+
+    instance.stop();
+}
+
+#[tokio::test]
+async fn browsers_get_the_error_page_and_api_clients_the_document() {
+    let instance = TestInstance::start(SIMPLE_CONFIG).await;
+    let client = instance.login("jack", "password").await;
+
+    for (path, status, description, document) in [
+        (
+            "/app/02_admin_only",
+            403,
+            "You do not have access to this page",
+            r#"{"status":"fail","data":"forbidden"}"#,
+        ),
+        (
+            "/admin",
+            403,
+            "You do not have access to this page",
+            r#"{"status":"fail","data":"forbidden"}"#,
+        ),
+        (
+            "/does-not-exist",
+            404,
+            "The requested page was not found",
+            r#"{"status":"error","data":"not found"}"#,
+        ),
+    ] {
+        let response = client
+            .get(instance.url(path))
+            .header("accept", BROWSER_ACCEPT)
+            .send()
+            .await
+            .expect("request");
+        assert_eq!(response.status(), status, "{path}");
+        let body = response.text().await.expect("body");
+        assert!(body.contains(description), "{path}: {body}");
+
+        // `*/*` (what scripts send) is answered with the JSON document, as Spring does
+        let response = client
+            .get(instance.url(path))
+            .header("accept", "*/*")
+            .send()
+            .await
+            .expect("request");
+        assert_eq!(response.status(), status, "{path}");
+        assert_eq!(response.text().await.expect("body"), document, "{path}");
+    }
+
+    instance.stop();
+}
