@@ -76,6 +76,20 @@ pub struct StartedContainer {
     pub targets: BTreeMap<String, String>,
 }
 
+impl StartedContainer {
+    /// Records the container on the proxy: its id, its runtime values and the targets of the proxy.
+    pub fn apply_to(self, proxy: &mut Proxy, index: i64) {
+        let container = proxy.container_mut(index);
+        container.id = self.id;
+        for value in self.runtime_values.iter() {
+            container.add_runtime_value(value.clone(), true);
+        }
+        for (mapping, target) in self.targets {
+            proxy.targets.insert(mapping, target);
+        }
+    }
+}
+
 /// Information about a container that already exists, used by app recovery.
 #[derive(Debug, Clone)]
 pub struct ExistingContainerInfo {
@@ -108,12 +122,43 @@ pub enum BackendError {
     /// The container could not be created or started.
     #[error("{0}")]
     FailedToStart(String),
+    /// The container failed after the backend created it. `created` holds what exists (the id and
+    /// the backend container name), so that the failed start can remove it; Java passes the container
+    /// in `ContainerFailedToStartException` for the same reason.
+    #[error("{message}")]
+    FailedAfterCreate {
+        /// What went wrong.
+        message: String,
+        /// The container as far as it was created.
+        created: Box<StartedContainer>,
+    },
     /// The backend does not support this operation (e.g. pausing).
     #[error("this backend does not support {0}")]
     Unsupported(&'static str),
     /// Something went wrong while talking to the backend.
     #[error("backend error: {0}")]
     Backend(String),
+}
+
+impl BackendError {
+    /// Marks an error that happened after the container was created, so that it gets removed.
+    pub fn after_create(self, created: &StartedContainer) -> Self {
+        match self {
+            BackendError::FailedAfterCreate { .. } => self,
+            other => BackendError::FailedAfterCreate {
+                message: other.to_string(),
+                created: Box::new(created.clone()),
+            },
+        }
+    }
+
+    /// What the backend created before the error, if anything.
+    pub fn created(&self) -> Option<&StartedContainer> {
+        match self {
+            BackendError::FailedAfterCreate { created, .. } => Some(created),
+            _ => None,
+        }
+    }
 }
 
 /// What runs the apps.

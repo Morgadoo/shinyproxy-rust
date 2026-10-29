@@ -183,6 +183,132 @@ impl std::fmt::Debug for KubernetesBackend {
 }
 
 impl KubernetesBackend {
+    /// Creates the additional manifests and the pod, waits until the pod is ready and returns the targets.
+    async fn create_pod(
+        &self,
+        context: &StartContext<'_>,
+        document: Value,
+        container_id: &str,
+        namespace: &str,
+        name: &str,
+    ) -> Result<BTreeMap<String, String>, BackendError> {
+        // the manifests of the app definition are created before the pod, as in Java
+        self.create_additional_manifests(context, namespace).await?;
+
+        let pod: Pod = serde_json::from_value(document)
+            .map_err(|error| BackendError::FailedToStart(format!("invalid pod: {error}")))?;
+        let pods: Api<Pod> = Api::namespaced(self.client.clone(), namespace);
+        pods.create(&PostParams::default(), &pod)
+            .await
+            .map_err(|error| {
+                BackendError::FailedToStart(format!("cannot create pod {name}: {error}"))
+            })?;
+
+        // wait until the pod is ready (or failed)
+        let deadline = std::time::Instant::now() + self.config.pod_wait_time;
+        let interval = self.config.pod_wait_time / 10;
+        let mut ready = false;
+        while std::time::Instant::now() < deadline {
+            let current = pods.get_opt(name).await.ok().flatten();
+            if let Some(failure) = KubernetesBackend::pod_failure(current.as_ref()) {
+                tracing::warn!("{failure} [proxyId: {}]", context.proxy.id);
+                break;
+            }
+            if current.as_ref().is_some_and(KubernetesBackend::is_ready) {
+                ready = true;
+                break;
+            }
+            tokio::time::sleep(interval).await;
+        }
+        if !ready {
+            // a final check, as the Java implementation does
+            let current = pods.get_opt(name).await.ok().flatten();
+            if !current.as_ref().is_some_and(KubernetesBackend::is_ready) {
+                return Err(BackendError::FailedToStart(
+                    "Kubernetes Pod did not start in time".to_string(),
+                ));
+            }
+        }
+
+        let pod = pods.get(name).await.map_err(|error| {
+            BackendError::FailedToStart(format!("cannot read pod {name}: {error}"))
+        })?;
+
+        // where the proxy sends the requests to
+        let mut targets = BTreeMap::new();
+        if self.config.internal_networking {
+            self.ensure_headless_service(namespace).await?;
+            let hostname = pod
+                .spec
+                .as_ref()
+                .and_then(|spec| spec.hostname.clone())
+                .unwrap_or_else(|| name.to_string());
+            let host = manifest::pod_fqdn(&hostname, namespace, &self.config.cluster_domain);
+            for mapping in &context.container_spec.port_mapping {
+                let Some(port) = mapping.port else { continue };
+                targets.insert(
+                    mapping_key_to_path(&mapping.name),
+                    target_url(
+                        &self.config.target_protocol,
+                        &host,
+                        port as u16,
+                        &compute_target_path(mapping.target_path.as_str()),
+                    ),
+                );
+            }
+        } else {
+            let document = manifest::build_service(&self.config, context, container_id, namespace);
+            let service: Service = serde_json::from_value(document).map_err(|error| {
+                BackendError::FailedToStart(format!("invalid service: {error}"))
+            })?;
+            let services: Api<Service> = Api::namespaced(self.client.clone(), namespace);
+            let service_name = manifest::service_name(&context.proxy.id, context.container.index);
+            let created = services
+                .create(&PostParams::default(), &service)
+                .await
+                .map_err(|error| {
+                    BackendError::FailedToStart(format!(
+                        "cannot create service {service_name}: {error}"
+                    ))
+                })?;
+
+            // the node ports are assigned by the cluster, so the service is read back
+            let mut bindings = KubernetesBackend::port_bindings(&created);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+            while bindings.is_empty() && std::time::Instant::now() < deadline {
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                if let Ok(Some(current)) = services.get_opt(&service_name).await {
+                    bindings = KubernetesBackend::port_bindings(&current);
+                }
+            }
+
+            let host = pod
+                .status
+                .as_ref()
+                .and_then(|status| status.host_ip.clone())
+                .unwrap_or_else(|| "127.0.0.1".to_string());
+            for mapping in &context.container_spec.port_mapping {
+                let Some(port) = mapping.port else { continue };
+                let Some(node_port) = bindings.get(&port) else {
+                    return Err(BackendError::FailedToStart(format!(
+                        "the service has no node port for container port {port}"
+                    )));
+                };
+                targets.insert(
+                    mapping_key_to_path(&mapping.name),
+                    target_url(
+                        &self.config.target_protocol,
+                        &host,
+                        *node_port,
+                        &compute_target_path(mapping.target_path.as_str()),
+                    ),
+                );
+            }
+        }
+
+        Ok(targets)
+    }
+
     /// Connects to the cluster.
     ///
     /// The connection is made the way the Java client does it: `proxy.kubernetes.url` wins, then the
@@ -615,127 +741,18 @@ impl ContainerBackend for KubernetesBackend {
             true,
         );
 
-        // the manifests of the app definition are created before the pod, as in Java
-        self.create_additional_manifests(&context, &namespace)
-            .await?;
-
-        let pod: Pod = serde_json::from_value(document)
-            .map_err(|error| BackendError::FailedToStart(format!("invalid pod: {error}")))?;
-        let pods: Api<Pod> = Api::namespaced(self.client.clone(), &namespace);
-        pods.create(&PostParams::default(), &pod)
-            .await
-            .map_err(|error| {
-                BackendError::FailedToStart(format!("cannot create pod {name}: {error}"))
-            })?;
-
-        // wait until the pod is ready (or failed)
-        let deadline = std::time::Instant::now() + self.config.pod_wait_time;
-        let interval = self.config.pod_wait_time / 10;
-        let mut ready = false;
-        while std::time::Instant::now() < deadline {
-            let current = pods.get_opt(&name).await.ok().flatten();
-            if let Some(failure) = KubernetesBackend::pod_failure(current.as_ref()) {
-                tracing::warn!("{failure} [proxyId: {}]", context.proxy.id);
-                break;
-            }
-            if current.as_ref().is_some_and(KubernetesBackend::is_ready) {
-                ready = true;
-                break;
-            }
-            tokio::time::sleep(interval).await;
-        }
-        if !ready {
-            // a final check, as the Java implementation does
-            let current = pods.get_opt(&name).await.ok().flatten();
-            if !current.as_ref().is_some_and(KubernetesBackend::is_ready) {
-                return Err(BackendError::FailedToStart(
-                    "Kubernetes Pod did not start in time".to_string(),
-                ));
-            }
-        }
-
-        let pod = pods.get(&name).await.map_err(|error| {
-            BackendError::FailedToStart(format!("cannot read pod {name}: {error}"))
-        })?;
-
-        // where the proxy sends the requests to
-        let mut targets = BTreeMap::new();
-        if self.config.internal_networking {
-            self.ensure_headless_service(&namespace).await?;
-            let hostname = pod
-                .spec
-                .as_ref()
-                .and_then(|spec| spec.hostname.clone())
-                .unwrap_or_else(|| name.clone());
-            let host = manifest::pod_fqdn(&hostname, &namespace, &self.config.cluster_domain);
-            for mapping in &context.container_spec.port_mapping {
-                let Some(port) = mapping.port else { continue };
-                targets.insert(
-                    mapping_key_to_path(&mapping.name),
-                    target_url(
-                        &self.config.target_protocol,
-                        &host,
-                        port as u16,
-                        &compute_target_path(mapping.target_path.as_str()),
-                    ),
-                );
-            }
-        } else {
-            let document =
-                manifest::build_service(&self.config, &context, &container_id, &namespace);
-            let service: Service = serde_json::from_value(document).map_err(|error| {
-                BackendError::FailedToStart(format!("invalid service: {error}"))
-            })?;
-            let services: Api<Service> = Api::namespaced(self.client.clone(), &namespace);
-            let service_name = manifest::service_name(&context.proxy.id, context.container.index);
-            let created = services
-                .create(&PostParams::default(), &service)
-                .await
-                .map_err(|error| {
-                    BackendError::FailedToStart(format!(
-                        "cannot create service {service_name}: {error}"
-                    ))
-                })?;
-
-            // the node ports are assigned by the cluster, so the service is read back
-            let mut bindings = KubernetesBackend::port_bindings(&created);
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-            while bindings.is_empty() && std::time::Instant::now() < deadline {
-                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                if let Ok(Some(current)) = services.get_opt(&service_name).await {
-                    bindings = KubernetesBackend::port_bindings(&current);
-                }
-            }
-
-            let host = pod
-                .status
-                .as_ref()
-                .and_then(|status| status.host_ip.clone())
-                .unwrap_or_else(|| "127.0.0.1".to_string());
-            for mapping in &context.container_spec.port_mapping {
-                let Some(port) = mapping.port else { continue };
-                let Some(node_port) = bindings.get(&port) else {
-                    return Err(BackendError::FailedToStart(format!(
-                        "the service has no node port for container port {port}"
-                    )));
-                };
-                targets.insert(
-                    mapping_key_to_path(&mapping.name),
-                    target_url(
-                        &self.config.target_protocol,
-                        &host,
-                        *node_port,
-                        &compute_target_path(mapping.target_path.as_str()),
-                    ),
-                );
-            }
-        }
-
-        Ok(StartedContainer {
-            id: Some(container_id),
+        // the backend container name is known before anything is created (Java sets it at this point
+        // "so that the pod can be deleted in case other steps fail"): a failure hands it back
+        let mut started = StartedContainer {
+            id: Some(container_id.clone()),
             runtime_values,
-            targets,
-        })
+            targets: BTreeMap::new(),
+        };
+        started.targets = self
+            .create_pod(&context, document, &container_id, &namespace, &name)
+            .await
+            .map_err(|error| error.after_create(&started))?;
+        Ok(started)
     }
 
     async fn stop_proxy(&self, proxy: &Proxy) -> Result<(), BackendError> {

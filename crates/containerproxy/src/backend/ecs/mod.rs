@@ -211,6 +211,82 @@ impl std::fmt::Debug for EcsBackend {
 }
 
 impl EcsBackend {
+    /// Waits until the task runs and returns its image and the targets of the proxy.
+    async fn wait_for_task(
+        &self,
+        context: &StartContext<'_>,
+        task_arn: &str,
+    ) -> Result<(Option<String>, BTreeMap<String, String>), BackendError> {
+        // wait until the task runs
+        let deadline = std::time::Instant::now() + self.config.service_wait_time;
+        let interval = self.config.service_wait_time / 10;
+        let mut running: Option<Task> = None;
+        while std::time::Instant::now() < deadline {
+            let response = self
+                .client
+                .describe_tasks()
+                .cluster(&self.config.cluster)
+                .tasks(task_arn)
+                .send()
+                .await
+                .map_err(|error| {
+                    BackendError::FailedToStart(format!("cannot read the ECS task: {error}"))
+                })?;
+            if let Some(task) = response.tasks().first() {
+                let last_status = task.last_status().unwrap_or_default();
+                if last_status == "RUNNING" {
+                    running = Some(task.clone());
+                    break;
+                }
+                if !STARTING_STATES.contains(&last_status)
+                    || task.desired_status().unwrap_or_default() != "RUNNING"
+                {
+                    tracing::warn!(
+                        "{} [proxyId: {}]",
+                        EcsBackend::failure_message(task),
+                        context.proxy.id
+                    );
+                    break;
+                }
+            }
+            tokio::time::sleep(interval).await;
+        }
+
+        let Some(task) = running else {
+            return Err(BackendError::FailedToStart(
+                "Service failed to start".to_string(),
+            ));
+        };
+
+        let image = task
+            .containers()
+            .first()
+            .and_then(|container| container.image())
+            .map(str::to_string);
+
+        // the app is reached on the private address of its network interface
+        let Some(host) = EcsBackend::task_ip(&task) else {
+            return Err(BackendError::FailedToStart(
+                "Could not find ip in attachment".to_string(),
+            ));
+        };
+        let mut targets = BTreeMap::new();
+        for mapping in &context.container_spec.port_mapping {
+            let Some(port) = mapping.port else { continue };
+            targets.insert(
+                mapping_key_to_path(&mapping.name),
+                target_url(
+                    &self.config.target_protocol,
+                    &host,
+                    port as u16,
+                    &compute_target_path(mapping.target_path.as_str()),
+                ),
+            );
+        }
+
+        Ok((image, targets))
+    }
+
     /// Connects to ECS with the credentials of the environment.
     pub async fn connect(
         config: EcsConfig,
@@ -445,80 +521,24 @@ impl ContainerBackend for EcsBackend {
             true,
         );
 
-        // wait until the task runs
-        let deadline = std::time::Instant::now() + self.config.service_wait_time;
-        let interval = self.config.service_wait_time / 10;
-        let mut running: Option<Task> = None;
-        while std::time::Instant::now() < deadline {
-            let response = self
-                .client
-                .describe_tasks()
-                .cluster(&self.config.cluster)
-                .tasks(&task_arn)
-                .send()
-                .await
-                .map_err(|error| {
-                    BackendError::FailedToStart(format!("cannot read the ECS task: {error}"))
-                })?;
-            if let Some(task) = response.tasks().first() {
-                let last_status = task.last_status().unwrap_or_default();
-                if last_status == "RUNNING" {
-                    running = Some(task.clone());
-                    break;
-                }
-                if !STARTING_STATES.contains(&last_status)
-                    || task.desired_status().unwrap_or_default() != "RUNNING"
-                {
-                    tracing::warn!(
-                        "{} [proxyId: {}]",
-                        EcsBackend::failure_message(task),
-                        context.proxy.id
-                    );
-                    break;
-                }
-            }
-            tokio::time::sleep(interval).await;
-        }
-
-        let Some(task) = running else {
-            return Err(BackendError::FailedToStart(
-                "Service failed to start".to_string(),
-            ));
-        };
-
-        if let Some(image) = task
-            .containers()
-            .first()
-            .and_then(|container| container.image())
-        {
-            runtime_values.add(RuntimeValue::string(&CONTAINER_IMAGE, image), true);
-        }
-
-        // the app is reached on the private address of its network interface
-        let Some(host) = EcsBackend::task_ip(&task) else {
-            return Err(BackendError::FailedToStart(
-                "Could not find ip in attachment".to_string(),
-            ));
-        };
-        let mut targets = BTreeMap::new();
-        for mapping in &context.container_spec.port_mapping {
-            let Some(port) = mapping.port else { continue };
-            targets.insert(
-                mapping_key_to_path(&mapping.name),
-                target_url(
-                    &self.config.target_protocol,
-                    &host,
-                    port as u16,
-                    &compute_target_path(mapping.target_path.as_str()),
-                ),
-            );
-        }
-
-        Ok(StartedContainer {
+        // the task exists from here on: a failure hands it back, so that the failed start stops it
+        let mut started = StartedContainer {
             id: Some(container_id),
             runtime_values,
-            targets,
-        })
+            targets: BTreeMap::new(),
+        };
+        match self.wait_for_task(&context, &task_arn).await {
+            Ok((image, targets)) => {
+                if let Some(image) = image {
+                    started
+                        .runtime_values
+                        .add(RuntimeValue::string(&CONTAINER_IMAGE, &image), true);
+                }
+                started.targets = targets;
+                Ok(started)
+            }
+            Err(error) => Err(error.after_create(&started)),
+        }
     }
 
     async fn stop_proxy(&self, proxy: &Proxy) -> Result<(), BackendError> {

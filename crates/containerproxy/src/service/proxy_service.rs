@@ -128,6 +128,22 @@ impl ProxyService {
         Duration::from_millis(self.settings.proxy.container_wait_time_ms().max(0) as u64)
     }
 
+    /// Timeout of one request to an app that is checked (`proxy.container-wait-timeout`).
+    fn container_wait_timeout(&self) -> Duration {
+        Duration::from_millis(self.settings.proxy.container_wait_timeout_ms().max(1) as u64)
+    }
+
+    /// Waits until a started or resumed app answers.
+    async fn wait_until_reachable(&self, proxy: &Proxy) -> bool {
+        wait_until_reachable(
+            proxy,
+            self.backend.as_ref(),
+            self.container_wait_time(),
+            self.container_wait_timeout(),
+        )
+        .await
+    }
+
     /// Registers the dispatcher of an app definition that uses shared containers.
     pub fn register_sharing(
         &self,
@@ -330,17 +346,12 @@ impl ProxyService {
                 .await;
 
             match started {
-                Ok(started) => {
-                    let container = proxy.container_mut(container_spec.index);
-                    container.id = started.id;
-                    for value in started.runtime_values.iter() {
-                        container.add_runtime_value(value.clone(), true);
-                    }
-                    for (mapping, target) in started.targets {
-                        proxy.targets.insert(mapping, target);
-                    }
-                }
+                Ok(started) => started.apply_to(&mut proxy, container_spec.index),
                 Err(error) => {
+                    // what the backend created before failing is removed with the rest of the proxy
+                    if let Some(created) = error.created() {
+                        created.clone().apply_to(&mut proxy, container_spec.index);
+                    }
                     self.fail_start(&proxy, &format!("{error}")).await;
                     return Err(StartError::Backend(error.to_string()));
                 }
@@ -348,7 +359,7 @@ impl ProxyService {
         }
 
         // the app has to answer before the proxy is considered up
-        if !wait_until_reachable(&proxy, self.container_wait_time()).await {
+        if !self.wait_until_reachable(&proxy).await {
             self.fail_start(&proxy, "Container did not respond in time")
                 .await;
             return Err(StartError::Timeout);
@@ -494,7 +505,7 @@ impl ProxyService {
                         resuming.targets.insert(mapping, target);
                     }
                 }
-                if !wait_until_reachable(&resuming, self.container_wait_time()).await {
+                if !self.wait_until_reachable(&resuming).await {
                     tracing::warn!(
                         "Proxy failed to resume: container did not respond in time [proxyId: {}]",
                         resuming.id
@@ -556,7 +567,7 @@ impl ProxyService {
             tracing::info!("Proxy failed: no targets available [proxyId: {}]", proxy.id);
             return false;
         }
-        probe_target(proxy, HEALTH_PROBE_TIMEOUT).await
+        probe_target(proxy, self.container_wait_timeout()).await
     }
 
     /// Resolves the expressions of the app definition and adds the runtime values.
@@ -743,30 +754,59 @@ pub fn container_labels(
     labels
 }
 
-/// How long one HTTP probe of an app may take. `wait_until_reachable` retries until the overall
-/// `container-wait-timeout`; a single probe must not consume that whole budget.
-const STARTUP_PROBE_TIMEOUT: Duration = Duration::from_millis(500);
+/// The first attempts of `wait_until_reachable` use this short timeout: a container that has only just
+/// started (or a Kubernetes service that has only just been created) can swallow the traffic, and a short
+/// timeout makes a fast app start faster (`ShinyProxyTestStrategy`).
+const FIRST_ATTEMPTS_TIMEOUT: Duration = Duration::from_millis(200);
 
-/// How long a health check may wait for one answer (`isProxyHealthy` is a single probe).
-const HEALTH_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+/// How many attempts use `FIRST_ATTEMPTS_TIMEOUT`; later attempts use `proxy.container-wait-timeout` and
+/// first ask the backend whether the container still runs, so a crashed container fails fast.
+const FIRST_ATTEMPTS: u32 = 5;
 
-/// Waits until the app answers on its default target.
+/// The pause before an attempt (`Retrying.delay`): 200 ms for the first 5, 400 ms up to the 10th, then 2
+/// seconds.
+fn retry_delay(attempt: u32) -> Duration {
+    match attempt {
+        0 => Duration::ZERO,
+        1..=5 => Duration::from_millis(200),
+        6..=10 => Duration::from_millis(400),
+        _ => Duration::from_secs(2),
+    }
+}
+
+/// Waits until the app answers on its default target (`ShinyProxyTestStrategy.testProxy`).
 ///
-/// Shared with the scaler of the pre-started containers, which tests its containers the same way.
-pub async fn wait_until_reachable(proxy: &Proxy, timeout: Duration) -> bool {
-    let deadline = tokio::time::Instant::now() + timeout;
+/// `total` is `proxy.container-wait-time` and `request_timeout` is `proxy.container-wait-timeout`, the
+/// timeout of one request once the first attempts failed. Shared with the scaler of the pre-started
+/// containers, which tests its containers the same way.
+pub async fn wait_until_reachable(
+    proxy: &Proxy,
+    backend: &dyn ContainerBackend,
+    total: Duration,
+    request_timeout: Duration,
+) -> bool {
+    let deadline = tokio::time::Instant::now() + total;
+    let mut attempt = 0;
     loop {
+        tokio::time::sleep(retry_delay(attempt)).await;
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining.is_zero() {
             return false;
         }
-        if probe_target(proxy, remaining.min(STARTUP_PROBE_TIMEOUT)).await {
+        let timeout = if attempt < FIRST_ATTEMPTS {
+            FIRST_ATTEMPTS_TIMEOUT
+        } else {
+            if backend.supports_health_check()
+                && matches!(backend.is_proxy_healthy(proxy).await, Ok(false))
+            {
+                return false;
+            }
+            request_timeout
+        };
+        if probe_target(proxy, remaining.min(timeout)).await {
             return true;
         }
-        if tokio::time::Instant::now() >= deadline {
-            return false;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        attempt += 1;
     }
 }
 

@@ -25,7 +25,7 @@
 //! claimed with `minimum-seats-available` and starts or stops delegate proxies; every twenty seconds it
 //! removes the containers that are marked for removal and whose seats are all free.
 
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -85,6 +85,8 @@ pub struct ProxySharingScaler {
     pending_seats: AtomicI64,
     status: Mutex<ReconcileStatus>,
     last_scale_up: Mutex<Option<Instant>>,
+    /// Set when the server shuts down: the loops stop creating and removing containers.
+    shutting_down: AtomicBool,
 }
 
 impl std::fmt::Debug for ProxySharingScaler {
@@ -133,6 +135,7 @@ impl ProxySharingScaler {
             pending_seats: AtomicI64::new(0),
             status: Mutex::new(ReconcileStatus::Stable),
             last_scale_up: Mutex::new(None),
+            shutting_down: AtomicBool::new(false),
         }
     }
 
@@ -182,9 +185,33 @@ impl ProxySharingScaler {
         })
     }
 
+    /// Stops the pre-started containers when the server shuts down (`close` / `stopAll`), unless
+    /// `proxy.stop-proxies-on-shutdown` is false.
+    pub async fn shutdown(&self) {
+        self.shutting_down.store(true, Ordering::SeqCst);
+        if !self.settings.proxy.stop_proxies_on_shutdown() {
+            return;
+        }
+        let delegates = self.delegates.all_delegate_proxies();
+        tracing::info!(
+            "Stopping {} delegateProxies [specId: {}]",
+            delegates.len(),
+            self.spec.id
+        );
+        for delegate in delegates {
+            if let Err(error) = self.backend.stop_proxy(&delegate.proxy).await {
+                tracing::error!(
+                    "Error while stopping DelegateProxy [specId: {}] [delegateProxyId: {}]: {error}",
+                    self.spec.id,
+                    delegate.proxy.id
+                );
+            }
+        }
+    }
+
     /// Compares the available seats with the configuration and scales if needed.
     pub async fn reconcile(&self) {
-        if !self.leader.is_leader() {
+        if !self.leader.is_leader() || self.shutting_down.load(Ordering::SeqCst) {
             return;
         }
 
@@ -369,17 +396,11 @@ impl ProxySharingScaler {
                 .await;
 
             match started {
-                Ok(started) => {
-                    let container = proxy.container_mut(container_spec.index);
-                    container.id = started.id;
-                    for value in started.runtime_values.iter() {
-                        container.add_runtime_value(value.clone(), true);
-                    }
-                    for (mapping, target) in started.targets {
-                        proxy.targets.insert(mapping, target);
-                    }
-                }
+                Ok(started) => started.apply_to(&mut proxy, container_spec.index),
                 Err(error) => {
+                    if let Some(created) = error.created() {
+                        created.clone().apply_to(&mut proxy, container_spec.index);
+                    }
                     // the container may exist half way, so it is stopped before it is forgotten
                     let _ = self.backend.stop_proxy(&proxy).await;
                     self.delegates.remove_delegate_proxy(&id);
@@ -472,7 +493,7 @@ impl ProxySharingScaler {
 
     /// Removes the containers that are marked for removal and whose seats are free.
     pub async fn cleanup(&self) {
-        if !self.leader.is_leader() {
+        if !self.leader.is_leader() || self.shutting_down.load(Ordering::SeqCst) {
             return;
         }
         let status = self.status();
@@ -702,9 +723,17 @@ impl ProxySharingScaler {
 
     /// Waits until the container of a delegate proxy answers.
     async fn wait_until_reachable(&self, proxy: &Proxy) -> bool {
-        let timeout =
+        let total =
             Duration::from_millis(self.settings.proxy.container_wait_time_ms().max(1) as u64);
-        crate::service::proxy_service::wait_until_reachable(proxy, timeout).await
+        let request_timeout =
+            Duration::from_millis(self.settings.proxy.container_wait_timeout_ms().max(1) as u64);
+        crate::service::proxy_service::wait_until_reachable(
+            proxy,
+            self.backend.as_ref(),
+            total,
+            request_timeout,
+        )
+        .await
     }
 }
 

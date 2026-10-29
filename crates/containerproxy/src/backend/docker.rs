@@ -167,6 +167,79 @@ impl std::fmt::Debug for DockerBackend {
 }
 
 impl DockerBackend {
+    /// The steps of a start after the container was created: networks, start, targets.
+    async fn finish_start(
+        &self,
+        context: &StartContext<'_>,
+        created_id: &str,
+        name: &str,
+        port_bindings: &BTreeMap<i64, u16>,
+    ) -> Result<BTreeMap<String, String>, BackendError> {
+        let spec = context.container_spec;
+        // additional networks the container must join
+        if let Some(networks) = spec
+            .network_connections
+            .value()
+            .filter(|value| !value.is_empty())
+        {
+            for network in networks {
+                self.client
+                    .connect_network(
+                        network,
+                        bollard::models::NetworkConnectRequest {
+                            container: Some(created_id.to_string()),
+                            endpoint_config: None,
+                        },
+                    )
+                    .await
+                    .map_err(|error| {
+                        BackendError::FailedToStart(format!(
+                            "cannot connect container {name} to network {network}: {error}"
+                        ))
+                    })?;
+            }
+        }
+
+        self.client
+            .start_container(
+                created_id,
+                None::<bollard::query_parameters::StartContainerOptions>,
+            )
+            .await
+            .map_err(|error| {
+                BackendError::FailedToStart(format!("cannot start container {name}: {error}"))
+            })?;
+
+        // where the proxy sends the requests to
+        let mut targets = BTreeMap::new();
+        let hostname = if self.config.internal_networking {
+            self.internal_hostname(created_id).await?
+        } else {
+            self.config.target_host.clone()
+        };
+        for mapping in &spec.port_mapping {
+            let Some(container_port) = mapping.port else {
+                continue;
+            };
+            let port = if self.config.internal_networking {
+                container_port as u16
+            } else {
+                *port_bindings.get(&container_port).ok_or_else(|| {
+                    BackendError::FailedToStart(format!(
+                        "no host port was allocated for container port {container_port}"
+                    ))
+                })?
+            };
+            let target_path = compute_target_path(mapping.target_path.as_str());
+            targets.insert(
+                mapping_key_to_path(&mapping.name),
+                target_url(&self.config.target_protocol, &hostname, port, &target_path),
+            );
+        }
+
+        Ok(targets)
+    }
+
     /// Connects to the Docker daemon.
     ///
     /// The connection is made the same way as the Java implementation: `proxy.docker.url` wins, then the
@@ -585,15 +658,16 @@ impl ContainerBackend for DockerBackend {
                 let Some(container_port) = mapping.port else {
                     continue;
                 };
-                let host_port = self
-                    .port_allocator
-                    .allocate(&proxy_id)
-                    .map_err(|error| BackendError::FailedToStart(error.to_string()))?;
+                let host_port = self.port_allocator.allocate(&proxy_id).map_err(|error| {
+                    self.port_allocator.release(&proxy_id);
+                    BackendError::FailedToStart(error.to_string())
+                })?;
                 port_bindings.insert(container_port, host_port);
             }
         }
 
-        let body = build_container_create_body(&self.config, &context, &port_bindings)?;
+        let body = build_container_create_body(&self.config, &context, &port_bindings)
+            .inspect_err(|_| self.port_allocator.release(&proxy_id))?;
         let name = container_name(
             &proxy_id,
             context.container.index,
@@ -612,78 +686,22 @@ impl ContainerBackend for DockerBackend {
                 BackendError::FailedToStart(format!("cannot create container {name}: {error}"))
             })?;
 
-        // additional networks the container must join
-        if let Some(networks) = spec
-            .network_connections
-            .value()
-            .filter(|value| !value.is_empty())
-        {
-            for network in networks {
-                self.client
-                    .connect_network(
-                        network,
-                        bollard::models::NetworkConnectRequest {
-                            container: Some(created.id.clone()),
-                            endpoint_config: None,
-                        },
-                    )
-                    .await
-                    .map_err(|error| {
-                        BackendError::FailedToStart(format!(
-                            "cannot connect container {name} to network {network}: {error}"
-                        ))
-                    })?;
-            }
-        }
-
-        self.client
-            .start_container(
-                &created.id,
-                None::<bollard::query_parameters::StartContainerOptions>,
-            )
-            .await
-            .map_err(|error| {
-                BackendError::FailedToStart(format!("cannot start container {name}: {error}"))
-            })?;
-
-        // where the proxy sends the requests to
-        let mut targets = BTreeMap::new();
-        let hostname = if self.config.internal_networking {
-            self.internal_hostname(&created.id).await?
-        } else {
-            self.config.target_host.clone()
-        };
-        for mapping in &spec.port_mapping {
-            let Some(container_port) = mapping.port else {
-                continue;
-            };
-            let port = if self.config.internal_networking {
-                container_port as u16
-            } else {
-                *port_bindings.get(&container_port).ok_or_else(|| {
-                    BackendError::FailedToStart(format!(
-                        "no host port was allocated for container port {container_port}"
-                    ))
-                })?
-            };
-            let target_path = compute_target_path(mapping.target_path.as_str());
-            targets.insert(
-                mapping_key_to_path(&mapping.name),
-                target_url(&self.config.target_protocol, &hostname, port, &target_path),
-            );
-        }
-
+        // from here on the container exists: a failure hands it back, so that the failed start removes it
         let mut runtime_values = RuntimeValues::new();
         runtime_values.add(
             RuntimeValue::json(&BACKEND_CONTAINER_NAME, BackendContainerName::new(&name)),
             true,
         );
-
-        Ok(StartedContainer {
-            id: Some(created.id),
+        let mut started = StartedContainer {
+            id: Some(created.id.clone()),
             runtime_values,
-            targets,
-        })
+            targets: BTreeMap::new(),
+        };
+        started.targets = self
+            .finish_start(&context, &created.id, &name, &port_bindings)
+            .await
+            .map_err(|error| error.after_create(&started))?;
+        Ok(started)
     }
 
     async fn stop_proxy(&self, proxy: &Proxy) -> Result<(), BackendError> {

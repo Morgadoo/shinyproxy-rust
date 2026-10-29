@@ -135,6 +135,13 @@ async fn main() -> anyhow::Result<()> {
         state.context_path()
     );
     shinyproxy::web::server::serve(listener, app, shutdown_signal()).await;
+
+    // the apps stop with the server (`proxy.stop-proxies-on-shutdown`, `@PreDestroy` in Java): first the
+    // apps of the users, then the pre-started containers of the shared apps
+    state.proxies.shutdown().await;
+    for scaler in &state.sharing_scalers {
+        scaler.shutdown().await;
+    }
     tracing::info!("ShinyProxy stopped");
     Ok(())
 }
