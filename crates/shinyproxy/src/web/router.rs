@@ -818,15 +818,24 @@ async fn logout(State(state): State<Arc<AppState>>, session: Session) -> Respons
         });
     }
     let mut data = data;
+    let logged_out = data.user.take();
     data.user_initiated_logout = true;
-    data.user = None;
     state.sessions.forget(&session::session_id(&session));
     data.store(&session).await;
     let _ = session.flush().await;
 
     // where a user lands after signing out depends on the authentication backend (`/login` by default,
     // `/logout-success` for header based authentication and the provider for OpenID Connect)
-    let target = state.auth.logout_success_url();
+    let mut target = state.auth.logout_success_url();
+    // the URL may use expressions about the user who logged out (the OpenID logout handler of Java
+    // evaluates it, typically for `id_token_hint=#{oidcUser.idToken.tokenValue}`)
+    if let Some(user) = logged_out.as_ref().filter(|_| target.contains("#{")) {
+        use containerproxy::model::spel_field::SpecResolver;
+        match state.resolver(Some(user)).string(&target) {
+            Ok(resolved) => target = resolved,
+            Err(error) => tracing::warn!("cannot evaluate the logout URL: {error}"),
+        }
+    }
     let target = if target.starts_with("http://") || target.starts_with("https://") {
         target
     } else {

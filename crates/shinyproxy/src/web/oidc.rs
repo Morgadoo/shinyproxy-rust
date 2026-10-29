@@ -174,6 +174,11 @@ pub async fn callback(
         user.attributes
             .insert("refreshToken".to_string(), serde_json::json!(refresh_token));
     }
+    // `oidcUser.idToken.tokenValue`, which logout URLs pass as `id_token_hint` (Spring's `OidcIdToken`)
+    user.attributes.insert(
+        "idToken".to_string(),
+        serde_json::json!({"tokenValue": id_token}),
+    );
 
     tracing::info!("User logged in [user: {}]", user.id);
     state

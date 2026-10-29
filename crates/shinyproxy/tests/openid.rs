@@ -782,7 +782,54 @@ async fn login(instance: &TestInstance, provider: &Provider) -> common::TestClie
         .await
         .expect("callback request");
     assert_eq!(response.status(), 302, "the login must succeed");
+    // a failed login redirects too, to the error page
+    let location = response
+        .headers()
+        .get("location")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    assert!(
+        !location.contains("auth-error"),
+        "the login failed: {location}"
+    );
     client
+}
+
+#[tokio::test]
+async fn the_logout_url_can_use_the_id_token() {
+    let (address, provider, provider_task) = start_provider(
+        serde_json::json!({"email": "jack@example.com", "sub": "jack", "groups": ["scientists"]}),
+        serde_json::json!({}),
+    )
+    .await;
+    // the usual Keycloak/Entra logout: the provider wants the id token as a hint
+    let instance = TestInstance::start(&config(
+        &address,
+        "    logout-url: https://idp.example.com/logout?id_token_hint=#{oidcUser.idToken.tokenValue}",
+    ))
+    .await;
+    let client = login(&instance, &provider).await;
+
+    let response = client
+        .get(instance.url("/logout"))
+        .send()
+        .await
+        .expect("logout request");
+    assert_eq!(response.status(), 302);
+    let location = response
+        .headers()
+        .get("location")
+        .and_then(|value| value.to_str().ok())
+        .expect("location")
+        .to_string();
+    let hint = location
+        .strip_prefix("https://idp.example.com/logout?id_token_hint=")
+        .unwrap_or_else(|| panic!("{location}"));
+    // the id token the provider issued (a JWT), not the expression
+    assert_eq!(hint.split('.').count(), 3, "{location}");
+
+    instance.stop();
+    provider_task.abort();
 }
 
 #[tokio::test]
