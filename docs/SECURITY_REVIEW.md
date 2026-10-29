@@ -11,9 +11,9 @@ ContainerProxy 1.2.4, the Java versions it replaces. It had three parts:
 Severity uses the usual scale: **Critical** means remote and unauthenticated, or a complete break of user
 isolation; **Low** means hardening.
 
-Status after the fixes: `cargo test --workspace --all-targets` passes 569 tests, the Redis suites pass
-(`SP_TEST_REDIS=1`), `cargo clippy -D warnings` is clean, and `cargo audit` reports nothing beyond one
-accepted, documented advisory.
+Status after the fixes: `cargo test --workspace --all-targets` passes 579 tests, the Redis suites pass
+(`SP_TEST_REDIS=1`), CI is green including the Docker, Kubernetes and LDAP jobs, `cargo clippy -D warnings`
+is clean, and `cargo audit` reports nothing beyond one accepted, documented advisory.
 
 ## Fixed
 
@@ -37,7 +37,15 @@ accepted, documented advisory.
 | 16 | **Low** | The client's `X-SP-UserId`/`X-SP-UserGroups` reached the app when the configured value was invalid, when `add-default-http-headers: false` was set, or when spelled `X_SP_UserId`. | Client copies of the identity headers and of the app's `http-headers` are always removed. |
 | 17 | **Low** | SpEL: `Long.MIN_VALUE / -1` and integer overflow panicked; deeply nested expressions overflowed the stack and aborted the process. | Wrapping arithmetic, as in Java, and a nesting limit of 64 in the parser. |
 | 18 | **Low** | `management.server.address` was ignored, so an actuator an admin had restricted to `127.0.0.1` in Java was exposed on all interfaces (the Prometheus metrics carry user ids). `/v3/api-docs` and `/swagger-ui` were public, while Java requires a login. | Both now behave as in Java. |
-| 19 | Supply chain | 16 RustSec advisories in the lock file, including XSS fixes in `ammonia` (which sanitizes app descriptions) and five `rustls`/`rustls-webpki`/`webpki-roots` TLS issues. The CI `audit` job would fail. | Semver-compatible updates. The workflows now get least-privilege tokens, and the Docker build uses `--locked`. |
+| 19 | **Medium** (Java same) | The ShinyProxy session cookie, and the `Authorization` header with a bearer token, were forwarded to the app containers. With re-used pre-initialized containers or apps that run user code, a previous user of a container could capture the next user's session. | The pair `name=value` of the current ShinyProxy session is removed from the forwarded `Cookie` header; a cookie of the app with the same name (`JSESSIONID` of a Java app) still reaches it. `Authorization` is dropped when ShinyProxy authenticated the request with it (bearer token or HTTP Basic). Applies to the WebSocket handshake and Grafana too. |
+| 20 | **Low** (Java same) | `max-instances` was check-then-act, so parallel starts could exceed it (reproduced in 1 of 10 runs of 32 parallel starts). | The check and the creation of the proxy happen under a per-user lock (64 striped locks, so anonymous visitors cannot grow a lock table). Between the servers of a Redis realm the check stays best effort, as in Java. |
+| 21 | **Low** | No connect timeout towards the apps: a black-holed app held a request for the operating system's timeout, three times with the retries. | 10 s connect timeout; responses stay unlimited (long polling, streaming). |
+| 22 | **Low** | `RedisLock` renewal and release were GET-then-EXPIRE/DEL: if the lock expired in between, a server could renew or delete the lock another server had just taken, so two leaders could coexist. | Compare-and-act Lua scripts (`EVAL`). |
+| 23 | **Low** | Ports of recovered Docker/Swarm containers were registered under the container id but released under the proxy id, so they leaked until the port range ran out. | Registered under the proxy id from the labels. |
+| 24 | Info | `/admin/about` showed the process arguments, including secrets such as `--spring.data.redis.password=...`. | Values of arguments whose key names a password, secret, token, credential or key are hidden. |
+| 25 | Info (Java same) | CSV usage statistics allowed formula injection (`=HYPERLINK(...)` as a user name). | Cells starting with `= + - @`, tab or CR get a leading `'` (OWASP). |
+| 26 | Info | The WebSocket tunnel dropped any client chunk of 6 bytes or fewer starting with `0x8A`, which could corrupt a frame split by TCP. Pings were also injected into non-WebSocket upgrades (`h2c`). An app's own 503 was replaced by `app_crashed` even when the app was healthy. | Only the exact empty masked pong is swallowed, other upgrades are tunnelled as they are, and a healthy app's 503 passes through (`defaultResponseListener`). |
+| 27 | Supply chain | 16 RustSec advisories in the lock file, including XSS fixes in `ammonia` (which sanitizes app descriptions) and five `rustls`/`rustls-webpki`/`webpki-roots` TLS issues. The CI `audit` job would fail. | Semver-compatible updates. The workflows now get least-privilege tokens, and the Docker build uses `--locked`. |
 
 ### Functional bugs fixed along the way
 
@@ -48,20 +56,15 @@ accepted, documented advisory.
 
 ## Open findings (recommendations)
 
-None of these is exploitable without an unusual deployment, or Java behaves the same way. They are listed
-roughly in order of value.
+None of these is exploitable without an unusual deployment, and Java behaves the same way. Each needs a
+new setting or would change how existing deployments behave, so they are left as recommendations.
 
 | Severity | Finding | Recommendation |
 | --- | --- | --- |
-| Medium (Java same) | The ShinyProxy session cookie and the `Authorization` header are forwarded to the app containers. With re-used pre-initialized containers or apps that run user code, a previous user of a container could capture the next user's session. | Remove the ShinyProxy cookie from the forwarded `Cookie` header, drop `Authorization` when it carries the ShinyProxy bearer token, and remove app `Set-Cookie` headers that use the ShinyProxy cookie name. |
-| Low | `X-Forwarded-For/-Proto/-Port` from the client are forwarded verbatim, and `absolute_url` trusts `X-Forwarded-Host` from any client. | Add a trusted-proxy setting (as `server.forward-headers-strategy`) and overwrite the headers otherwise. |
-| Low (Java same) | No `Origin` check on WebSocket upgrades. SameSite=Lax protects the default setup, but not `same-site-cookie: None`. | Optional allow-list for `Origin`. |
-| Low (Java same) | `max-instances` is check-then-act, so parallel starts can exceed it. | A per-user lock around the check and the insert. |
-| Low | No connect or response timeout to the apps, and WebSocket tunnels have no idle limit. | Connect timeout on the `HttpConnector`; optional tunnel idle timeout. |
-| Low | `RedisLock` acquire/release is GET-then-EXPIRE/DEL (not atomic), so two leaders can briefly coexist. Ports of recovered containers are registered under the container id but released under the proxy id, so they leak. | Lua compare-and-set; register recovered ports under the proxy id. |
-| Info | `/admin/about` shows the process arguments (Java shows the JVM arguments), which include secrets passed as `--spring.data.redis.password=...`. | Redact values of keys that contain `password`/`secret`. |
-| Info (Java same) | CSV usage statistics are not protected against formula injection (`=HYPERLINK(...)` user names). | Prefix `= + - @` cells with `'`. |
-| Info | The WebSocket tunnel drops client chunks of 6 bytes or fewer that start with `0x8A` (a pong), which can corrupt a frame split at that boundary. Pings are also injected into non-WebSocket upgrades. An app's own 503 is replaced by `app_crashed`. | Parse frame boundaries before dropping, restrict pings to `Upgrade: websocket`, and pass healthy 503s through. |
+| Low | `X-Forwarded-For/-Proto/-Port` from the client are forwarded verbatim, and `absolute_url` trusts `X-Forwarded-Host` from any client. Trusting them only with `server.forward-headers-strategy` (as Spring does) would change the redirect URLs of every deployment behind an ingress that never set it. | A trusted-proxy setting, announced in the release notes. |
+| Low (Java same) | No `Origin` check on WebSocket upgrades. SameSite=Lax protects the default setup, but not `same-site-cookie: None`. | An optional allow-list for `Origin`. |
+| Low (Java same) | An app can still set a cookie with the name of the ShinyProxy session cookie (`Path=/`), which logs the user out or fixes the session. Filtering it would break Java apps that use their own `JSESSIONID`. | Name the ShinyProxy cookie differently from the apps' (a configurable cookie name). |
+| Low | WebSocket tunnels have no idle limit. | An optional idle timeout. |
 
 Checked and fine: ownership checks on every proxied request and WebSocket upgrade (no IDOR across all
 API/proxy routes), no SSRF, no request smuggling (hyper), admin route matrix, template autoescaping and
@@ -73,20 +76,27 @@ login), parameter value validation, Docker/Kubernetes argument and label handlin
 ## Feature parity with ShinyProxy 3.2.4
 
 The implementation is close to a drop-in replacement for the common setups: Docker, Swarm or Kubernetes,
-with simple, LDAP or OpenID login, used from the browser. These are the verified differences, by impact:
+with simple, LDAP or OpenID login, used from the browser or from scripts.
+
+**Implemented after the review**
+
+- `POST /api/proxy/{specId}` (`ProxyController.startProxy`): starts an app and answers 201 once it is up,
+  served under `/api/route/{proxyId}/`. Unlike Java, `max-instances` applies to it as well.
+- HTTP Basic authentication (`http.httpBasic`) for `simple`, `ldap` and `webservice`, per request and
+  without a session, as Spring Security 6 does. Failed attempts count as authentication failures.
+
+These are the remaining verified differences, by impact:
 
 **Missing**
 
-1. `POST /api/proxy/{specId}`: starting an app through the API, the main way scripts start apps. Requests get 405.
-2. HTTP Basic authentication for `simple`/`ldap`/`webservice`. `curl -u user:pass .../api/...` does not work; bearer tokens (`proxy.oauth2.*`) do.
-3. Custom templates (`proxy.template-path`) are rendered with MiniJinja. Thymeleaf templates are not detected and render broken, and `{template-path}/assets/**` is not served.
-4. Redis Sentinel and TLS (now refused at startup instead of ignored).
-5. CORS (`proxy.api-security.cors-allowed-origins`) is parsed but not applied.
-6. Nothing happens when a session expires. Java stops the apps with `stop-on-logout`, records the logout and closes the session's WebSockets.
-7. `RedisEventBridge`: container logs of apps started on another server are not collected, and `?watch=true` status requests on another server wait for their timeout.
-8. OpenID: `logout-url` is not evaluated as an expression (so `id_token_hint=#{oidcUser.idToken.tokenValue}` does not work); `client-authentication-method` and `enforce-https-redirect-uri` are ignored; `oidcUser.idToken` / `getAttribute()` are missing in expressions.
-9. `server.servlet.session.timeout` is not read; only `spring.session.timeout` is.
-10. Smaller: the MS-Office user-agent filter, Kubernetes pod events (`imagePullTime`/`containerScheduleTime` metrics, warnings in the log), `kubernetes-debug-patches`.
+1. Custom templates (`proxy.template-path`) are rendered with MiniJinja. Thymeleaf templates are not detected and render broken, and `{template-path}/assets/**` is not served.
+2. Redis Sentinel and TLS (now refused at startup instead of ignored).
+3. CORS (`proxy.api-security.cors-allowed-origins`) is parsed but not applied.
+4. Nothing happens when a session expires. Java stops the apps with `stop-on-logout`, records the logout and closes the session's WebSockets.
+5. `RedisEventBridge`: container logs of apps started on another server are not collected, and `?watch=true` status requests on another server wait for their timeout.
+6. OpenID: `logout-url` is not evaluated as an expression (so `id_token_hint=#{oidcUser.idToken.tokenValue}` does not work); `client-authentication-method` and `enforce-https-redirect-uri` are ignored; `oidcUser.idToken` / `getAttribute()` are missing in expressions.
+7. `server.servlet.session.timeout` is not read; only `spring.session.timeout` is.
+8. Smaller: the MS-Office user-agent filter, Kubernetes pod events (`imagePullTime`/`containerScheduleTime` metrics, warnings in the log), `kubernetes-debug-patches`.
 
 **Different without (previously) being documented**
 
@@ -104,4 +114,4 @@ histogram buckets, and the Redis health check.
 
 The stale rows in `docs/COMPATIBILITY.md` were corrected: Redis sessions, rolling updates and shared
 seats are implemented; the actuator is only on the management port; delegate-proxy removal works.
-`README.md` no longer claims every endpoint is implemented.
+`README.md` no longer claims more than is implemented.
